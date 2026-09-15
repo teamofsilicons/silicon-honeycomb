@@ -138,7 +138,30 @@ pub async fn reconcile(s: &State, plane: &str, app_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Recheck known production apps even when a management notification was lost.
+/// Claim a bounded batch durably; preserve pending notification targets and retries.
+async fn schedule_checks(s: &State) -> Result<()> {
+    let mut tx = s.db.begin().await?;
+    let apps = sqlx::query("SELECT app_id,iam_revision FROM applications WHERE plane='production' AND iam_revision>0 AND iam_check_after<=? ORDER BY iam_check_after,app_id LIMIT 50")
+        .bind(now()).fetch_all(&mut *tx).await?;
+    for app in apps {
+        let id: String = app.get("app_id");
+        sqlx::query("INSERT INTO application_reconciliation(plane,app_id,target_revision,updated_at) VALUES('production',?,?,?) ON CONFLICT(plane,app_id) DO UPDATE SET target_revision=MAX(target_revision,excluded.target_revision),state='pending',retry_at=0,error=NULL,updated_at=excluded.updated_at WHERE application_reconciliation.state='accepted'")
+            .bind(&id).bind(app.get::<i64,_>("iam_revision")).bind(now()).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE applications SET iam_check_after=? WHERE plane='production' AND app_id=?",
+        )
+        .bind(now() + 300)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn tick(s: &State) -> Result<()> {
+    schedule_checks(s).await?;
     let jobs = sqlx::query("SELECT plane,app_id,target_revision FROM application_reconciliation WHERE state='pending' AND retry_at<=? ORDER BY updated_at LIMIT 50")
         .bind(now()).fetch_all(&s.db).await?;
     for job in jobs {

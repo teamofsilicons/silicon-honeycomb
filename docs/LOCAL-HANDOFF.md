@@ -27,15 +27,17 @@ and sample applications; no production credentials or email delivery are involve
 
 ## Verification
 
-- Rust workspace tests and strict Clippy passed. Latest backend coverage: 41 API
+- Rust workspace tests and strict Clippy passed. Latest backend coverage: 42 API
   cases, plus runtime IAM, management SDK and Briefcase logo wire tests.
 - All 36 desktop/mobile browser cases pass, including telemetry opt-out, logo upload/retry, webhook changes, retention
   settings and automatic cleanup progress/retry.
 - CLI HTTP journey includes private creation, six-target archive validation,
   releases, install/execute/update/uninstall, review/activation and anonymous install.
 - curl/bash installer checks and isolated Cargo source installation passed.
-- Production backend and both web container modes passed smoke tests at the earlier
-  container checkpoint; the latest lifecycle changes have not been rebuilt in images.
+- Production backend and web images rebuilt successfully, including the current
+  telemetry/lifecycle code and periodic reconciliation. Disposable container checks
+  passed migrations, startup, catalog, authentication gate and both website modes.
+  These checks use no live IAM credentials.
 - All three distributable Cargo packages build with Cargo's temporary local registry.
 - Both preview websites were visually inspected; source provenance hashes pass.
 

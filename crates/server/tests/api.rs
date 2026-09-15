@@ -2481,6 +2481,92 @@ fn management_event(revision: i64) -> Value {
     json!({"spec_version":"1.0","event_id":uuid::Uuid::new_v4(),"event_type":"honeycomb.application.changed.v1","occurred_at":"2026-09-16T00:00:00Z","organization_id":null,"aggregate":{"type":"application","id":"00000000-0000-0000-0000-000000000001","version":revision},"data":{"app_id":"tos>reconcile"}})
 }
 #[tokio::test]
+async fn periodic_reconciliation_recovers_missed_notifications_and_preserves_newer_targets() {
+    use silicon_honeycomb_server::reconciliation;
+    let (mut s, _) = setup(true).await;
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/apps",
+            Some("admin"),
+            input("reconcile"),
+            "periodic-create-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::ACCEPTED
+    );
+    let config: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let manager = Arc::new(SnapshotManager(std::sync::Mutex::new(
+        json!({"app_id":"tos>reconcile","iam_revision":3,"configuration_revision":1,"visibility":"private","availability":"disabled","effective_configuration":config}),
+    )));
+    s.management = manager.clone();
+    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='tos>reconcile'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    reconciliation::tick(&s).await.unwrap();
+    let state: (i64, String, String) = sqlx::query_as(
+        "SELECT iam_revision,visibility,state FROM applications WHERE app_id='tos>reconcile'",
+    )
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(state, (3, "private".into(), "disabled".into()));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM webhook_events")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
+
+    // Another tick does not poll again until due, including after worker restart.
+    manager.0.lock().unwrap()["iam_revision"] = json!(4);
+    reconciliation::tick(&s).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT iam_revision FROM applications WHERE app_id='tos>reconcile'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        3
+    );
+
+    // A newer signed notification keeps its target and backoff during the scan.
+    reconciliation::receive(&s, "production", &management_event(8))
+        .await
+        .unwrap();
+    let retry = silicon_honeycomb_server::now() + 600;
+    sqlx::query("UPDATE application_reconciliation SET retry_at=?")
+        .bind(retry)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE applications SET iam_check_after=0")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    reconciliation::tick(&s).await.unwrap();
+    let pending: (i64, i64, String) =
+        sqlx::query_as("SELECT target_revision,retry_at,state FROM application_reconciliation")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(pending, (8, retry, "pending".into()));
+}
+#[tokio::test]
 async fn signed_management_events_reconcile_revocation_without_stale_or_unpublished_grants() {
     use silicon_honeycomb_server::reconciliation;
     let (mut s, _) = setup(true).await;

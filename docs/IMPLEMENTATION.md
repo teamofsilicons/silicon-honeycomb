@@ -32,6 +32,16 @@ production has no fabricated-login or automatic-approval switch.
 
 ## Checkpoint: 2026-09-16
 
+Missed-notification recovery: the reconciliation worker durably schedules known
+production applications for an authoritative IAM read every five minutes, with
+bounded batches and preserved newer notification targets/backoff. This covers
+accepted applications already in Honeycomb; legacy inventory/adoption and shared
+testing lifecycle integration remain separate. A regression test verifies missed
+revocation recovery and protects pending newer revisions.
+Full workspace tests (42 backend API cases) and strict Clippy pass. Current backend
+and web production images build, and disposable container smoke checks pass without
+live IAM calls.
+
 Latest telemetry checkpoint: official Space Station SDK export on the backend,
 authenticated CLI/daemon/web diagnostics, persisted opt-out propagated through API
 and IAM session requests, and generation-fenced local testing records. The dedicated

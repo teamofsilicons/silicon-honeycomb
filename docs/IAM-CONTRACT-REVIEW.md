@@ -1,6 +1,7 @@
 # Current IAM integration review
 
-Reviewed local IAM commit `7abd575` (2026-09-16), SDK 1.10.0, against Honeycomb.
+Reviewed local IAM code commit `7abd575` and ownership documentation commit
+`0467ef0` (2026-09-16), SDK 1.10.0, against Honeycomb.
 The current upstream source of truth is `silicon-iam/docs/HONEYCOMB_INTEGRATION.md`
 and its OpenAPI contract. This review supersedes the earlier assumption that IAM
 has no management API in `IAM-HANDOFF.md`.
@@ -26,6 +27,10 @@ has no management API in `IAM-HANDOFF.md`.
   `X-IAM-Management-Signature` over the raw bytes using the independent signing key.
   Application events queue durable revision reconciliation. Ordinary application
   webhooks retain their own endpoint, signing key and test-envelope verification.
+- A persisted five-minute scan queues authoritative reads for known production
+  applications with accepted IAM revisions, recovering missed notifications.
+  Batches contain at most 50 apps; pending notification targets and retry schedules
+  are preserved. This does not adopt unknown legacy applications or testing state.
 - Exact wire bodies are encrypted before sending and retained for recovery.
   Step-up proofs and returned app secrets are never persisted.
 
