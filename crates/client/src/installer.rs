@@ -60,7 +60,7 @@ pub fn install_archive(
         }
         #[cfg(windows)]
         let command = format!("{command}.cmd");
-        let destination = bin.join(command);
+        let destination = bin.join(command.as_str());
         let owned = previous
             .and_then(|p| p.commands.get(original))
             .is_some_and(|p| p == &destination && owns_command(previous.unwrap(), p));
@@ -73,7 +73,7 @@ pub fn install_archive(
         // Include commands already found elsewhere on PATH in collision detection.
         if !owned && let Some(paths) = std::env::var_os("PATH") {
             for p in std::env::split_paths(&paths) {
-                let candidate = p.join(command);
+                let candidate = p.join(command.as_str());
                 if candidate.exists() && candidate != destination {
                     bail!(
                         "Command collision: {} is already on PATH. Use --alias {original}=another-name",
