@@ -1,3 +1,4 @@
+import { LogoField } from "./LogoField";
 import EnvironmentRetention from "./EnvironmentRetention";
 import WebhookSettings from "./WebhookSettings";
 import ScopePicker from "./ScopePicker";
@@ -159,6 +160,7 @@ export default function App() {
   const [rotationProof, setRotationProof] = createSignal("");
   const [publication, setPublication] = createSignal<any>();
   const [showCreate, setShowCreate] = createSignal(false);
+  const [logoUploading, setLogoUploading] = createSignal(false);
   const [form, setForm] = createSignal<Record<string, any>>(blank());
   const editing = () => form().draft_edit_app_id as string | undefined;
   const [advanced, setAdvanced] = createSignal(false);
@@ -384,6 +386,7 @@ export default function App() {
   }
   async function createApp(e: Event) {
     e.preventDefault();
+    if (logoUploading()) return;
     await act(async () => {
       const payload: Record<string, any> = {
         ...form(),
@@ -1490,6 +1493,8 @@ export default function App() {
             </small>
           </label>
           <div class="section-divider" />
+          <LogoField org={form().org_id} value={form().logo_url} change={url => edit("logo_url", url)} onBusy={setLogoUploading} />
+          <div class="section-divider" />
           <h3>Connect to IAM</h3>
           <div class="form-grid">
             <label>
@@ -1625,7 +1630,7 @@ export default function App() {
             <span role="status">{draftStatus()}</span>
             <button
               class="button primary"
-              disabled={busy() || !admins().length}
+              disabled={busy() || logoUploading() || !admins().length}
             >
               {busy()
                 ? "Saving…"

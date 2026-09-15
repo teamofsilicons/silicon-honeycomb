@@ -163,6 +163,19 @@ impl Management for AwaitingIamIntegration {
 }
 #[async_trait]
 pub trait ArchiveStorage: Send + Sync {
+    /// Store a normalized PNG beside the archives and return its public image URL.
+    async fn upload_logo(
+        &self,
+        _org: &str,
+        _path: &std::path::Path,
+        _actor_token: &str,
+        _environment: Option<&str>,
+        _operation_id: &str,
+    ) -> Result<String> {
+        Err(Error::unavailable(
+            "Briefcase logo uploads are not configured",
+        ))
+    }
     async fn put(
         &self,
         app_id: &str,

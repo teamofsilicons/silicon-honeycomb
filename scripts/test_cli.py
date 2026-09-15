@@ -72,10 +72,16 @@ def main():
             activity = run('environments', 'activity', retention_id, 'tos>briefcase', '--generation', '1', '--key-version', '1')
             assert activity['replayed'] is False
             assert run('environments', 'retention', retention_id)['idle_days'] == 60
+            logo_file = REPO / 'web/tests/fixtures/logo.png'
+            run('apps', 'upload-logo', 'tos', str(logo_file), role='member', ok=False)
+            logo = run('--idempotency-key', 'cli-logo-upload-0001', 'apps', 'upload-logo', 'tos', str(logo_file))
+            assert logo['state'] == 'accepted' and logo['logo_url'].startswith('https://briefcase.fixture.invalid/')
+            assert run('--idempotency-key', 'cli-logo-upload-0001', 'apps', 'upload-logo', 'tos', str(logo_file)) == logo
             app_id = 'tos>cli-e2e'
             app = {'org_id': 'tos', 'local_app_id': 'cli-e2e', 'name': 'CLI integration',
                    'description': 'This application exercises the complete local Honeycomb release installation workflow. ' * 7,
                    'webhook_url': 'https://example.com/webhook/', 'webhook_secret': 'test-signing-secret-000000000000000000'}
+            app['logo_url'] = logo['logo_url']
             config = root / 'application.json'
             config.write_text(json.dumps(app))
             run('apps', 'create', str(config), role='member', ok=False)
@@ -150,7 +156,7 @@ def main():
             assert report['saved'] and report['notification'] == 'pending'
             run('logout', role='member')
             assert run('login', 'status', role='member') == {'authenticated': False}
-            print('PASS: CLI IAM discovery/login, webhook approval/step-up retry/signing rotation, retention/activity, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
+            print('PASS: CLI IAM discovery/login, logo upload/replay, webhook approval/step-up retry/signing rotation, retention/activity, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
         finally:
             fixture.terminate()
             fixture.wait(timeout=10)

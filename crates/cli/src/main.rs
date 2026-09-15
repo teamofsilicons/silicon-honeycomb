@@ -181,6 +181,11 @@ enum Webhook {
 }
 #[derive(Subcommand)]
 enum Apps {
+    /// Upload a publicly viewable logo to Briefcase. Set the returned logo_url in application.json.
+    UploadLogo {
+        org_id: String,
+        file: PathBuf,
+    },
     /// Manage pending webhook destinations and signing credentials through IAM.
     Webhook {
         #[command(subcommand)]
@@ -750,6 +755,11 @@ async fn run() -> Result<()> {
             Apps::Reconcile { app_id } => {
                 show(&client.reconcile_app(app_id, &mutation(&cli, None)?).await?)?
             }
+            Apps::UploadLogo { org_id, file } => show(
+                &client
+                    .upload_logo(org_id, file, &mutation(&cli, None)?)
+                    .await?,
+            )?,
             Apps::List { page } => show(&client.search("", *page, true).await?)?,
             Apps::Get { app_id } => show(&client.app(app_id).await?)?,
             Apps::Create { file } => show(

@@ -272,6 +272,33 @@ impl Client {
     pub async fn create_app(&self, input: &AppInput, m: &Mutation) -> Result<Value> {
         self.mutate(Method::POST, &["apps"], input, m).await
     }
+    /// Upload a publicly viewable logo to Briefcase; save its URL in application configuration.
+    pub async fn upload_logo(&self, org: &str, path: &Path, m: &Mutation) -> Result<Value> {
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(path).await?;
+        let mut bytes = Vec::new();
+        file.take(2 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        if bytes.is_empty() || bytes.len() > 2 * 1024 * 1024 {
+            bail!("Choose a PNG, JPEG or WebP logo no larger than 2 MiB");
+        }
+        let response = Self::check(
+            self.request(
+                Method::POST,
+                self.url(&["organizations", org, "logos"])?,
+                Some(m),
+            )
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await?,
+        )
+        .await?;
+        Ok(serde_json::from_slice(
+            &Self::bounded(response, 64 * 1024).await?,
+        )?)
+    }
     pub async fn update_app(&self, id: &str, input: &AppInput, m: &Mutation) -> Result<Value> {
         self.mutate(Method::PUT, &["apps", id], input, m).await
     }

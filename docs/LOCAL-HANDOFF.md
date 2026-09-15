@@ -9,6 +9,7 @@ This is a working local checkpoint, not a completed production rollout.
 - Public/private library and authenticated console using the current Interface
   style: paper surfaces, blue accents and serif headings.
 - Package validation, upload/install/update/uninstall, drafts, catalog/search,
+  logo URL/file upload through Briefcase,
   reviews/stars, publication discussions/decisions/activation, secret recovery,
   permission picker, webhook approval/signing-secret rotation and testing-environment progress.
 - Durable IAM configuration/reconciliation and protected SDK integration for the
@@ -23,9 +24,9 @@ and sample applications; no production credentials or email delivery are involve
 
 ## Verification
 
-- Rust workspace tests and strict Clippy passed. Latest backend coverage: 37 API
-  cases, plus runtime IAM and management SDK wire tests.
-- All 30 desktop/mobile browser cases pass, including webhook changes, retention
+- Rust workspace tests and strict Clippy passed. Latest backend coverage: 39 API
+  cases, plus runtime IAM, management SDK and Briefcase logo wire tests.
+- All 32 desktop/mobile browser cases pass, including logo upload/retry, webhook changes, retention
   settings and automatic cleanup progress/retry.
 - CLI HTTP journey includes private creation, six-target archive validation,
   releases, install/execute/update/uninstall, review/activation and anonymous install.
@@ -48,8 +49,8 @@ The native six-platform release workflow has not run on remote CI.
 2. Implement the services' automatic-retention transport and legacy adoption.
    Honeycomb now schedules durable app retirement, environment soft deletion and
    expiry purge; missing protected service acknowledgments keep these jobs pending.
-3. Complete protected notification recipient discovery and live Postmark delivery. Direct Honeycomb telemetry and
-   logo-upload workflows also remain unfinished.
+3. Complete protected notification recipient discovery and live Postmark delivery.
+   Direct Honeycomb telemetry remains unfinished.
 4. Provision IAM/Briefcase permissions, dedicated service and notification keys,
    Postmark and deployment secrets; prepare the actual hosting/DNS and callback URLs.
 5. Publish the repository, CLI binaries and crates, then run live browser/CLI/installer

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+const logoPng = readFileSync(new URL("./fixtures/logo.png", import.meta.url));
 import { test, expect } from "@playwright/test";
 const library = "http://localhost:19173",
   consoleSite = "http://localhost:19174";
@@ -55,6 +57,11 @@ test("console is gated and creates a private application through the backend", a
     .getByRole("button", { name: "Create application", exact: true })
     .click();
   const dialog = page.getByRole("dialog");
+  await page.route("https://briefcase.fixture.invalid/**", route => route.fulfill({ contentType: "image/png", body: logoPng }));
+  await dialog.getByLabel("Upload a logo", { exact: true }).setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: logoPng });
+  await expect(dialog.getByLabel("Logo URL")).toHaveValue(/^https:\/\/briefcase\.fixture\.invalid\//);
+  const logoUrl = await dialog.getByLabel("Logo URL").inputValue();
+  await expect(dialog.getByAltText("Application logo preview")).toBeVisible();
   await dialog
     .getByLabel("Application handle")
     .fill(`web-e2e-${info.project.name}-${Date.now()}`);
@@ -80,6 +87,7 @@ test("console is gated and creates a private application through the backend", a
   await page
     .getByRole("button", { name: "Edit configuration", exact: true })
     .click();
+  await expect(page.getByRole("dialog").getByLabel("Logo URL")).toHaveValue(logoUrl);
   await page
     .getByRole("dialog")
     .getByLabel("Application name", { exact: true })
@@ -405,4 +413,31 @@ test("permission picker reflects IAM eligibility and preserves scope edits", asy
   await expect(dialog.getByRole("checkbox", { name: "self.profile.read", exact: true })).toBeDisabled();
   await expect(dialog).toContainText("Correct the application scopes JSON");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+
+test("logo upload retries a lost response using the same operation", async ({ page }, info) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await page.getByRole("button", { name: "Create application", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await page.route("https://briefcase.fixture.invalid/**", route => route.fulfill({ contentType: "image/png", body: logoPng }));
+  const keys: string[]=[];
+  await page.route("**/api/v1/organizations/tos/logos", async route => {
+    keys.push(route.request().headers()["idempotency-key"]);
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    if (keys.length===1) await route.fulfill({status:503,contentType:"application/json",body:JSON.stringify({error:{message:"Logo response interrupted. Retry this upload."}})});
+    else await route.fulfill({response});
+  });
+  await dialog.getByLabel("Upload a logo", {exact:true}).setInputFiles({name:"logo.png",mimeType:"image/png",buffer:logoPng});
+  await expect(dialog.getByRole("alert")).toContainText("Logo response interrupted");
+  await dialog.getByRole("button",{name:"Retry logo upload",exact:true}).click();
+  await expect(dialog.getByLabel("Logo URL")).toHaveValue(/^https:\/\/briefcase\.fixture\.invalid\//);
+  expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
+  const preview=dialog.getByAltText("Application logo preview");
+  await expect.poll(()=>preview.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(2);
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByRole("region",{name:"Application logo"}).scrollIntoViewIfNeeded();
+  await page.screenshot({path:`/tmp/honeycomb-logo-${info.project.name}.png`});
 });

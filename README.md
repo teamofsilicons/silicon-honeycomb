@@ -73,6 +73,21 @@ compiled dependency, so dependency version changes remain a host build decision.
 
 ## A typical application workflow
 
+The console accepts either a logo URL or a PNG, JPEG or WebP file. Files may be up
+to 2 MiB and 2048 × 2048 pixels. Honeycomb removes metadata, converts the image to
+PNG and stores it beside the release archives in Briefcase. Uploaded logos have a
+publicly viewable link, including logos used by private applications.
+
+From the CLI, upload a logo before creating or editing the application:
+
+```sh
+honeycomb apps upload-logo my-org ./logo.png
+```
+
+Set the returned `logo_url` in `application.json`. Use the same explicit
+`--idempotency-key` and file when retrying an interrupted upload. The Rust client
+provides the equivalent `Client::upload_logo` method.
+
 ```sh
 honeycomb iam --json
 honeycomb login '<IAM short-lived token>'

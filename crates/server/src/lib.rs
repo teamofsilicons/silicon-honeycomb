@@ -9,6 +9,7 @@ pub mod iam_management;
 pub mod imports;
 pub mod integration;
 pub mod lifecycle;
+pub mod logos;
 pub mod notifications;
 pub mod reconciliation;
 pub mod retention;

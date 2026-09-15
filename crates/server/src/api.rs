@@ -54,6 +54,10 @@ pub fn router(state: State) -> Router {
             get(super::catalog::scopes),
         )
         .route("/api/v1/apps", get(search).post(create_app))
+        .route(
+            "/api/v1/organizations/{org}/logos",
+            post(super::logos::upload).layer(DefaultBodyLimit::max(super::logos::MAX_LOGO_BYTES)),
+        )
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route("/api/v1/apps/{id}/operations", get(app_operations))
         .route(

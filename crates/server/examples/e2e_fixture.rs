@@ -182,6 +182,21 @@ impl Management for FixtureManagement {
 struct FixtureStorage(Mutex<BTreeMap<String, Vec<u8>>>);
 #[async_trait]
 impl ArchiveStorage for FixtureStorage {
+    async fn upload_logo(
+        &self,
+        org: &str,
+        path: &std::path::Path,
+        _: &str,
+        _: Option<&str>,
+        operation: &str,
+    ) -> Result<String> {
+        let url = format!("https://briefcase.fixture.invalid/{org}/logo-{operation}.png");
+        self.0.lock().unwrap().insert(
+            url.clone(),
+            std::fs::read(path).map_err(|e| anyhow::anyhow!(e))?,
+        );
+        Ok(url)
+    }
     async fn put(
         &self,
         app: &str,

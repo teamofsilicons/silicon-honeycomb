@@ -2360,6 +2360,13 @@ async fn publication_rejects_wrong_receipts_and_rechecks_current_iam_visibility(
     .await;
     assert_eq!(pending["state"], "pending");
     assert!(storage.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operations WHERE kind='logo.upload'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
     manager.wrong_receipt.store(false, Ordering::SeqCst);
     manager.revoked.store(true, Ordering::SeqCst);
     let (_, pending) = call(
@@ -3629,4 +3636,176 @@ async fn retention_worker_retries_with_backoff_without_rescheduling_or_fabricati
             .unwrap(),
         "accepted"
     );
+}
+
+type StoredLogo = (String, Vec<u8>, Option<String>);
+struct LogoStorage {
+    calls: std::sync::Mutex<Vec<StoredLogo>>,
+    fail: AtomicBool,
+}
+#[async_trait]
+impl ArchiveStorage for LogoStorage {
+    async fn upload_logo(
+        &self,
+        org: &str,
+        path: &std::path::Path,
+        actor: &str,
+        environment: Option<&str>,
+        op: &str,
+    ) -> Result<String> {
+        assert_eq!(org, "tos");
+        assert_eq!(actor, "admin");
+        self.calls.lock().unwrap().push((
+            op.into(),
+            std::fs::read(path).unwrap(),
+            environment.map(str::to_owned),
+        ));
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(Error::unavailable("Temporary Briefcase failure"));
+        }
+        Ok(format!(
+            "https://briefcase.example.com/public/logo-{op}.png"
+        ))
+    }
+    async fn put(
+        &self,
+        _: &str,
+        _: &str,
+        _: &std::path::Path,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<String> {
+        unreachable!()
+    }
+    async fn read(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
+        unreachable!()
+    }
+    async fn publish(&self, _: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+        unreachable!()
+    }
+}
+fn logo_bytes() -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([23, 54, 184, 255]))
+        .write_to(&mut out, image::ImageFormat::Png)
+        .unwrap();
+    out.into_inner()
+}
+async fn upload_logo_call(
+    s: &State,
+    actor: Option<&str>,
+    idem: &str,
+    bytes: Vec<u8>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/organizations/tos/logos")
+        .header("idempotency-key", format!("test-operation-{idem}"));
+    if let Some(actor) = actor {
+        request = request.header("authorization", format!("Bearer {actor}"));
+    }
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(request.body(Body::from(bytes)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+#[tokio::test]
+async fn logos_require_current_admin_validate_bytes_and_replay_exact_uploads() {
+    let (mut s, revoked) = setup(true).await;
+    let storage = Arc::new(LogoStorage {
+        calls: Default::default(),
+        fail: AtomicBool::new(false),
+    });
+    s.storage = storage.clone();
+    let bytes = logo_bytes();
+    for (actor, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some("member"), StatusCode::FORBIDDEN),
+        (Some("outsider"), StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            upload_logo_call(&s, actor, "logo-gate", bytes.clone())
+                .await
+                .0,
+            expected
+        );
+    }
+    assert_eq!(
+        upload_logo_call(
+            &s,
+            Some("admin"),
+            "logo-svg",
+            b"<svg onload='alert(1)'/>".to_vec()
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        upload_logo_call(
+            &s,
+            Some("admin"),
+            "logo-large",
+            vec![0; 2 * 1024 * 1024 + 1]
+        )
+        .await
+        .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    assert!(storage.calls.lock().unwrap().is_empty());
+    let mut payload = bytes.clone();
+    payload.extend_from_slice(b"private image metadata");
+    let (status, result) =
+        upload_logo_call(&s, Some("admin"), "logo-success", payload.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["state"], "accepted");
+    assert_eq!(
+        upload_logo_call(&s, Some("admin"), "logo-success", payload.clone())
+            .await
+            .1,
+        result
+    );
+    assert_eq!(storage.calls.lock().unwrap().len(), 1);
+    assert_eq!(storage.calls.lock().unwrap()[0].1, bytes);
+    assert_eq!(
+        upload_logo_call(&s, Some("admin"), "logo-success", bytes)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    revoked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        upload_logo_call(&s, Some("admin"), "logo-success", payload)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+#[tokio::test]
+async fn logo_retry_preserves_storage_operation_after_failure() {
+    let (mut s, _) = setup(true).await;
+    let storage = Arc::new(LogoStorage {
+        calls: Default::default(),
+        fail: AtomicBool::new(true),
+    });
+    s.storage = storage.clone();
+    assert_eq!(
+        upload_logo_call(&s, Some("admin"), "logo-retry", logo_bytes())
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let (status, result) = upload_logo_call(&s, Some("admin"), "logo-retry", logo_bytes()).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let calls = storage.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, calls[1].0);
+    assert_eq!(result["id"], calls[0].0);
 }

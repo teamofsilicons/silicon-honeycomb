@@ -926,6 +926,8 @@ textarea {
   position: relative;
   cursor: pointer;
 }
+.logo-field { display: grid; gap: 12px; }
+.logo-preview { width: 72px; height: 72px; object-fit: contain; border-radius: 12px; }
 .upload-zone strong {
   font-size: 0.875rem;
   font-weight: 400;

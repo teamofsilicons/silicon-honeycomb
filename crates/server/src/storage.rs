@@ -22,6 +22,7 @@ impl Briefcase {
         body: Value,
         token: &str,
         environment: Option<&str>,
+        org: Option<&str>,
     ) -> Result<(reqwest::Response, Option<String>)> {
         let bytes = serde_json::to_vec(&body).map_err(|e| anyhow::anyhow!(e))?;
         let iam = match environment {
@@ -34,7 +35,7 @@ impl Briefcase {
             iam.obo().endpoints(&self.audience).await.map_err(|_| {
                 Error::unavailable("Cannot discover Briefcase OBO endpoints in IAM")
             })?;
-        let input:models::OboExchangeRequest=serde_json::from_value(json!({"subject_token":token,"audience":self.audience,"endpoint_id":endpoint,"metadata":{},"request":{"method":"POST","body_sha256":silicon_iam_client::api::obo::body_sha256(&bytes)}})).map_err(|e|anyhow::anyhow!(e))?;
+        let input:models::OboExchangeRequest=serde_json::from_value(json!({"org_id":org,"subject_token":token,"audience":self.audience,"endpoint_id":endpoint,"metadata":{},"request":{"method":"POST","body_sha256":silicon_iam_client::api::obo::body_sha256(&bytes)}})).map_err(|e|anyhow::anyhow!(e))?;
         let proof=iam.obo().exchange_signed(&input,&catalog,&Mutation::new()).await.map_err(|_|Error::unavailable("IAM refused the Briefcase OBO proof. Check consent and effective external scopes."))?;
         let mut request = self
             .http
@@ -60,12 +61,15 @@ impl Briefcase {
         Ok((response, test_secret))
     }
 }
-#[async_trait]
-impl ArchiveStorage for Briefcase {
-    async fn put(
+struct UploadFile<'a> {
+    org: &'a str,
+    name: &'a str,
+    content_type: &'a str,
+}
+impl Briefcase {
+    async fn put_file(
         &self,
-        app_id: &str,
-        version: &str,
+        file: UploadFile<'_>,
         path: &std::path::Path,
         token: &str,
         environment: Option<&str>,
@@ -75,7 +79,7 @@ impl ArchiveStorage for Briefcase {
         let bytes = tokio::fs::read(path)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        let body = json!({"operation_id":operation_id,"parent_path":format!("apps/{}/public",self.app_id),"name":format!("{}-{version}.tar.gz",app_id.replace('>',"--")),"content_type":"application/gzip","size":bytes.len(),"sha256":sha256});
+        let body = json!({"operation_id":operation_id,"parent_path":format!("apps/{}/public",self.app_id),"name":file.name,"content_type":file.content_type,"size":bytes.len(),"sha256":sha256});
         let (response, test_secret) = self
             .control(
                 "briefcase.uploads.reserve",
@@ -83,6 +87,7 @@ impl ArchiveStorage for Briefcase {
                 body,
                 token,
                 environment,
+                Some(file.org),
             )
             .await?;
         let reservation: Value = response
@@ -102,17 +107,13 @@ impl ArchiveStorage for Briefcase {
             let capability = reservation["capability"].as_str().ok_or_else(|| {
                 Error::unavailable("Briefcase did not return a transfer capability")
             })?;
-            let org_id = app_id
-                .split_once('>')
-                .ok_or_else(|| Error::bad("Invalid app ID"))?
-                .0;
             let mut request = self
                 .http
                 .put(format!(
                     "{}/api/v1/obo/uploads/{upload_id}/content",
                     self.base_url
                 ))
-                .header("x-org-id", org_id)
+                .header("x-org-id", file.org)
                 .header("x-briefcase-upload-capability", capability)
                 .header("content-type", "application/octet-stream");
             if let Some(secret) = test_secret {
@@ -138,6 +139,7 @@ impl ArchiveStorage for Briefcase {
                 json!({"operation_id":operation_id,"upload_id":upload_id}),
                 token,
                 environment,
+                Some(file.org),
             )
             .await?;
         let committed: Value = response
@@ -148,6 +150,79 @@ impl ArchiveStorage for Briefcase {
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| Error::unavailable("Briefcase did not confirm the published entry ID"))
+    }
+}
+
+#[async_trait]
+impl ArchiveStorage for Briefcase {
+    async fn put(
+        &self,
+        app_id: &str,
+        version: &str,
+        path: &std::path::Path,
+        token: &str,
+        environment: Option<&str>,
+        operation_id: &str,
+    ) -> Result<String> {
+        let org = app_id
+            .split_once('>')
+            .ok_or_else(|| Error::bad("Invalid app ID"))?
+            .0;
+        let name = format!("{}-{version}.tar.gz", app_id.replace('>', "--"));
+        self.put_file(
+            UploadFile {
+                org,
+                name: &name,
+                content_type: "application/gzip",
+            },
+            path,
+            token,
+            environment,
+            operation_id,
+        )
+        .await
+    }
+    async fn upload_logo(
+        &self,
+        org: &str,
+        path: &std::path::Path,
+        token: &str,
+        environment: Option<&str>,
+        operation_id: &str,
+    ) -> Result<String> {
+        let name = format!("logo-{operation_id}.png");
+        let reference = self
+            .put_file(
+                UploadFile {
+                    org,
+                    name: &name,
+                    content_type: "image/png",
+                },
+                path,
+                token,
+                environment,
+                operation_id,
+            )
+            .await?;
+        let published = self
+            .publish_file(&reference, token, environment, operation_id, Some(org))
+            .await?;
+        let published: Value = serde_json::from_str(&published).map_err(|e| anyhow::anyhow!(e))?;
+        let path = published["public_path"]
+            .as_str()
+            .ok_or_else(|| Error::unavailable("Briefcase omitted the public image path"))?;
+        let mut url = url::Url::parse(&format!("{}{path}", self.base_url))
+            .map_err(|_| Error::unavailable("Invalid Briefcase image URL"))?;
+        let pairs: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key != "view")
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        url.set_query(None);
+        url.query_pairs_mut()
+            .extend_pairs(pairs)
+            .append_pair("view", "inline");
+        Ok(url.to_string())
     }
     async fn read(
         &self,
@@ -178,6 +253,7 @@ impl ArchiveStorage for Briefcase {
                 json!({"entry_id":entry,"download":true}),
                 token,
                 environment,
+                None,
             )
             .await?
             .0
@@ -212,6 +288,20 @@ impl ArchiveStorage for Briefcase {
         environment: Option<&str>,
         operation_id: &str,
     ) -> Result<String> {
+        self.publish_file(reference, token, environment, operation_id, None)
+            .await
+    }
+}
+
+impl Briefcase {
+    async fn publish_file(
+        &self,
+        reference: &str,
+        token: &str,
+        environment: Option<&str>,
+        operation_id: &str,
+        org: Option<&str>,
+    ) -> Result<String> {
         let stored: Option<Value> = serde_json::from_str(reference).ok();
         let entry = stored
             .as_ref()
@@ -229,6 +319,7 @@ impl ArchiveStorage for Briefcase {
                 json!({"operation_id":link_operation,"entry_id":entry,"enabled":true}),
                 token,
                 environment,
+                org,
             )
             .await?;
         let link: Value = response

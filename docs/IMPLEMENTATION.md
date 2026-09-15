@@ -264,3 +264,34 @@ Corrected the deployment notes to reflect the configured SSH remote and distingu
 local package verification from crates.io installation. Local Cargo installation
 passed again, including version, unauthenticated status and updater opt-out.
 No Git push, public release, crate publication or deployment was performed.
+
+### Application logo workflow
+
+Added logo URL/file controls to application creation and editing, plus
+`honeycomb apps upload-logo <org> <file>` and `Client::upload_logo`. The upload API
+is `POST /api/v1/organizations/{org}/logos`, with the current IAM actor, an
+idempotency key and raw image bytes. Current organization admin authority is
+required before validation or replay. PNG/JPEG/WebP input is capped at 2 MiB and
+2048 × 2048; decoding has allocation limits, and re-encoding strips metadata and
+trailing content. Invalid input never creates a pending operation.
+
+The Briefcase adapter reserves, transfers, commits and shares the normalized PNG
+in Honeycomb's public app folder. The selected organization is bound into IAM's
+OBO exchange; test authentication and the returned test-plane link are preserved.
+Uploaded logos use publicly viewable URLs, explicitly disclosed in the form and
+CLI help. Uploading returns a URL; application configuration and IAM acceptance
+remain the separate existing save operation.
+
+Uploads persist operation IDs and use leases to prevent concurrent retries.
+Briefcase failure or lost responses can be retried with the original key and file;
+the console retains that request for its Retry button. API tests cover current
+admin gates, invalid/oversized images, metadata removal, idempotency conflicts,
+revocation and storage recovery. Official SDK HTTP tests check exact body hashes,
+organization selection, transfer capabilities and test authentication. Browser
+tests verify create/edit persistence, image rendering and lost-response retry on
+desktop and mobile. The CLI HTTP journey exercises upload and replay. Live
+Briefcase provisioning and deployed acceptance remain outstanding.
+
+Validation: workspace tests (39 backend API cases, two Briefcase SDK wire cases),
+strict Clippy, production web build, CLI HTTP journey and all 32 desktop/mobile
+browser cases passed. The logo screen was also visually inspected on mobile.
