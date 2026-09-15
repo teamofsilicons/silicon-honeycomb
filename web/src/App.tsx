@@ -145,6 +145,8 @@ export default function App() {
   const [selected, setSelected] = createSignal<AppRecord>();
   const [detailsTab, setDetailsTab] = createSignal("overview");
   const [reviews, setReviews] = createSignal<any[]>([]);
+  const [appOperations, setAppOperations] = createSignal<any[]>([]);
+  const [rotationConfirmation, setRotationConfirmation] = createSignal("");
   const [publication, setPublication] = createSignal<any>();
   const [showCreate, setShowCreate] = createSignal(false);
   const [form, setForm] = createSignal<Record<string, any>>(blank());
@@ -267,11 +269,15 @@ export default function App() {
     setDetailsTab("overview");
     setReviews([]);
     setPublication(undefined);
+    setAppOperations([]);
+    setRotationConfirmation("");
     await act(async () => {
       setSelected(await request<AppRecord>(endpoint(app.app_id)));
       setReviews((await request(endpoint(app.app_id) + "/reviews")).items);
-      if (canManage(app))
+      if (canManage(app)) {
         setPublication(await request(endpoint(app.app_id) + "/publication"));
+        setAppOperations((await request(endpoint(app.app_id) + "/operations")).items);
+      }
     });
   }
   function beginCreate(draft?: any) {
@@ -1048,6 +1054,7 @@ export default function App() {
                   >
                     Releases & publication
                   </button>
+                  <button class={detailsTab() === "access" ? "active" : ""} onClick={() => setDetailsTab("access")}>Access & secrets</button>
                 </Show>
               </div>
               <Show when={error()}>
@@ -1195,6 +1202,44 @@ export default function App() {
                   </form>
                 </Show>
               </Show>
+              <Show when={detailsTab() === "access"}>
+                <h3>Application access</h3>
+                <p class="muted">Requested revision {app().revision} · Effective revision {app().effective_revision}. IAM accepts scopes before they take effect.</p>
+                <details><summary>Requested scopes</summary><Code text={JSON.stringify(app().config.app_scope || {}, null, 2)} /></details>
+                <details><summary>Effective scopes</summary><Code text={JSON.stringify(app().effective_config?.app_scope || {}, null, 2)} /></details>
+                <h3>Application secret</h3>
+                <p class="muted">Rotating replaces the credential used by your backend. Save the replacement and update your backend configuration as soon as IAM accepts the rotation.</p>
+                <form class="application-form" onSubmit={(e) => {
+                  e.preventDefault();
+                  void act(async () => {
+                    const result=await request(endpoint(app().app_id)+"/secret-rotations", {method:"POST",headers:{"If-Match":String(app().revision)},body:"{}"});
+                    if(result.app_secret) setSecret(result.app_secret);
+                    setNotice(result.state === "accepted" ? "Secret rotated. Save the replacement." : "Rotation is pending IAM acceptance. Its operation is saved below.");
+                    setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
+                    setRotationConfirmation("");
+                  });
+                }}>
+                  <label>Type the application ID to rotate its secret<input value={rotationConfirmation()} onInput={(e)=>setRotationConfirmation(e.currentTarget.value)} /></label>
+                  <button class="button outline" disabled={busy() || rotationConfirmation()!==app().app_id || app().effective_revision!==app().revision || appOperations().some((o)=>o.state==="pending")}>Rotate application secret</button>
+                </form>
+                <h3>Your configuration operations</h3>
+                <For each={appOperations()}>{(op)=><article class="review-thread">
+                  <strong>{op.kind==="secret.rotate"?"Secret rotation":"Application configuration"}</strong> <Badge>{op.state}</Badge>
+                  <p class="app-id">{op.id}</p>
+                  <Show when={op.error}><p class="muted">{op.error === "integration_unavailable" ? "Waiting for IAM’s protected management integration." : op.error === "step_up_required" ? "IAM requires fresh identity verification before accepting this rotation." : op.error}</p></Show>
+                  <Show when={op.state==="pending"}><button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{
+                    const result=op.kind==="secret.rotate" ? await request(endpoint(app().app_id)+"/secret-rotations",{method:"POST",headers:{"If-Match":String(op.revision),"Idempotency-Key":op.idempotency_key},body:"{}"}) : await request(`/api/v1/operations/${op.id}/retry`,{method:"POST",body:"{}"});
+                    if(result.app_secret) setSecret(result.app_secret);
+                    setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
+                    setSelected(await request(endpoint(app().app_id)));
+                  })}>Retry operation</button></Show>
+                  <button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{
+                    const result=await request(`/api/v1/operations/${op.id}/result`,{method:"POST",body:"{}"});
+                    if(result.app_secret) setSecret(result.app_secret);else setNotice(result.message || "IAM has not returned a secret for this operation.");
+                    setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
+                  })}>Recover one-time secret</button>
+                </article>}</For>
+              </Show>
               <Show when={detailsTab() === "release"}>
                 <Show when={app().iam_revision === 0}>
                   <div class="inline-notice">
@@ -1260,7 +1305,7 @@ export default function App() {
                     disabled={
                       busy() ||
                       !app().latest_version ||
-                      app().iam_revision === 0
+                      app().iam_revision === 0 || app().effective_revision !== app().revision
                     }
                   >
                     Request publication

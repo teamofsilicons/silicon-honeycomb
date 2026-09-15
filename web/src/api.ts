@@ -7,6 +7,8 @@ export type AppRecord = {
   state: string;
   revision: number;
   iam_revision: number;
+  effective_revision: number;
+  effective_config: Record<string, any>;
   config: Record<string, any>;
   latest_version: string | null;
   rating: number;
@@ -34,7 +36,7 @@ export async function request<T = any>(
   const headers = new Headers(options.headers);
   if (options.body && !(options.body instanceof File))
     headers.set("Content-Type", "application/json");
-  if (options.method && !["GET", "HEAD"].includes(options.method))
+  if (options.method && !["GET", "HEAD"].includes(options.method) && !headers.has("Idempotency-Key"))
     headers.set("Idempotency-Key", crypto.randomUUID());
   const response = await fetch(path, {
     ...options,

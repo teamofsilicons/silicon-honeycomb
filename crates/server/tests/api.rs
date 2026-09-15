@@ -1404,3 +1404,282 @@ async fn import_graph_has_no_fixed_depth_limit_and_root_key_grants_no_production
             .unwrap();
     assert_eq!(count, 40);
 }
+
+#[derive(Default)]
+struct SecretManager {
+    results: std::sync::Mutex<BTreeMap<String, Value>>,
+    lose_response: AtomicBool,
+}
+#[async_trait]
+impl Management for SecretManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        let mut result = Manager { accept: true }.configure(o, t, e).await?;
+        result["operation_id"] = o["operation_id"].clone();
+        result["app_id"] = o["app_id"].clone();
+        result["app_secret"] = json!("creation-secret-never-persist");
+        self.results
+            .lock()
+            .unwrap()
+            .insert(o["operation_id"].as_str().unwrap().into(), result.clone());
+        Ok(result)
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("pending"))
+    }
+    async fn rotate_secret(
+        &self,
+        o: &Value,
+        _: &str,
+        step_up: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<Value> {
+        if step_up != Some("fresh-step-up-never-persist") {
+            return Err(Error::new(
+                StatusCode::FORBIDDEN,
+                "step_up_required",
+                "Fresh IAM verification is required",
+            ));
+        }
+        let mut results = self.results.lock().unwrap();
+        let id = o["operation_id"].as_str().unwrap();
+        let response=results.entry(id.into()).or_insert_with(||json!({"operation_id":id,"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"state":"accepted","iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"credential_version":2,"app_secret":"rotation-secret-never-persist"})).clone();
+        if self.lose_response.swap(false, Ordering::SeqCst) {
+            return Err(Error::unavailable("Lost response"));
+        }
+        Ok(response)
+    }
+    async fn operation_result(&self, id: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        self.results
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(Error::missing)
+    }
+}
+#[tokio::test]
+async fn secret_rotation_requires_current_admin_step_up_and_replays_without_storing_secrets() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(SecretManager::default());
+    s.management = manager.clone();
+    let (_, created) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("secrets"),
+        "secrets-create-0001",
+        None,
+    )
+    .await;
+    let (_, again) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("secrets"),
+        "secrets-create-0001",
+        None,
+    )
+    .await;
+    assert_eq!(again["app_secret"], created["app_secret"]);
+    let path = "/api/v1/apps/tos%3Esecrets/secret-rotations";
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("member"),
+            json!({}),
+            "secret-rotate-member-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({}),
+            "secret-rotate-stale-0001",
+            Some(0)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, pending) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        json!({}),
+        "secret-rotate-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["error_code"], "step_up_required");
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            "/api/v1/apps/tos%3Esecrets",
+            Some("admin"),
+            input("secrets"),
+            "secret-update-blocked-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, accepted) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        json!({"step_up_assertion":"fresh-step-up-never-persist"}),
+        "secret-rotate-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(accepted["state"], "accepted");
+    assert_eq!(accepted["app_secret"], "rotation-secret-never-persist");
+    let (_, replay) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        json!({}),
+        "secret-rotate-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(replay["app_secret"], accepted["app_secret"]);
+    assert_eq!(manager.results.lock().unwrap().len(), 2);
+    let rows: Vec<(Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT request_json,result,error FROM operations")
+            .fetch_all(&s.db)
+            .await
+            .unwrap();
+    assert!(!format!("{rows:?}").contains("never-persist"));
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Esecrets",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert!(!app.to_string().contains("never-persist"));
+    let id = accepted["id"].as_str().unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &format!("/api/v1/operations/{id}/result"),
+            Some("outsider"),
+            json!({}),
+            "secret-read-denied-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    // Expiry returns no old credential and never causes a fresh rotation.
+    manager
+        .results
+        .lock()
+        .unwrap()
+        .get_mut(id)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("app_secret");
+    let (_, expired) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/operations/{id}/result"),
+        Some("admin"),
+        json!({}),
+        "secret-read-expired-0001",
+        None,
+    )
+    .await;
+    assert!(expired.get("app_secret").is_none());
+    assert!(expired["message"].as_str().unwrap().contains("expired"));
+}
+#[tokio::test]
+async fn lost_rotation_response_recovers_original_result_and_unblocks_configuration() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(SecretManager::default());
+    s.management = manager.clone();
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("lost-secret"),
+        "secret-lost-create-0001",
+        None,
+    )
+    .await;
+    manager.lose_response.store(true, Ordering::SeqCst);
+    let (_, pending) = call(
+        &s,
+        "POST",
+        "/api/v1/apps/tos%3Elost-secret/secret-rotations",
+        Some("admin"),
+        json!({"step_up_assertion":"fresh-step-up-never-persist"}),
+        "secret-lost-rotate-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["state"], "pending");
+    let id = pending["id"].as_str().unwrap();
+    let (_, result) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/operations/{id}/result"),
+        Some("admin"),
+        json!({}),
+        "secret-lost-recover-0001",
+        None,
+    )
+    .await;
+    assert_eq!(result["state"], "accepted");
+    assert_eq!(result["app_secret"], "rotation-secret-never-persist");
+    let (_, op) = call(
+        &s,
+        "GET",
+        &format!("/api/v1/operations/{id}"),
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(op["state"], "accepted");
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            "/api/v1/apps/tos%3Elost-secret",
+            Some("admin"),
+            input("lost-secret"),
+            "secret-lost-update-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::ACCEPTED
+    );
+}

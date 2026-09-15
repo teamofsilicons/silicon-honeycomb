@@ -139,3 +139,17 @@ and pin accepted configurations and selected releases. Private dependencies requ
 production access. Follow per-service progress with `environments get`; use
 `environments action ENVIRONMENT_ID retry --revision N` for an incomplete operation.
 The console exposes the same workflow under Testing environments → Manage.
+
+## Rotate or recover an application secret
+
+```sh
+honeycomb apps rotate-secret 'tos>example' --revision 1
+# If IAM requires fresh verification, retry with the ORIGINAL idempotency key.
+honeycomb --idempotency-key ORIGINAL_KEY apps rotate-secret 'tos>example' --revision 1 --step-up-file /secure/path/assertion
+honeycomb operations recover-secret OPERATION_ID
+```
+
+IAM controls the replay window and revokes the previous credential according to
+its version policy. Honeycomb prints a returned secret once and never saves it.
+The console's Access & secrets tab shows requested/effective scopes and your
+configuration operations, with retry and recovery controls.

@@ -7,6 +7,7 @@ pub mod imports;
 pub mod integration;
 pub mod lifecycle;
 pub mod notifications;
+pub mod secrets;
 pub mod storage;
 
 use aes_gcm::{

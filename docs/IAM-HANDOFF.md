@@ -240,3 +240,15 @@ nonsecret receipt identifiers. Production approvals and secrets are not copied.
 An import adds per-app readiness gates while existing ready app instances remain
 available. IAM must not activate newly imported app access until Honeycomb reports
 all participating services ready. Retrying uses the same operation and snapshots.
+
+### Secret operation details implemented in Honeycomb
+
+Rotation requests carry operation_id, app_id, configuration_revision and
+expected_iam_revision. Fresh step-up evidence is passed separately and is never
+stored in the operation. IAM's accepted response must echo operation_id, app_id and
+configuration_revision and return a newer iam_revision, positive credential_version
+and one-time app_secret. The protected operation-result read echoes those identifiers
+and can recover the same secret within IAM's replay window. After expiry, return
+the accepted metadata without the secret; recovery must never perform a new rotation.
+Honeycomb uses this result to reconcile a lost rotation response. Please provide
+the hosted step-up initiation/callback contract for the console in the new SDK.

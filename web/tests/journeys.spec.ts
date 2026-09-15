@@ -265,3 +265,27 @@ test("console import exposes pending integration without disabling the ready env
   await expect(dialog).toContainText("ready");
   await expect(dialog.getByRole("button", { name: "Clean test data", exact: true })).toHaveCount(0);
 });
+
+
+test("secret rotation is explicit and browser retries preserve the same operation", async ({ page }, info) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  const name=info.project.name === "desktop" ? "Briefcase" : "Waveform";
+  const appId=`tos>${name.toLowerCase()}`;
+  await page.getByRole("heading", { name, exact: true }).click();
+  const dialog=page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Access & secrets", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Rotate application secret", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Type the application ID to rotate its secret").fill(appId);
+  await dialog.getByRole("button", { name: "Rotate application secret", exact: true }).click();
+  const operations=dialog.locator(".review-thread");
+  await expect(operations).toHaveCount(1);
+  const id=await operations.locator(".app-id").textContent();
+  await expect(operations).toContainText("Waiting for IAM’s protected management integration.");
+  await operations.getByRole("button", { name: "Retry operation", exact: true }).click();
+  await expect(operations).toHaveCount(1);
+  await expect(operations.locator(".app-id")).toHaveText(id!);
+  await expect(operations.getByRole("button", { name: "Retry operation", exact: true })).toBeEnabled();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

@@ -107,6 +107,8 @@ def main():
             run('uninstall', app_id, role='member')
             assert not executable.exists()
             assert not run('installed', role='member')
+            rotation = run('apps', 'rotate-secret', 'tos>briefcase', '--revision', '1')
+            assert rotation['state'] == 'pending' and rotation['error_code'] == 'integration_unavailable'
             imported = run('environments', 'import', 'fixture-import-desktop', 'tos>briefcase', '--revision', '1')
             assert imported['operation_state'] == 'pending' and imported['state'] == 'ready'
             report = run('report', 'The local test report reproduces a CLI issue.', role='member')

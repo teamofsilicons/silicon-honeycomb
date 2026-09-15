@@ -30,11 +30,20 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/reports", post(super::notifications::report))
         .route("/api/v1/apps", get(search).post(create_app))
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
+        .route("/api/v1/apps/{id}/operations", get(app_operations))
         .route(
             "/api/v1/apps/{id}/releases",
             get(releases).post(upload_release).layer(archive_limit),
         )
         .route("/api/v1/apps/{id}/download", get(download))
+        .route(
+            "/api/v1/apps/{id}/secret-rotations",
+            post(super::secrets::rotate),
+        )
+        .route(
+            "/api/v1/operations/{id}/result",
+            post(super::secrets::recover),
+        )
         .route("/api/v1/apps/{id}/reviews", get(reviews).put(review))
         .route("/api/v1/apps/{id}/star", put(star).delete(unstar))
         .route(
@@ -305,6 +314,11 @@ fn app_from(row: &SqliteRow, admin: bool) -> Result<App> {
         revision: row.get("revision"),
         iam_revision: row.get("iam_revision"),
         effective_revision: row.get("effective_revision"),
+        effective_config: serde_json::from_str(
+            &row.get::<Option<String>, _>("effective_config")
+                .unwrap_or_else(|| "{}".into()),
+        )
+        .map_err(|e| anyhow::anyhow!(e))?,
         config,
         latest_version: None,
         rating: row.get::<Option<f64>, _>("rating").unwrap_or(0.0),
@@ -322,7 +336,7 @@ fn app_from(row: &SqliteRow, admin: bool) -> Result<App> {
     }
     Ok(app)
 }
-async fn find_app(s: &State, c: &Context, id: &str, manage: bool) -> Result<App> {
+pub(crate) async fn find_app(s: &State, c: &Context, id: &str, manage: bool) -> Result<App> {
     let row = sqlx::query(concat!("SELECT a.*, (SELECT AVG(rating) FROM reviews r WHERE r.plane=a.plane AND r.app_id=a.app_id) AS rating, (SELECT COUNT(*) FROM reviews r WHERE r.plane=a.plane AND r.app_id=a.app_id) AS reviews, (SELECT COUNT(*) FROM stars r WHERE r.plane=a.plane AND r.app_id=a.app_id) AS stars, (SELECT COUNT(*) FROM downloads r WHERE r.plane=a.plane AND r.app_id=a.app_id) AS installs FROM applications a", " WHERE a.plane=? AND a.app_id=?"))
         .bind(&c.plane)
         .bind(id)
@@ -611,7 +625,27 @@ async fn save_app(
     let k = key(h)?;
     let digest = request_digest
         .unwrap_or_else(|| hash(&json!({"kind":"configure","expected":expected,"input":input})));
-    if let Some(o) = existing_operation(s, &c, k, &digest).await? {
+    if let Some(mut o) = existing_operation(s, &c, k, &digest).await? {
+        if expected.is_none() && o["state"] == "accepted" {
+            // IAM owns the short replay window; repeating creation never creates another secret.
+            let recovered = s
+                .management
+                .operation_result(
+                    o["id"].as_str().unwrap(),
+                    c.token.as_deref().unwrap(),
+                    c.environment.as_deref(),
+                )
+                .await;
+            if let Ok(receipt) = recovered
+                && receipt["state"] == "accepted"
+                && receipt["operation_id"] == o["id"]
+                && receipt["app_id"] == app_id
+                && receipt["configuration_revision"] == o["revision"]
+                && let Some(secret) = receipt["app_secret"].as_str().filter(|s| !s.is_empty())
+            {
+                o["app_secret"] = json!(secret);
+            }
+        }
         return Ok((StatusCode::ACCEPTED, Json(o)));
     }
     let current = if expected.is_some() {
@@ -643,6 +677,12 @@ async fn save_app(
     let config = input.public_config();
     let secret = s.encrypt(&input.webhook_secret)?;
     let mut tx = s.db.begin().await?;
+    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind='secret.rotate' AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+    if rotating {
+        return Err(Error::conflict(
+            "Finish or retry the pending secret rotation before changing application configuration",
+        ));
+    }
     if let Some(expected) = expected {
         let updated=sqlx::query("UPDATE applications SET name=?,description=?,config=?,webhook_secret=?,revision=?,updated_at=? WHERE plane=? AND app_id=? AND revision=?").bind(&input.name).bind(&input.description).bind(config.to_string()).bind(secret).bind(revision).bind(now()).bind(&c.plane).bind(&app_id).bind(expected).execute(&mut *tx).await?;
         if updated.rows_affected() != 1 {
@@ -1210,4 +1250,24 @@ async fn message(
         .bind(json!({"app_id":id,"org_id":app.org_id}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":message_id})))
+}
+
+async fn app_operations(
+    ExtractState(s): ExtractState<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    let c = context(&s, &h).await?;
+    find_app(&s, &c, &id, true).await?;
+    let rows=sqlx::query("SELECT * FROM operations WHERE plane=? AND resource=? AND actor=? AND kind IN ('configure','secret.rotate') ORDER BY created_at DESC,id DESC LIMIT 100")
+        .bind(&c.plane).bind(&id).bind(&c.identity()?.principal_id).fetch_all(&s.db).await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let mut value = operation_value(row);
+            value["idempotency_key"] = json!(row.get::<String, _>("idempotency_key"));
+            value
+        })
+        .collect();
+    Ok(Json(json!({"items":items})))
 }

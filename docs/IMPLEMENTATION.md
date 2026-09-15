@@ -46,7 +46,7 @@ mobile browser journeys. These fixtures are not evidence of live IAM or Briefcas
 integration. No repository, crates, binaries or websites have been published.
 
 Still required before the full understanding is complete: provider/validator
-review decisions and IAM activation/reconciliation; protected app secret rotation;
+review decisions and IAM activation/reconciliation; live protected app secret rotation;
 complete per-service testing lifecycle/import/migration/retention coordination;
 live Postmark delivery and IAM recipient discovery; actual release publication/deployment and live cross-service E2E.
 
@@ -84,3 +84,15 @@ Import checkpoint verification: all 19 backend API tests, workspace Rust tests,
 strict Clippy, CLI import journey, production web build and all 16 desktop/mobile
 browser journeys pass. Coverage includes a 40-node cyclic graph and root-key-only
 private-access denial. No live management integration was used.
+
+App-secret rotations now require current admin authority and the accepted config
+revision, keep stable operation IDs, pass transient IAM step-up evidence, and never
+persist returned secrets. Explicit operation recovery can reconcile a lost rotation
+response. Creation replay can recover IAM's short-lived secret result. The CLI and
+console expose rotations, retries and recovery. Hosted IAM step-up and actual
+credential rotation remain external integration dependencies.
+
+Secret checkpoint verification: full Rust workspace tests (21 backend API cases),
+strict Clippy, CLI rotation/pending checks, production web build, and all 18
+desktop/mobile browser journeys pass. Browser retries preserve the original
+idempotency key. Existing public distribution and live IAM limitations still apply.

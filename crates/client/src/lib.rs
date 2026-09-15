@@ -361,6 +361,24 @@ impl Client {
         )
         .await
     }
+    pub async fn rotate_app_secret(
+        &self,
+        id: &str,
+        step_up: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["apps", id, "secret-rotations"],
+            &json!({"step_up_assertion":step_up}),
+            m,
+        )
+        .await
+    }
+    pub async fn recover_operation_secret(&self, id: &str, m: &Mutation) -> Result<Value> {
+        self.mutate(Method::POST, &["operations", id, "result"], &json!({}), m)
+            .await
+    }
     pub async fn request_publication(
         &self,
         id: &str,

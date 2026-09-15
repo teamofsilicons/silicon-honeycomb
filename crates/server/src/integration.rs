@@ -20,6 +20,29 @@ pub trait Management: Send + Sync {
             )))
         }
     }
+    /// Rotate through the dedicated service API, with current actor authority and IAM step-up.
+    async fn rotate_secret(
+        &self,
+        _operation: &Value,
+        _actor_token: &str,
+        _step_up_assertion: Option<&str>,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM protected application secret rotation is not yet available",
+        ))
+    }
+    /// Read a protected operation's result within IAM's short secret replay window.
+    async fn operation_result(
+        &self,
+        _operation_id: &str,
+        _actor_token: &str,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM protected operation recovery is not yet available",
+        ))
+    }
     async fn notification_recipients(&self, _org_id: &str) -> Result<Vec<String>> {
         Err(Error::unavailable(
             "IAM protected notification recipient discovery is not yet available",

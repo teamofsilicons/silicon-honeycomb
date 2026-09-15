@@ -150,6 +150,15 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum Apps {
+    /// Replace an application's secret through IAM. Save the one-time result securely.
+    RotateSecret {
+        app_id: String,
+        #[arg(long)]
+        revision: i64,
+        /// Read fresh IAM step-up evidence from a file, avoiding shell-history exposure.
+        #[arg(long)]
+        step_up_file: Option<PathBuf>,
+    },
     List {
         #[arg(long, default_value_t = 1)]
         page: u32,
@@ -216,8 +225,16 @@ enum Drafts {
 }
 #[derive(Subcommand)]
 enum Operations {
-    Get { id: String },
-    Retry { id: String },
+    /// Recover a creation/rotation secret within IAM's short replay window.
+    RecoverSecret {
+        id: String,
+    },
+    Get {
+        id: String,
+    },
+    Retry {
+        id: String,
+    },
 }
 #[derive(Subcommand)]
 enum Environments {
@@ -565,6 +582,22 @@ async fn run() -> Result<()> {
             show(&json!({"archive":archive,"sha256":package::sha256(&archive)?}))?;
         }
         Command::Apps { command } => match command {
+            Apps::RotateSecret {
+                app_id,
+                revision,
+                step_up_file,
+            } => {
+                let step_up = step_up_file.as_ref().map(fs::read_to_string).transpose()?;
+                show(
+                    &client
+                        .rotate_app_secret(
+                            app_id,
+                            step_up.as_deref().map(str::trim),
+                            &mutation(&cli, Some(*revision))?,
+                        )
+                        .await?,
+                )?;
+            }
             Apps::List { page } => show(&client.search("", *page, true).await?)?,
             Apps::Get { app_id } => show(&client.app(app_id).await?)?,
             Apps::Create { file } => show(
@@ -638,6 +671,9 @@ async fn run() -> Result<()> {
             )?,
         },
         Command::Operations { command } => match command {
+            Operations::RecoverSecret { id } => {
+                show(&client.recover_operation_secret(id, &operation).await?)?
+            }
             Operations::Get { id } => show(&client.operation(id).await?)?,
             Operations::Retry { id } => show(&client.retry_operation(id, &operation).await?)?,
         },

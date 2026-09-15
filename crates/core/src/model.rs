@@ -201,6 +201,8 @@ pub struct App {
     #[serde(default)]
     pub effective_revision: i64,
     pub config: Value,
+    #[serde(default)]
+    pub effective_config: Value,
     pub latest_version: Option<String>,
     pub rating: f64,
     pub reviews: i64,
