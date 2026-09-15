@@ -60,3 +60,21 @@ test("environment retention persists and reports per-application activity", asyn
   await section.scrollIntoViewIfNeeded();
   await page.screenshot({path:`/tmp/honeycomb-retention-${info.project.name}.png`});
 });
+
+test("automatic cleanup exposes pending service receipts and preserves its retry operation", async ({ page }, info) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await expect(page.getByRole("heading", { name:"Your applications.", exact:true })).toBeVisible();
+  if (await page.getByRole("button", { name:"Open navigation" }).isVisible()) await page.getByRole("button", { name:"Open navigation" }).click();
+  await page.getByRole("button", { name:"Testing environments", exact:true }).click();
+  const row=page.locator(".environment-row").filter({has:page.getByRole("heading",{name:`Cleanup sandbox ${info.project.name}`,exact:true})});
+  await row.getByRole("button",{name:"Manage",exact:true}).click();
+  const dialog=page.getByRole("dialog"), cleanup=dialog.getByRole("article",{name:"Automatic cleanup"});
+  await expect(cleanup).toContainText("Waiting for participating services");
+  await expect(cleanup).toContainText("tos>briefcase");
+  const operation=await cleanup.locator(".app-id").textContent();
+  await dialog.getByRole("button",{name:"Retry setup",exact:true}).click();
+  await expect(cleanup.locator(".app-id")).toHaveText(operation!);
+  await expect(cleanup).toContainText("Waiting for participating services");
+  await expect(dialog.getByRole("button",{name:"Save retention",exact:true})).toBeDisabled();
+});

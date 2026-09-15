@@ -228,6 +228,15 @@ Changes require the current environment revision and no pending lifecycle operat
 The retention view includes per-app activity, deadlines and transitive dependency
 protection, including dependency cycles. An idle provider remains protected while
 an active app requires it; longer app retention extends the shared environment's
-deadline. These calculations and controls are implemented. Automatic retirement,
-soft deletion and expiry-driven purge are still pending scheduler integration;
-the existing explicit lifecycle commands remain available.
+deadline. A worker checks due actions every minute. It stores automatic app-retirement,
+soft-delete and expiry-purge jobs durably, retries incomplete service work with
+backoff, and exposes progress here and in the console. Soft deletion starts its
+30-day recovery window only after every participant confirms disabled access.
+Retirement removes only the selected apps and their owned test data; active apps
+and required dependencies remain available. Cleanup itself does not refresh activity.
+
+Participating services must implement the protected automatic-retention transport.
+The current IAM adapter has not yet mapped that cross-service contract: these jobs
+remain visibly pending until it is available. The worker never borrows a user session
+or treats missing service receipts as success. Explicit lifecycle commands remain
+available for retry and recovery.

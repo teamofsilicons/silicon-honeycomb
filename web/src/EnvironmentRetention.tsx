@@ -13,6 +13,13 @@ export default function EnvironmentRetention(props: { environment: any; refresh:
     <Show when={!retention.loading && !retention.error && retention()}>
       <p class="muted">Last activity: {date(retention().last_activity)}. Environment idle deadline: {date(retention().delete_after)}.</p>
       <p class="muted">Longer application retention and dependencies are included. Reading this page does not extend the idle period.</p>
+      <Show when={retention().automatic_cleanup}>{cleanup=><article class="review-thread" aria-label="Automatic cleanup">
+        <strong>Automatic cleanup · {cleanup().kind.replace("environment.", "")}</strong>
+        <p>{cleanup().state === "accepted" ? "Completed" : "Waiting for participating services"}</p>
+        <p class="app-id">{cleanup().operation_id}</p>
+        <Show when={cleanup().applications.length}><p>{cleanup().applications.join(", ")}</p></Show>
+        <Show when={cleanup().state === "pending"}><p class="muted">Attempts: {cleanup().attempts}. Next retry: {date(cleanup().next_attempt_at)}.</p><Show when={cleanup().error}><p class="muted">{cleanup().error}</p></Show></Show>
+      </article>}</Show>
       <form class="application-form" onSubmit={e=>{
         e.preventDefault(); setSaving(true); setError("");
         void request(`/api/v1/environments/${props.environment.environment_id}/retention`, { method:"PUT", headers:{"If-Match":String(props.environment.revision)}, body:JSON.stringify({idle_days:days()}) })

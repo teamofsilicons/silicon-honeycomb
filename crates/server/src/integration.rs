@@ -20,6 +20,12 @@ pub trait Management: Send + Sync {
             )))
         }
     }
+    /// Service-authorized retention; must not require or manufacture a user session.
+    async fn retention_lifecycle(&self, _app_id: &str, _operation: &Value) -> Result<Value> {
+        Err(Error::unavailable(
+            "Protected automatic retention transport is not configured for this service",
+        ))
+    }
     /// Rotate through the dedicated service API, with current actor authority and IAM step-up.
     async fn rotate_secret(
         &self,

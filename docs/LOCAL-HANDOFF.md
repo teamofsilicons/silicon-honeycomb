@@ -23,11 +23,10 @@ and sample applications; no production credentials or email delivery are involve
 
 ## Verification
 
-- Rust workspace tests and strict Clippy passed. Latest backend coverage: 34 API
+- Rust workspace tests and strict Clippy passed. Latest backend coverage: 37 API
   cases, plus runtime IAM and management SDK wire tests.
-- 28 desktop/mobile browser cases cover the websites, including webhook actions
-  and retention. The new retention case passed on both viewports after a mobile
-  navigation timing correction; the other 27 cases passed in the full run.
+- All 30 desktop/mobile browser cases pass, including webhook changes, retention
+  settings and automatic cleanup progress/retry.
 - CLI HTTP journey includes private creation, six-target archive validation,
   releases, install/execute/update/uninstall, review/activation and anonymous install.
 - curl/bash installer checks and isolated Cargo source installation passed.
@@ -44,9 +43,9 @@ The native six-platform release workflow has not run on remote CI.
    shared lifecycle phases, app-owned creation/attachment and test-only app management
    to actual protected services. The local fixture exercises these flows but does
    not prove live cross-service behavior.
-2. Connect the implemented activity reports and dependency-aware retention plans to
-   automatic app retirement, environment cleanup and legacy adoption. Existing explicit lifecycle
-   actions are durable and tested; the full automatic lifecycle is unfinished.
+2. Implement the services' automatic-retention transport and legacy adoption.
+   Honeycomb now schedules durable app retirement, environment soft deletion and
+   expiry purge; missing protected service acknowledgments keep these jobs pending.
 3. Complete protected notification recipient discovery and live Postmark delivery. Direct Honeycomb telemetry and
    logo-upload workflows also remain unfinished.
 4. Provision IAM/Briefcase permissions, dedicated service and notification keys,

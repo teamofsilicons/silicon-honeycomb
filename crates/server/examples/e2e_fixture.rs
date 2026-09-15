@@ -296,6 +296,22 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
 
+        let cleanup_id = format!("fixture-cleanup-{project}");
+        sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated automatic cleanup',?,?,'ready',1,?)")
+            .bind(&cleanup_id).bind(format!("Cleanup sandbox {project}")).bind(state.encrypt("CleanupFixtureKey0000000000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("unused-cleanup-{project}")).bind(silicon_honeycomb_server::now()).execute(&state.db).await?;
+        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) SELECT ?,app_id,org_id,name,description,'private',state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,1,updated_at FROM applications WHERE plane='production' AND app_id='tos>briefcase'").bind(&cleanup_id).execute(&state.db).await?;
+        if let Some(operation) = silicon_honeycomb_server::retention_worker::schedule(
+            &state,
+            &cleanup_id,
+            silicon_honeycomb_server::now(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e.1.message))?
+        {
+            silicon_honeycomb_server::lifecycle::coordinate(&state, &cleanup_id, &operation, "")
+                .await
+                .map_err(|e| anyhow::anyhow!(e.1.message))?;
+        }
         let retention_id = format!("fixture-retention-{project}");
         sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated retention journey',? ,?,'ready',?,?)")
             .bind(&retention_id).bind(format!("Retention sandbox {project}")).bind(state.encrypt("RetentionFixtureKey00000000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("fixture-retention-unused-hash-{project}")).bind(silicon_honeycomb_server::now()).bind(silicon_honeycomb_server::now()).execute(&state.db).await?;

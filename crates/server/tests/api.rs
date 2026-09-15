@@ -3346,3 +3346,287 @@ async fn retention_changes_are_authorized_revisioned_and_idempotent() {
         StatusCode::CONFLICT
     );
 }
+
+#[derive(Default)]
+struct RetentionServices {
+    calls: std::sync::Mutex<Vec<(String, String)>>,
+    fail_iam: AtomicBool,
+    fail_storage: AtomicBool,
+    bad_targets: AtomicBool,
+}
+#[async_trait]
+impl Management for RetentionServices {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable(
+            "User path must not handle automatic retention",
+        ))
+    }
+    async fn retention_lifecycle(&self, app: &str, o: &Value) -> Result<Value> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((app.into(), o["action"].as_str().unwrap().into()));
+        if (app == "tos>iam" && self.fail_iam.load(Ordering::SeqCst))
+            || (app == "tos>briefcase" && self.fail_storage.load(Ordering::SeqCst))
+        {
+            return Err(Error::unavailable("Service temporarily unavailable"));
+        }
+        Ok(
+            json!({"state":"completed","operation_id":o["operation_id"],"environment_id":o["environment_id"],"app_id":app,"environment_revision":o["environment_revision"],"generation":o["generation"],"key_version":o["key_version"],"retired_apps":if self.bad_targets.load(Ordering::SeqCst){json!([])}else{o["retired_apps"].clone()}}),
+        )
+    }
+}
+async fn add_storage_participant(s: &State) {
+    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES('retention-env','tos>briefcase',1,'{}','ready','earlier',1)").execute(&s.db).await.unwrap();
+}
+#[tokio::test]
+async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_and_production() {
+    let (mut s, _) = setup(true).await;
+    let at = retention_fixture(&s).await;
+    add_storage_participant(&s).await;
+    let services = Arc::new(RetentionServices::default());
+    services.fail_iam.store(true, Ordering::SeqCst);
+    s.management = services.clone();
+    let op = silicon_honeycomb_server::retention_worker::schedule(&s, "retention-env", at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        silicon_honeycomb_server::retention_worker::schedule(&s, "retention-env", at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let targets: Vec<String> =
+        sqlx::query_scalar("SELECT app_id FROM retirement_targets WHERE operation_id=?")
+            .bind(&op)
+            .fetch_all(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(targets, vec!["tos>d"]);
+    silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
+        .await
+        .unwrap();
+    assert_eq!(services.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM applications WHERE plane='retention-env'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        5
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/environments/retention-env/apps/tos%3Ed/activity",
+            Some("admin"),
+            json!({"generation":1,"key_version":1}),
+            "retiring-activity-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/environments/retention-env/apps/tos%3Ea/activity",
+            Some("admin"),
+            json!({"generation":1,"key_version":1}),
+            "active-survivor-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    services.fail_iam.store(false, Ordering::SeqCst);
+    services.bad_targets.store(true, Ordering::SeqCst);
+    let rejected = silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
+        .await
+        .unwrap();
+    assert_eq!(rejected["operation_state"], "pending");
+    services.bad_targets.store(false, Ordering::SeqCst);
+    services.fail_storage.store(true, Ordering::SeqCst);
+    let pending = silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
+        .await
+        .unwrap();
+    assert_eq!(pending["operation_state"], "pending");
+    let iam_calls = services
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(a, _)| a == "tos>iam")
+        .count();
+    services.fail_storage.store(false, Ordering::SeqCst);
+    let completed = silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
+        .await
+        .unwrap();
+    assert_eq!(completed["operation_state"], "accepted");
+    assert_eq!(
+        services
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| a == "tos>iam")
+            .count(),
+        iam_calls
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM applications WHERE plane='retention-env'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        4
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM applications WHERE plane='production' AND app_id='tos>long'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM environments WHERE id='retention-env'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "ready"
+    );
+}
+#[tokio::test]
+async fn automatic_delete_waits_for_disable_and_purge_waits_for_recovery_deadline() {
+    let (mut s, _) = setup(true).await;
+    let at = retention_fixture(&s).await;
+    add_storage_participant(&s).await;
+    let services = Arc::new(RetentionServices::default());
+    services.fail_storage.store(true, Ordering::SeqCst);
+    s.management = services.clone();
+    let op =
+        silicon_honeycomb_server::retention_worker::schedule(&s, "retention-env", at + 100 * 86400)
+            .await
+            .unwrap()
+            .unwrap();
+    let pending = silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
+        .await
+        .unwrap();
+    assert_eq!(pending["state"], "deleting");
+    assert!(
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT purge_after FROM environments WHERE id='retention-env'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap()
+        .is_none()
+    );
+    services.fail_storage.store(false, Ordering::SeqCst);
+    let result = silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
+        .await
+        .unwrap();
+    assert_eq!(result["state"], "deleted");
+    let deadline: i64 =
+        sqlx::query_scalar("SELECT purge_after FROM environments WHERE id='retention-env'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert!(deadline >= at + 30 * 86400);
+    assert!(
+        silicon_honeycomb_server::retention_worker::schedule(&s, "retention-env", deadline - 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let purge = silicon_honeycomb_server::retention_worker::schedule(&s, "retention-env", deadline)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &purge, "")
+            .await
+            .unwrap()["state"],
+        "purged"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT encrypted_key FROM environments WHERE id='retention-env'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        ""
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM environment_app_activity WHERE environment_id='retention-env'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM applications WHERE plane='production'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        1
+    );
+}
+#[tokio::test]
+async fn retention_worker_retries_with_backoff_without_rescheduling_or_fabricating_actor_tokens() {
+    let (mut s, _) = setup(true).await;
+    let at = retention_fixture(&s).await;
+    let services = Arc::new(RetentionServices::default());
+    services.fail_iam.store(true, Ordering::SeqCst);
+    s.management = services.clone();
+    let op = silicon_honeycomb_server::retention_worker::schedule(&s, "retention-env", at)
+        .await
+        .unwrap()
+        .unwrap();
+    silicon_honeycomb_server::retention_worker::tick(&s)
+        .await
+        .unwrap();
+    assert_eq!(services.calls.lock().unwrap().len(), 1);
+    silicon_honeycomb_server::retention_worker::tick(&s)
+        .await
+        .unwrap();
+    assert_eq!(services.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retention_jobs")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        1
+    );
+    services.fail_iam.store(false, Ordering::SeqCst);
+    sqlx::query("UPDATE retention_jobs SET next_attempt_at=0")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    silicon_honeycomb_server::retention_worker::tick(&s)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM operations WHERE id=?")
+            .bind(op)
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "accepted"
+    );
+}

@@ -63,6 +63,9 @@ def main():
             rotated_webhook = run('apps', 'webhook', 'rotate-secret', 'tos>briefcase', '--revision', '1', '--secret-file', str(secret_file), '--step-up-file', str(proof))
             assert rotated_webhook['state'] == 'accepted'
             assert 'replacement-fixture-webhook' not in json.dumps(rotated_webhook)
+            cleanup = run('environments', 'retention', 'fixture-cleanup-desktop')['automatic_cleanup']
+            assert cleanup['state'] == 'pending' and cleanup['kind'] == 'environment.retire'
+            assert cleanup['applications'] == ['tos>briefcase']
             retention_id = 'fixture-retention-desktop'
             assert run('environments', 'retention', retention_id)['idle_days'] == 30
             assert run('environments', 'set-retention', retention_id, '--days', '60', '--revision', '1')['revision'] == 2

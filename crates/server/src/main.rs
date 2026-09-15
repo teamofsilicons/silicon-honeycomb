@@ -106,6 +106,9 @@ async fn main() -> anyhow::Result<()> {
         mailer,
     ));
     tokio::spawn(silicon_honeycomb_server::reconciliation::run(state.clone()));
+    tokio::spawn(silicon_honeycomb_server::retention_worker::run(
+        state.clone(),
+    ));
     let app = silicon_honeycomb_server::api::router(state)
         .merge(notifications)
         .layer(cors);

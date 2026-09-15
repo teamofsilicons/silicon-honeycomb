@@ -46,7 +46,7 @@ async fn coordinate_inner(
         .bind(id)
         .fetch_one(&s.db)
         .await?;
-    let operation=sqlx::query("SELECT kind,revision,state FROM operations WHERE id=? AND resource=? AND plane='production'").bind(operation_id).bind(id).fetch_one(&s.db).await?;
+    let operation=sqlx::query("SELECT kind,revision,state,request_json FROM operations WHERE id=? AND resource=? AND plane='production'").bind(operation_id).bind(id).fetch_one(&s.db).await?;
     let revision: i64 = environment.get("revision");
     if operation.get::<i64, _>("revision") != revision {
         return Err(Error::conflict(
@@ -62,6 +62,26 @@ async fn coordinate_inner(
     let action = kind
         .strip_prefix("environment.")
         .ok_or_else(|| Error::bad("Not an environment lifecycle operation"))?;
+    let details: Value = serde_json::from_str(
+        operation
+            .get::<Option<String>, _>("request_json")
+            .as_deref()
+            .unwrap_or("{}"),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+    let automatic = details["source"] == "retention";
+    let retired_apps = if action == "retire" {
+        details["retired_apps"].clone()
+    } else {
+        json!([])
+    };
+    if action == "retire"
+        && retired_apps
+            .as_array()
+            .is_none_or(|a| a.is_empty() || a.iter().any(|v| v.as_str().is_none()))
+    {
+        return Err(Error::bad("Retirement requires exact application IDs"));
+    }
     let generation: i64 = environment.get("generation");
     let key_version: i64 = environment.get("key_version");
     let services=sqlx::query("SELECT app_id,snapshot,state FROM environment_services WHERE environment_id=? AND operation_id=? ORDER BY CASE WHEN app_id='tos>iam' THEN 0 ELSE 1 END,app_id").bind(id).bind(operation_id).fetch_all(&s.db).await?;
@@ -85,11 +105,14 @@ async fn coordinate_inner(
         let app: String = service.get("app_id");
         let service_action = match action {
             "delete" => "disable",
+            "retire" => "retire-applications",
             other => other,
         };
-        let request = json!({"operation_id":operation_id,"action":service_action,"environment_id":id,"org_id":environment.get::<String,_>("org_id"),"environment_revision":revision,"generation":generation,"key_version":key_version,"testing_key":s.decrypt(&environment.get::<String,_>("encrypted_key"))?,"app_id":app,"snapshot":serde_json::from_str::<Value>(&service.get::<String,_>("snapshot")).map_err(|e|anyhow::anyhow!(e))?});
+        let request = json!({"retired_apps":retired_apps,"reason":if automatic {"inactivity"} else {"requested"},"operation_id":operation_id,"action":service_action,"environment_id":id,"org_id":environment.get::<String,_>("org_id"),"environment_revision":revision,"generation":generation,"key_version":key_version,"testing_key":s.decrypt(&environment.get::<String,_>("encrypted_key"))?,"app_id":app,"snapshot":serde_json::from_str::<Value>(&service.get::<String,_>("snapshot")).map_err(|e|anyhow::anyhow!(e))?});
         let result = if app == s.app_id {
-            apply_local(s,id,action,operation_id,lease).await.map(|_|json!({"state":"completed","operation_id":operation_id,"environment_id":id,"app_id":app,"environment_revision":revision,"generation":generation,"key_version":key_version}))
+            apply_local(s,id,action,operation_id,lease).await.map(|_|json!({"state":"completed","operation_id":operation_id,"environment_id":id,"app_id":app,"environment_revision":revision,"generation":generation,"key_version":key_version,"retired_apps":retired_apps}))
+        } else if automatic {
+            s.management.retention_lifecycle(&app, &request).await
         } else {
             s.management
                 .service_lifecycle(&app, &request, actor_token)
@@ -97,7 +120,7 @@ async fn coordinate_inner(
         };
         let mut stored_receipt = None;
         let error=match result {
-            Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version => {
+            Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version && (action!="retire" || receipt["retired_apps"]==retired_apps) => {
                 if action=="import" && app=="tos>iam" {
                     match accepted_imports(&request["snapshot"]["imports"], &receipt["imports"]) {
                         Ok(imports)=>{stored_receipt=Some(imports.to_string());None},
@@ -115,7 +138,7 @@ async fn coordinate_inner(
             return Err(Error::conflict("Lifecycle coordinator lease expired"));
         }
         // Import application services only after IAM has accepted their isolated records.
-        if action == "import" && app == "tos>iam" && failed {
+        if matches!(action, "import" | "retire") && app == "tos>iam" && failed {
             break;
         }
     }
@@ -143,8 +166,8 @@ async fn coordinate_inner(
     if !held {
         return Err(Error::conflict("Lifecycle coordinator lease changed"));
     }
-    let updated=sqlx::query("UPDATE environments SET state=?,last_activity=?,deleted_at=?,purge_after=? WHERE id=? AND revision=?")
-        .bind(final_state).bind(now()).bind(if action=="delete"{Some(now())}else{None::<i64>}).bind(if action=="delete"{Some(now()+30*86400)}else{None::<i64>}).bind(id).bind(revision).execute(&mut *tx).await?;
+    let updated=sqlx::query("UPDATE environments SET state=?,last_activity=CASE WHEN ? THEN last_activity ELSE ? END,deleted_at=?,purge_after=? WHERE id=? AND revision=?")
+        .bind(final_state).bind(matches!(action,"retire"|"delete"|"purge")).bind(now()).bind(if action=="delete"{Some(now())}else{None::<i64>}).bind(if action=="delete"{Some(now()+30*86400)}else{None::<i64>}).bind(id).bind(revision).execute(&mut *tx).await?;
     if updated.rows_affected() != 1 {
         return Err(Error::conflict(
             "Environment changed during lifecycle coordination",
@@ -182,9 +205,32 @@ async fn coordinate_inner(
                 .bind(id).bind(app).bind(source["source_revision"].as_i64().unwrap()).bind(source.to_string()).bind(now()).execute(&mut *tx).await?;
         }
     }
+    if action == "retire" {
+        // Keep the core coordinators and every surviving application linked.
+        for app in retired_apps.as_array().unwrap() {
+            if app != "tos>iam" && app.as_str() != Some(s.app_id.as_str()) {
+                sqlx::query("DELETE FROM environment_services WHERE environment_id=? AND app_id=? AND operation_id=?").bind(id).bind(app.as_str().unwrap()).bind(operation_id).execute(&mut *tx).await?;
+            }
+        }
+    }
     if action == "clean" {
         sqlx::query("DELETE FROM environment_services WHERE environment_id=? AND app_id NOT IN ('tos>iam',?)").bind(id).bind(&s.app_id).execute(&mut *tx).await?;
         sqlx::query("UPDATE environment_services SET snapshot='{}',source_revision=0,receipt=NULL,error=NULL WHERE environment_id=?").bind(id).execute(&mut *tx).await?;
+    }
+    if action == "retire" {
+        let rows =
+            sqlx::query("SELECT app_id,snapshot FROM environment_services WHERE environment_id=?")
+                .bind(id)
+                .fetch_all(&mut *tx)
+                .await?;
+        for row in rows {
+            let mut snapshot: Value = serde_json::from_str(&row.get::<String, _>("snapshot"))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            if let Some(imports) = snapshot["imports"].as_array_mut() {
+                imports.retain(|item| !retired_apps.as_array().unwrap().contains(&item["app_id"]));
+                sqlx::query("UPDATE environment_services SET snapshot=?,receipt=NULL WHERE environment_id=? AND app_id=?").bind(snapshot.to_string()).bind(id).bind(row.get::<String,_>("app_id")).execute(&mut *tx).await?;
+            }
+        }
     }
     if action == "purge" {
         sqlx::query("UPDATE environments SET encrypted_key='',key_hash=?,name='Purged environment',description='' WHERE id=?").bind(format!("purged:{id}")).bind(id).execute(&mut *tx).await?;
@@ -210,6 +256,9 @@ async fn apply_local(
     operation_id: &str,
     lease: &str,
 ) -> Result<()> {
+    if action == "retire" {
+        return retire_local(s, id, operation_id, lease).await;
+    }
     if !matches!(action, "clean" | "purge") {
         return Ok(());
     }
@@ -286,4 +335,49 @@ fn accepted_imports(requested: &Value, received: &Value) -> std::result::Result<
         accepted.push(json!({"app_id":receipt["app_id"],"iam_revision":receipt["iam_revision"]}));
     }
     Ok(json!(accepted))
+}
+
+async fn retire_local(s: &State, environment: &str, operation: &str, lease: &str) -> Result<()> {
+    if environment == "production" {
+        return Err(Error::forbidden());
+    }
+    let mut tx = s.db.begin().await?;
+    let held:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE id=? AND resource=? AND kind='environment.retire' AND lease_token=? AND lease_until>? AND state='pending')")
+        .bind(operation).bind(environment).bind(lease).bind(now()).fetch_one(&mut *tx).await?;
+    if !held {
+        return Err(Error::conflict("Retirement lease expired"));
+    }
+    let targets:Vec<String>=sqlx::query_scalar("SELECT app_id FROM retirement_targets WHERE operation_id=? AND environment_id=? ORDER BY app_id").bind(operation).bind(environment).fetch_all(&mut *tx).await?;
+    if targets.is_empty() {
+        return Err(Error::bad("Retirement has no application targets"));
+    }
+    for app in targets {
+        for query in [
+            "DELETE FROM publication_archives WHERE operation_id IN (SELECT id FROM operations WHERE plane=? AND resource=?)",
+            "DELETE FROM review_gates WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=? AND app_id=?)",
+            "DELETE FROM decisions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=? AND app_id=?)",
+            "DELETE FROM discussions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=? AND app_id=?)",
+            "DELETE FROM publication_requests WHERE plane=? AND app_id=?",
+            "DELETE FROM releases WHERE plane=? AND app_id=?",
+            "DELETE FROM reviews WHERE plane=? AND app_id=?",
+            "DELETE FROM stars WHERE plane=? AND app_id=?",
+            "DELETE FROM downloads WHERE plane=? AND app_id=?",
+            "DELETE FROM applications WHERE plane=? AND app_id=?",
+            "DELETE FROM operations WHERE plane=? AND resource=?",
+            "DELETE FROM webhook_events WHERE plane=? AND resource=?",
+            "DELETE FROM audit WHERE plane=? AND resource=?",
+            "DELETE FROM outbox WHERE plane=? AND json_extract(payload,'$.app_id')=?",
+            "DELETE FROM environment_imports WHERE environment_id=? AND app_id=?",
+            "DELETE FROM environment_app_activity WHERE environment_id=? AND app_id=?",
+            "DELETE FROM environment_activity_events WHERE environment_id=? AND app_id=?",
+        ] {
+            sqlx::query(query)
+                .bind(environment)
+                .bind(&app)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
 }

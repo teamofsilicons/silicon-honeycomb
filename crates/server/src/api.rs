@@ -388,6 +388,7 @@ pub(crate) async fn find_app(s: &State, c: &Context, id: &str, manage: bool) -> 
         .fetch_optional(&s.db)
         .await?
         .ok_or_else(Error::missing)?;
+    crate::retention_worker::ensure_app_available(s, &c.plane, id).await?;
     let org: String = row.get("org_id");
     let admin = c.identity.as_ref().is_some_and(|i| i.admin(&org));
     if manage {
@@ -671,6 +672,7 @@ async fn save_app(
     validate_input(&input)?;
     let c = context(s, h).await?;
     let actor = c.admin(&input.org_id)?;
+    crate::retention_worker::ensure_app_available(s, &c.plane, &input.app_id()).await?;
     let app_id = input.app_id();
     let k = key(h)?;
     let digest = request_digest
@@ -727,6 +729,14 @@ async fn save_app(
     let config = input.public_config();
     let secret = s.encrypt(&input.webhook_secret)?;
     let mut tx = s.db.begin().await?;
+    if c.plane != "production" {
+        let changing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane='production' AND resource=? AND kind LIKE 'environment.%' AND state='pending')").bind(&c.plane).fetch_one(&mut *tx).await?;
+        if changing {
+            return Err(Error::conflict(
+                "Wait for the pending environment lifecycle operation before changing test application configuration",
+            ));
+        }
+    }
     let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
     if rotating {
         return Err(Error::conflict(

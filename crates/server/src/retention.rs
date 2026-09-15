@@ -51,6 +51,12 @@ pub async fn report(
             "Activity requires a ready environment with its current generation and key version",
         ));
     }
+    let retiring: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM retirement_targets t JOIN operations o ON o.id=t.operation_id WHERE t.environment_id=? AND t.app_id=? AND o.state='pending')").bind(&id).bind(&app).fetch_one(&mut *tx).await?;
+    if retiring {
+        return Err(Error::conflict(
+            "This application is retiring; its idle decision cannot be revived by a late activity report",
+        ));
+    }
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM applications WHERE plane=? AND app_id=? AND state='active')",
     )
@@ -205,7 +211,11 @@ pub async fn plan(db: &mut SqliteConnection, id: &str, at: i64) -> Result<Value>
                 && item["state"] == "active"
         );
     }
-    Ok(
-        json!({"environment_id":id,"revision":environment.get::<i64,_>("revision"),"idle_days":environment.get::<i64,_>("idle_days"),"last_activity":environment.get::<i64,_>("last_activity"),"delete_after":delete_after,"eligible_for_deletion":ready && at>=delete_after && protected.is_empty(),"purge_after":environment.get::<Option<i64>,_>("purge_after"),"operation_pending":pending,"applications":items.into_values().collect::<Vec<_>>()}),
-    )
+    let cleanup=if let Some(job)=sqlx::query("SELECT o.id,o.kind,o.state,o.error,j.attempts,j.next_attempt_at FROM retention_jobs j JOIN operations o ON o.id=j.operation_id WHERE j.environment_id=? ORDER BY o.revision DESC LIMIT 1").bind(id).fetch_optional(&mut *db).await? {
+        let targets: Vec<String>=sqlx::query_scalar("SELECT app_id FROM retirement_targets WHERE operation_id=? ORDER BY app_id").bind(job.get::<String,_>("id")).fetch_all(&mut *db).await?;
+        json!({"operation_id":job.get::<String,_>("id"),"kind":job.get::<String,_>("kind"),"state":job.get::<String,_>("state"),"error":job.get::<Option<String>,_>("error"),"attempts":job.get::<i64,_>("attempts"),"next_attempt_at":job.get::<i64,_>("next_attempt_at"),"applications":targets})
+    } else { Value::Null };
+    let mut result = json!({"environment_id":id,"revision":environment.get::<i64,_>("revision"),"idle_days":environment.get::<i64,_>("idle_days"),"last_activity":environment.get::<i64,_>("last_activity"),"delete_after":delete_after,"eligible_for_deletion":ready && at>=delete_after && protected.is_empty(),"purge_after":environment.get::<Option<i64>,_>("purge_after"),"operation_pending":pending,"applications":items.into_values().collect::<Vec<_>>()});
+    result["automatic_cleanup"] = cleanup;
+    Ok(result)
 }

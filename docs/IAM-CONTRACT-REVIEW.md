@@ -54,6 +54,7 @@ registry dependency once available. No IAM source was edited or published here.
 | Webhook accepted-state display | Approval and signing-key rotation are now wired through backend, CLI and console; the accepted record omits active destination URL | Return the authoritative active/pending URLs for display; current UI labels the local URL as requested |
 | Recipient discovery | No scoped owner/admin/reviewer notification-recipient endpoint | Provide least-privilege recipients for queued Postmark notices |
 | Lifecycle completion | IAM-local prepare/import/activate phases differ from Honeycomb's participant receipts | Add explicit IAM phase mapping, durable IAM revision/key/generation bookkeeping and cross-service activation; never turn IAM-only completion into shared readiness |
+| Automatic retention | Honeycomb now schedules durable service-authorized cleanup, without a user token | Accept protected inactivity actions, exact retired-app IDs and revision/generation/key version; clear only those apps and their owned data across services, and return matching receipts |
 | Legacy adoption | Inventory and legacy prepare/adoption exist | Preserve current IDs, keys, owners, links and accepted revisions; stage the writer cutover after migration verification |
 | Test webhook SDK | Direct extra test.metadata fields still rejected | Support environment_id/generation there; current compatible placement is inside the signed aggregate |
 

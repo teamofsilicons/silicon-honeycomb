@@ -216,3 +216,37 @@ CLI HTTP journey with retention/activity commands and the production web build p
 The browser suite passed 27 of 28 cases; the new retention test was checking mobile
 navigation before authenticated rendering. After waiting for the dashboard, both
 its desktop and mobile variants passed. The retention screen was visually inspected.
+
+
+### Automatic retention coordination
+
+Added a startup worker that checks retention every minute and commits due decisions
+with the environment revision. Durable jobs use exponential retry backoff (one
+minute to one hour) and the existing renewable coordinator lease. App retirement
+keeps the shared environment ready, blocks only selected apps' access/activity and
+new test configuration while cleanup is pending, and preserves active data and
+transitive dependencies. Every participant, including storage services, receives
+the exact retired-app list and must acknowledge that list with the operation,
+environment revision, generation and key version. IAM must acknowledge before
+local retirement starts. Completed steps are skipped on retry.
+
+Soft deletion uses the existing disable-acknowledgment barrier before starting the
+30-day recovery window; purge is queued only at expiry. Retirement/deletion/purge
+do not refresh activity. Local cleanup removes only selected test-plane data and
+retired import snapshots, while production remains untouched. The CLI's retention
+view and console show the current automatic job, targets and retry timing.
+
+The service transport is explicitly separate from user-authorized lifecycle calls;
+no user token is fabricated or retained. IAM's current adapter does not yet support
+this automatic cross-service contract, so its jobs remain pending. This implements
+the scheduler and coordinator, not live IAM/Briefcase acceptance.
+
+Configured the user-provided GitHub SSH URL as origin. Its branch list is empty;
+no commits have been pushed.
+
+
+Validation: workspace Rust tests (37 backend API cases), strict Clippy, production
+web build, real CLI HTTP journey and all 30 browser cases pass. The final database
+migration also passed the 37-case backend suite. Tests exercise exact retirement
+receipts, IAM-first sequencing, failed storage retry, active/dependency/production
+preservation, disabled-access barriers, recovery deadlines and retry backoff.
