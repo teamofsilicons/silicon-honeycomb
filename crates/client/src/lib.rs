@@ -226,9 +226,15 @@ impl Client {
     pub async fn login_status(&self) -> Result<Value> {
         self.get(&["auth", "status"]).await
     }
+    /// Revoke an access token. Prefer logout_session when holding a refresh token.
     pub async fn logout(&self, m: &Mutation) -> Result<()> {
+        self.logout_session(None, m).await
+    }
+    /// Revoke the refresh family and access token, including expired sessions.
+    pub async fn logout_session(&self, refresh_token: Option<&str>, m: &Mutation) -> Result<()> {
         Self::check(
             self.request(Method::POST, self.url(&["auth", "logout"])?, Some(m))
+                .json(&json!({"refresh_token": refresh_token}))
                 .send()
                 .await?,
         )

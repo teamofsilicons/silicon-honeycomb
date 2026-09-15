@@ -44,7 +44,7 @@ enum Command {
     Iam,
     /// Exchange an IAM short-lived token, or use `login status` to check live authentication.
     Login { slt_or_status: String },
-    /// Revoke the current IAM access token and clear the local session.
+    /// Revoke the IAM session and refresh family, then clear the local session.
     Logout,
     /// Search public apps and private apps visible to your current memberships.
     Search {
@@ -511,7 +511,9 @@ async fn run() -> Result<()> {
         }
         Command::Logout => {
             if session.access_token.is_some() {
-                client.logout(&operation).await?;
+                client
+                    .logout_session(session.refresh_token.as_deref(), &operation)
+                    .await?;
             }
             if session_path.exists() {
                 fs::remove_file(&session_path)?;

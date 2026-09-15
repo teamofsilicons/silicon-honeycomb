@@ -573,3 +573,105 @@ async fn drafts_require_admin_and_detect_concurrent_edits() {
         400
     );
 }
+
+struct RestrictedManager;
+#[async_trait]
+impl Management for RestrictedManager {
+    async fn configure(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        let mut effective = o["configuration"].clone();
+        effective["name"] = json!("Accepted name");
+        effective["app_scope"]["iam"] = json!(["self.identity.read"]);
+        effective["app_secret"] = json!("must-not-leak");
+        effective["webhook_secret"] = json!("must-not-leak");
+        Ok(
+            json!({"state":"accepted","configuration_revision":o["configuration_revision"],"iam_revision":1,"effective_configuration":effective}),
+        )
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        unreachable!()
+    }
+}
+#[tokio::test]
+async fn catalog_uses_iam_accepted_fields_and_excludes_returned_secrets() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(RestrictedManager);
+    let mut requested = input("accepted-fields");
+    requested["app_scope"]["iam"] = json!(["self.identity.read", "self.profile.read"]);
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        requested,
+        "accepted-config-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, 202);
+    let (_, visible) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Eaccepted-fields",
+        Some("member"),
+        Value::Null,
+        "unused-unused-0001",
+        None,
+    )
+    .await;
+    assert_eq!(visible["name"], "Accepted name");
+    assert_eq!(
+        visible["config"]["app_scope"]["iam"],
+        json!(["self.identity.read"])
+    );
+    assert!(!visible.to_string().contains("must-not-leak"));
+    let (_, desired) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Eaccepted-fields",
+        Some("admin"),
+        Value::Null,
+        "unused-unused-0001",
+        None,
+    )
+    .await;
+    assert_eq!(desired["name"], "Honeycomb Test");
+}
+
+struct RevocationIdp(std::sync::Mutex<Vec<String>>);
+#[async_trait]
+impl IdentityProvider for RevocationIdp {
+    async fn login(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        unreachable!()
+    }
+    async fn refresh(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        unreachable!()
+    }
+    async fn authenticate(&self, _: &str, _: Option<&str>) -> Result<Identity> {
+        Err(Error::unauthorized())
+    }
+    async fn revoke(&self, token: &str, _: &str, _: Option<&str>) -> Result<()> {
+        self.0.lock().unwrap().push(token.into());
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn logout_revokes_refresh_family_even_when_access_has_expired() {
+    let (mut s, _) = setup(true).await;
+    let identity = Arc::new(RevocationIdp(std::sync::Mutex::new(vec![])));
+    s.identity = identity.clone();
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/auth/logout",
+        Some("expired-access"),
+        json!({"refresh_token":"session-refresh"}),
+        "logout-expired-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, 204);
+    assert_eq!(
+        *identity.0.lock().unwrap(),
+        ["session-refresh", "expired-access"]
+    );
+}

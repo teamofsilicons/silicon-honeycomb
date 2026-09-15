@@ -243,14 +243,34 @@ async fn refresh(
     )
         .into_response())
 }
-async fn logout(ExtractState(s): ExtractState<State>, h: HeaderMap) -> Result<StatusCode> {
-    let c = context(&s, &h).await?;
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Logout {
+    refresh_token: Option<String>,
+}
+async fn logout(
+    ExtractState(s): ExtractState<State>,
+    h: HeaderMap,
+    body: Option<Json<Logout>>,
+) -> Result<StatusCode> {
+    // Revocation is authenticated by possession plus Honeycomb's IAM application credentials.
+    // It must remain usable after the access token expires; do not introspect that token first.
+    let mut environment_headers = h.clone();
+    environment_headers.remove(header::AUTHORIZATION);
+    let c = context(&s, &environment_headers).await?;
+    let token = bearer(&h)?.ok_or_else(Error::unauthorized)?;
+    let operation = key(&h)?;
+    if let Some(refresh) = body.and_then(|b| b.0.refresh_token) {
+        if refresh.is_empty() {
+            return Err(Error::bad("refresh_token cannot be empty"));
+        }
+        let refresh_key = hex::encode(Sha256::digest(format!("{operation}:refresh")));
+        s.identity
+            .revoke(&refresh, &refresh_key, c.environment.as_deref())
+            .await?;
+    }
     s.identity
-        .revoke(
-            c.token.as_deref().ok_or_else(Error::unauthorized)?,
-            key(&h)?,
-            c.environment.as_deref(),
-        )
+        .revoke(token, operation, c.environment.as_deref())
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -622,8 +642,26 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
                 .as_i64()
                 .filter(|r| *r > app.iam_revision)
                 .ok_or_else(|| Error::unavailable("IAM returned an invalid accepted revision"))?;
+            let effective = response
+                .get("effective_configuration")
+                .filter(|value| value.is_object())
+                .ok_or_else(|| Error::unavailable("IAM omitted its accepted configuration"))?;
+            if effective["org_id"] != app.config["org_id"]
+                || effective["local_app_id"] != app.config["local_app_id"]
+            {
+                return Err(Error::unavailable(
+                    "IAM returned a configuration for another application",
+                ));
+            }
+            // Restrict the stored public snapshot to known configuration fields, excluding secrets.
+            let mut effective = effective.as_object().unwrap().clone();
+            effective.retain(|field, _| {
+                app.config.get(field).is_some()
+                    && field != "webhook_secret"
+                    && field != "app_secret"
+            });
             let mut tx = s.db.begin().await?;
-            let updated=sqlx::query("UPDATE applications SET effective_config=?,iam_revision=?,state='active' WHERE plane=? AND app_id=? AND revision=? AND iam_revision=?").bind(app.config.to_string()).bind(accepted).bind(&c.plane).bind(&app_id).bind(app.revision).bind(app.iam_revision).execute(&mut *tx).await?;
+            let updated=sqlx::query("UPDATE applications SET effective_config=?,iam_revision=?,state='active' WHERE plane=? AND app_id=? AND revision=? AND iam_revision=?").bind(Value::Object(effective).to_string()).bind(accepted).bind(&c.plane).bind(&app_id).bind(app.revision).bind(app.iam_revision).execute(&mut *tx).await?;
             if updated.rows_affected() != 1 {
                 return Err(Error::conflict(
                     "Newer configuration arrived during IAM acceptance; reconcile before retrying",

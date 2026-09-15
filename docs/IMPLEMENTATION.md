@@ -28,3 +28,25 @@ Source of requirements: human-owned `../UNDERSTANDING.md` (never edited by agent
 
 Track external limitations explicitly. Test doubles are restricted to test code;
 production has no fabricated-login or automatic-approval switch.
+
+## Checkpoint: 2026-09-16
+
+Implemented locally: core six-target package validation and safe extraction;
+SQLite backend with official IAM runtime SDK authentication and current roles;
+durable desired/accepted configuration; immutable Briefcase archive upload adapter;
+private/public discovery, reviews, stars and download counts; shared drafts;
+publication requests/discussions; encrypted environment keys and pending lifecycle
+records; stateless Rust client; CLI and safe install/update/uninstall; verified
+shell installer; Interface-styled Solid library and authenticated console with an
+encrypted-session BFF.
+
+Verification includes Rust archive/authorization/install tests, a CLI HTTP journey
+against the isolated backend fixture, curl/bash installer checks, and desktop and
+mobile browser journeys. These fixtures are not evidence of live IAM or Briefcase
+integration. No repository, crates, binaries or websites have been published.
+
+Still required before the full understanding is complete: provider/validator
+review decisions and IAM activation/reconciliation; protected app secret rotation;
+complete per-service testing lifecycle/import/migration/retention coordination;
+Postmark report/notification delivery; public Briefcase download link persistence;
+release distribution CI/deployment artifacts and actual live cross-service E2E.

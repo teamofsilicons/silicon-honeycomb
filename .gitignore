@@ -9,3 +9,6 @@ dist/
 test-results/
 playwright-report/
 .DS_Store
+
+web/dist-server/
+web/data/
