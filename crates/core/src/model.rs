@@ -198,6 +198,8 @@ pub struct App {
     pub state: String,
     pub revision: i64,
     pub iam_revision: i64,
+    #[serde(default)]
+    pub effective_revision: i64,
     pub config: Value,
     pub latest_version: Option<String>,
     pub rating: f64,

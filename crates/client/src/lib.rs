@@ -434,6 +434,23 @@ impl Client {
     pub async fn environment(&self, id: &str) -> Result<Value> {
         self.get(&["environments", id]).await
     }
+    /// Import the complete external-scope dependency graph with explicit configuration pins.
+    pub async fn import_application(
+        &self,
+        id: &str,
+        app_id: &str,
+        release: Option<&str>,
+        refresh: bool,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["environments", id, "imports"],
+            &json!({"app_id":app_id,"release":release,"refresh":refresh}),
+            m,
+        )
+        .await
+    }
     pub async fn environment_key(&self, id: &str, m: &Mutation) -> Result<Value> {
         self.mutate(Method::POST, &["environments", id, "key"], &json!({}), m)
             .await

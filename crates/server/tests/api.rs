@@ -1071,3 +1071,336 @@ async fn lifecycle_clean_rotation_restore_and_retention_purge_are_isolated() {
         .unwrap();
     assert!(encrypted.is_empty());
 }
+
+#[derive(Default)]
+struct ImportServices {
+    malformed: AtomicBool,
+    offline: AtomicBool,
+    calls: std::sync::Mutex<Vec<String>>,
+}
+#[async_trait]
+impl Management for ImportServices {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, o: &Value, t: &str) -> Result<Value> {
+        self.service_lifecycle("tos>iam", o, t).await
+    }
+    async fn service_lifecycle(&self, app: &str, o: &Value, _: &str) -> Result<Value> {
+        self.calls.lock().unwrap().push(app.into());
+        if app == "other>dependency" && self.offline.load(Ordering::SeqCst) {
+            return Err(Error::unavailable("Service offline"));
+        }
+        let imports:Vec<Value>=o["snapshot"]["imports"].as_array().into_iter().flatten().map(|source|json!({"app_id":source["app_id"],"source_revision":source["source_revision"],"configuration_revision":source["configuration_revision"],"iam_revision":source["configuration_revision"],"effective_configuration":source["configuration"],"visibility":"private","app_secret":"never-persist-this-test-secret"})).collect();
+        Ok(
+            json!({"state":"completed","operation_id":o["operation_id"],"environment_id":o["environment_id"],"app_id":app,"environment_revision":o["environment_revision"],"generation":if self.malformed.load(Ordering::SeqCst){json!(999)}else{o["generation"].clone()},"key_version":o["key_version"],"imports":imports}),
+        )
+    }
+}
+async fn import_source(s: &State, id: &str, deps: &[&str], public: bool) {
+    let (org, local) = id.split_once('>').unwrap();
+    let mut config = input(local);
+    config["org_id"] = json!(org);
+    config["app_scope"]["external"] = json!(
+        deps.iter()
+            .map(|app| json!({"app_id":app,"endpoint_id":"files.read"}))
+            .collect::<Vec<_>>()
+    );
+    let (status, response) = call(
+        s,
+        "POST",
+        "/api/v1/apps",
+        Some(if org == "tos" { "admin" } else { "outsider" }),
+        config,
+        &format!("source-create-{id}-0001"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    if public {
+        sqlx::query(
+            "UPDATE applications SET visibility='public' WHERE app_id=? AND plane='production'",
+        )
+        .bind(id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    }
+}
+#[tokio::test]
+async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations() {
+    let (mut s, _) = setup(true).await;
+    let services = Arc::new(ImportServices::default());
+    s.management = services.clone();
+    import_source(&s, "tos>root", &["other>dependency", "tos>leaf"], false).await;
+    import_source(&s, "other>dependency", &["tos>leaf"], true).await;
+    import_source(&s, "tos>leaf", &["tos>root"], false).await;
+    let (_, env) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        Some("member"),
+        json!({"org_id":"tos","name":"Imports"}),
+        "imports-create-0001",
+        None,
+    )
+    .await;
+    let id = env["environment_id"].as_str().unwrap();
+    let path = format!("/api/v1/environments/{id}/imports");
+    services.calls.lock().unwrap().clear();
+    let (status, result) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>root"}),
+        "imports-root-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{result}");
+    assert_eq!(result["operation_state"], "accepted", "{result}");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM environment_imports WHERE environment_id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(count, 3);
+    let calls = services.calls.lock().unwrap().clone();
+    assert_eq!(calls[0], "tos>iam");
+    assert_eq!(calls.iter().filter(|s| *s == "tos>leaf").count(), 1);
+    let org: String = sqlx::query_scalar(
+        "SELECT org_id FROM applications WHERE plane=? AND app_id='other>dependency'",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(org, "other");
+    let key: String = sqlx::query_scalar(
+        "SELECT webhook_secret FROM applications WHERE plane=? AND app_id='tos>root'",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert!(key.is_empty());
+    let receipt: String = sqlx::query_scalar(
+        "SELECT receipt FROM environment_services WHERE environment_id=? AND app_id='tos>iam'",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert!(!receipt.contains("never-persist"));
+    // A requested production revision must not silently change an accepted import.
+    sqlx::query("UPDATE applications SET revision=revision+1,config=json_set(config,'$.name','Unaccepted title') WHERE plane='production' AND app_id='tos>root'").execute(&s.db).await.unwrap();
+    let (_, unchanged) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>root"}),
+        "imports-root-0002",
+        Some(2),
+    )
+    .await;
+    assert_eq!(unchanged["unchanged"], true);
+    let (_, refreshed) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>root","refresh":true}),
+        "imports-refresh-0001",
+        Some(2),
+    )
+    .await;
+    assert_eq!(refreshed["operation_state"], "accepted", "{refreshed}");
+    let source:i64=sqlx::query_scalar("SELECT source_revision FROM environment_imports WHERE environment_id=? AND app_id='tos>root'").bind(id).fetch_one(&s.db).await.unwrap();
+    assert_eq!(source, 1);
+    let name: String =
+        sqlx::query_scalar("SELECT name FROM applications WHERE plane=? AND app_id='tos>root'")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_ne!(name, "Unaccepted title");
+    let (_, replay) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>root","refresh":true}),
+        "imports-refresh-0001",
+        Some(2),
+    )
+    .await;
+    assert_eq!(replay["operation_id"], refreshed["operation_id"]);
+    let (status, _) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>leaf","refresh":true}),
+        "imports-refresh-0001",
+        Some(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+#[tokio::test]
+async fn imports_reject_private_dependencies_and_gate_new_records_on_exact_receipts() {
+    let (mut s, _) = setup(true).await;
+    let services = Arc::new(ImportServices::default());
+    s.management = services.clone();
+    import_source(&s, "tos>root", &["other>dependency"], true).await;
+    import_source(&s, "other>dependency", &[], false).await;
+    let (_, env) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        Some("member"),
+        json!({"org_id":"tos","name":"Import gates"}),
+        "imports-create-0002",
+        None,
+    )
+    .await;
+    let id = env["environment_id"].as_str().unwrap();
+    let path = format!("/api/v1/environments/{id}/imports");
+    let (status, _) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>root"}),
+        "imports-private-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM environment_imports WHERE environment_id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query("UPDATE applications SET visibility='public' WHERE plane='production' AND app_id='other>dependency'").execute(&s.db).await.unwrap();
+    services.malformed.store(true, Ordering::SeqCst);
+    services.calls.lock().unwrap().clear();
+    let (_, pending) = call(
+        &s,
+        "POST",
+        &path,
+        Some("member"),
+        json!({"app_id":"tos>root"}),
+        "imports-private-0002",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["operation_state"], "pending");
+    assert_eq!(pending["state"], "ready");
+    assert_eq!(*services.calls.lock().unwrap(), vec!["tos>iam"]);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM applications WHERE plane=?")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    services.malformed.store(false, Ordering::SeqCst);
+    services.offline.store(true, Ordering::SeqCst);
+    let (_, pending) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/retry"),
+        Some("member"),
+        Value::Null,
+        "imports-retry-0001",
+        Some(2),
+    )
+    .await;
+    assert_eq!(pending["operation_state"], "pending");
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/clean"),
+        Some("member"),
+        Value::Null,
+        "imports-clean-0001",
+        Some(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    services.offline.store(false, Ordering::SeqCst);
+    services.calls.lock().unwrap().clear();
+    let (_, ready) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/retry"),
+        Some("member"),
+        Value::Null,
+        "imports-retry-0002",
+        Some(2),
+    )
+    .await;
+    assert_eq!(ready["operation_state"], "accepted", "{ready}");
+    assert_eq!(*services.calls.lock().unwrap(), vec!["other>dependency"]);
+}
+
+#[tokio::test]
+async fn import_graph_has_no_fixed_depth_limit_and_root_key_grants_no_production_membership() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ImportServices::default());
+    for n in 0..40 {
+        let id = format!("tos>node-{n}");
+        let dependency = format!("tos>node-{}", (n + 1) % 40);
+        import_source(&s, &id, &[&dependency], true).await;
+    }
+    import_source(&s, "tos>hidden", &[], false).await;
+    let (_, env) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        Some("member"),
+        json!({"org_id":"tos","name":"Root import graph"}),
+        "imports-create-0003",
+        None,
+    )
+    .await;
+    let id = env["environment_id"].as_str().unwrap();
+    let encrypted: String = sqlx::query_scalar("SELECT encrypted_key FROM environments WHERE id=?")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    let root = s.decrypt(&encrypted).unwrap();
+    for (app, status) in [
+        ("tos>hidden", StatusCode::NOT_FOUND),
+        ("tos>node-0", StatusCode::ACCEPTED),
+    ] {
+        let response = silicon_honeycomb_server::api::router(s.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/environments/{id}/imports"))
+                    .header("content-type", "application/json")
+                    .header("x-testing-environment-key", &root)
+                    .header("if-match", "1")
+                    .header("idempotency-key", format!("root-import-{app}-0001"))
+                    .body(Body::from(json!({"app_id":app}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM environment_imports WHERE environment_id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(count, 40);
+}

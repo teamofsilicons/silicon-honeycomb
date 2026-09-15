@@ -164,6 +164,9 @@ export default function App() {
   const [environmentAction, setEnvironmentAction] = createSignal("");
   const [confirmationName, setConfirmationName] = createSignal("");
   const [showEnv, setShowEnv] = createSignal(false);
+  const [importApp, setImportApp] = createSignal("");
+  const [importRelease, setImportRelease] = createSignal("");
+  const [refreshImport, setRefreshImport] = createSignal(false);
   const [envName, setEnvName] = createSignal("");
   const [envOrg, setEnvOrg] = createSignal("");
   const [envKey, setEnvKey] = createSignal("");
@@ -1567,11 +1570,11 @@ export default function App() {
                 </For>
               </div>
               <Show
-                when={!["ready", "deleted", "purged"].includes(env().state)}
+                when={env().operation_pending || !["ready", "deleted", "purged"].includes(env().state)}
               >
                 <p class="muted">
-                  This environment becomes available after every service
-                  confirms readiness. Retry continues the incomplete steps.
+                  Every participating service must confirm the operation. Retry
+                  continues the incomplete steps; existing ready imports stay available.
                 </p>
                 <button
                   class="button primary"
@@ -1581,7 +1584,27 @@ export default function App() {
                   Retry setup
                 </button>
               </Show>
-              <Show when={env().state === "ready"}>
+              <Show when={env().imports?.length}>
+                <h3>Pinned applications</h3>
+                <For each={env().imports}>{(item) => <p><strong>{item.app_id}</strong><br /><small>Source revision {item.source_revision}{item.selected_release ? ` · Release ${item.selected_release}` : ""}</small></p>}</For>
+              </Show>
+              <Show when={env().state === "ready" && !env().operation_pending}>
+                <details class="advanced">
+                  <summary>Import an application</summary>
+                  <form class="application-form" onSubmit={(e) => {
+                    e.preventDefault();
+                    void act(async () => {
+                      await request(`/api/v1/environments/${env().environment_id}/imports`, { method: "POST", headers: { "If-Match": String(env().revision) }, body: JSON.stringify({ app_id: importApp(), release: importRelease() || null, refresh: refreshImport() }) });
+                      setSelectedEnv(await request(`/api/v1/environments/${env().environment_id}`));
+                    }, "Import requested. Check service progress for readiness.");
+                  }}>
+                    <p class="muted">Dependencies are included automatically. Private applications require current production access. Imports keep their organization and start private in this environment.</p>
+                    <label>Application ID<input required placeholder="tos>briefcase" value={importApp()} onInput={(e) => setImportApp(e.currentTarget.value)} /></label>
+                    <label>Release (optional)<input placeholder="Latest available" value={importRelease()} onInput={(e) => setImportRelease(e.currentTarget.value)} /></label>
+                    <label class="check"><input type="checkbox" checked={refreshImport()} onChange={(e) => setRefreshImport(e.currentTarget.checked)} />Refresh existing pins from production</label>
+                    <button class="button primary" disabled={busy()}>Import application</button>
+                  </form>
+                </details>
                 <div class="environment-actions">
                   <For
                     each={[

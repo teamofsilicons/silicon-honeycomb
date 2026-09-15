@@ -64,7 +64,7 @@ async fn coordinate_inner(
         .ok_or_else(|| Error::bad("Not an environment lifecycle operation"))?;
     let generation: i64 = environment.get("generation");
     let key_version: i64 = environment.get("key_version");
-    let services=sqlx::query("SELECT app_id,snapshot,state FROM environment_services WHERE environment_id=? AND operation_id=? ORDER BY app_id").bind(id).bind(operation_id).fetch_all(&s.db).await?;
+    let services=sqlx::query("SELECT app_id,snapshot,state FROM environment_services WHERE environment_id=? AND operation_id=? ORDER BY CASE WHEN app_id='tos>iam' THEN 0 ELSE 1 END,app_id").bind(id).bind(operation_id).fetch_all(&s.db).await?;
     if services.is_empty() {
         return Err(Error::conflict(
             "Lifecycle operation has no participating services",
@@ -95,13 +95,29 @@ async fn coordinate_inner(
                 .service_lifecycle(&app, &request, actor_token)
                 .await
         };
+        let mut stored_receipt = None;
         let error=match result {
-            Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version => None,
+            Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version => {
+                if action=="import" && app=="tos>iam" {
+                    match accepted_imports(&request["snapshot"]["imports"], &receipt["imports"]) {
+                        Ok(imports)=>{stored_receipt=Some(imports.to_string());None},
+                        Err(message)=>Some(message),
+                    }
+                } else { None }
+            },
             Ok(_)=>Some("Service has not confirmed the exact operation, environment revision, generation and key version".to_string()),
             Err(e)=>Some(e.1.message),
         };
-        sqlx::query("UPDATE environment_services SET state=?,error=?,generation=? WHERE environment_id=? AND app_id=? AND operation_id=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
-            .bind(if error.is_none(){"ready"}else{"failed"}).bind(error).bind(generation).bind(id).bind(&app).bind(operation_id).bind(operation_id).bind(lease).bind(now()).execute(&s.db).await?;
+        let failed = error.is_some();
+        let written=sqlx::query("UPDATE environment_services SET state=?,error=?,generation=?,receipt=? WHERE environment_id=? AND app_id=? AND operation_id=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
+            .bind(if failed{"failed"}else{"ready"}).bind(error).bind(generation).bind(stored_receipt).bind(id).bind(&app).bind(operation_id).bind(operation_id).bind(lease).bind(now()).execute(&s.db).await?;
+        if written.rows_affected() != 1 {
+            return Err(Error::conflict("Lifecycle coordinator lease expired"));
+        }
+        // Import application services only after IAM has accepted their isolated records.
+        if action == "import" && app == "tos>iam" && failed {
+            break;
+        }
     }
     let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM environment_services WHERE environment_id=? AND operation_id=? AND state!='ready'").bind(id).bind(operation_id).fetch_one(&s.db).await?;
     if pending > 0 {
@@ -114,7 +130,7 @@ async fn coordinate_inner(
             .execute(&s.db)
             .await?;
         return Ok(
-            json!({"operation_id":operation_id,"environment_id":id,"state":environment.get::<String,_>("state"),"revision":revision,"generation":generation,"error":error}),
+            json!({"operation_id":operation_id,"environment_id":id,"state":environment.get::<String,_>("state"),"revision":revision,"generation":generation,"operation_state":"pending","error":error}),
         );
     }
     let final_state = match action {
@@ -134,6 +150,37 @@ async fn coordinate_inner(
             "Environment changed during lifecycle coordination",
         ));
     }
+    if action == "import" {
+        let row=sqlx::query("SELECT snapshot,receipt FROM environment_services WHERE environment_id=? AND app_id='tos>iam' AND operation_id=?")
+            .bind(id).bind(operation_id).fetch_one(&mut *tx).await?;
+        let payload: Value = serde_json::from_str(&row.get::<String, _>("snapshot"))
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let imports: Value = serde_json::from_str(&row.get::<String, _>("receipt"))
+            .map_err(|e| anyhow::anyhow!(e))?;
+        for source in payload["imports"]
+            .as_array()
+            .ok_or_else(|| Error::conflict("Import snapshot missing"))?
+        {
+            let app = source["app_id"].as_str().unwrap();
+            let receipt = imports
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["app_id"] == app)
+                .ok_or_else(|| Error::conflict("Import receipt missing"))?;
+            let config = source["configuration"].to_string();
+            let installed=sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,config,effective_config,effective_revision,webhook_secret,created_at,updated_at) VALUES(?,?,?,?,?,'private','active',?,?,?,?,?,'',?,?) ON CONFLICT(plane,app_id) DO UPDATE SET name=excluded.name,description=excluded.description,visibility='private',state='active',revision=excluded.revision,iam_revision=excluded.iam_revision,config=excluded.config,effective_config=excluded.effective_config,effective_revision=excluded.effective_revision,webhook_secret='',updated_at=excluded.updated_at WHERE applications.revision=excluded.revision-1")
+                .bind(id).bind(app).bind(source["org_id"].as_str().unwrap()).bind(source["configuration"]["name"].as_str().unwrap_or(app)).bind(source["configuration"]["description"].as_str().unwrap_or(""))
+                .bind(source["configuration_revision"].as_i64().unwrap()).bind(receipt["iam_revision"].as_i64().unwrap()).bind(&config).bind(&config).bind(source["configuration_revision"].as_i64().unwrap()).bind(now()).bind(now()).execute(&mut *tx).await?;
+            if installed.rows_affected() != 1 {
+                return Err(Error::conflict(
+                    "Test application changed while import was coordinating; reconcile before refreshing",
+                ));
+            }
+            sqlx::query("INSERT INTO environment_imports(environment_id,app_id,source_revision,snapshot,last_activity) VALUES(?,?,?,?,?) ON CONFLICT(environment_id,app_id) DO UPDATE SET source_revision=excluded.source_revision,snapshot=excluded.snapshot,last_activity=excluded.last_activity")
+                .bind(id).bind(app).bind(source["source_revision"].as_i64().unwrap()).bind(source.to_string()).bind(now()).execute(&mut *tx).await?;
+        }
+    }
     if action == "clean" {
         sqlx::query("DELETE FROM environment_services WHERE environment_id=? AND app_id NOT IN ('tos>iam',?)").bind(id).bind(&s.app_id).execute(&mut *tx).await?;
     }
@@ -151,7 +198,7 @@ async fn coordinate_inner(
     sqlx::query("INSERT INTO audit(id,plane,actor,action,resource,created_at) VALUES(?,'production','honeycomb-coordinator',?,?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(format!("environment.{action}.completed")).bind(id).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(
-        json!({"operation_id":operation_id,"environment_id":id,"state":final_state,"revision":revision,"generation":generation,"key_version":key_version}),
+        json!({"operation_id":operation_id,"environment_id":id,"state":final_state,"revision":revision,"generation":generation,"key_version":key_version,"operation_state":"accepted"}),
     )
 }
 async fn apply_local(
@@ -173,6 +220,10 @@ async fn apply_local(
         return Err(Error::conflict("Lifecycle coordinator lease changed"));
     }
 
+    sqlx::query("DELETE FROM environment_imports WHERE environment_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM decisions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=?)").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM discussions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=?)").bind(id).execute(&mut *tx).await?;
     // Fixed SQL literals keep destructive work explicitly limited to one test plane.
@@ -194,4 +245,33 @@ async fn apply_local(
     }
     tx.commit().await?;
     Ok(())
+}
+
+// Store only the public receipt fields needed to reconcile imports, never returned secrets.
+fn accepted_imports(requested: &Value, received: &Value) -> std::result::Result<Value, String> {
+    let missing =
+        || "IAM has not confirmed every imported configuration and test visibility".to_string();
+    let requested = requested.as_array().ok_or_else(missing)?;
+    let received = received.as_array().ok_or_else(missing)?;
+    let mut accepted = Vec::new();
+    for source in requested {
+        let matches: Vec<_> = received
+            .iter()
+            .filter(|r| r["app_id"] == source["app_id"])
+            .collect();
+        if matches.len() != 1 {
+            return Err(missing());
+        }
+        let receipt = matches[0];
+        if receipt["configuration_revision"] != source["configuration_revision"]
+            || receipt["source_revision"] != source["source_revision"]
+            || receipt["iam_revision"].as_i64().is_none_or(|r| r <= 0)
+            || receipt["effective_configuration"] != source["configuration"]
+            || receipt["visibility"] != "private"
+        {
+            return Err(missing());
+        }
+        accepted.push(json!({"app_id":receipt["app_id"],"iam_revision":receipt["iam_revision"]}));
+    }
+    Ok(json!(accepted))
 }

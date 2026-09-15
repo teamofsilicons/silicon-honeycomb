@@ -244,3 +244,24 @@ test("concurrent browser requests share one rotating refresh and sign out cleanl
   const catalog = await (await request.get(`${library}/api/v1/apps`)).json();
   expect(JSON.stringify(catalog)).not.toContain("tos>internal-tools");
 });
+
+
+test("console import exposes pending integration without disabling the ready environment", async ({ page }, info) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Testing environments", exact: true }).click();
+  const row=page.locator(".environment-row").filter({ has: page.getByRole("heading", { name: `Import sandbox ${info.project.name}`, exact: true }) });
+  await row.getByRole("button", { name: "Manage", exact: true }).click();
+  const dialog=page.getByRole("dialog");
+  {
+    await dialog.getByText("Import an application", { exact: true }).click();
+    await dialog.getByLabel("Application ID", { exact: true }).fill("tos>briefcase");
+    await dialog.getByRole("button", { name: "Import application", exact: true }).click();
+  }
+  await expect(dialog.getByRole("button", { name: "Retry setup", exact: true })).toBeVisible();
+  await expect(dialog).toContainText("Fixture deliberately leaves shared lifecycle provisioning pending");
+  await expect(dialog).toContainText("ready");
+  await expect(dialog.getByRole("button", { name: "Clean test data", exact: true })).toHaveCount(0);
+});

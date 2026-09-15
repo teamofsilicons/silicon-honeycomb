@@ -70,3 +70,17 @@ Checkpoint checks: full Rust workspace tests and strict Clippy pass; CLI and cur
 installer journeys pass; web production build and all 14 desktop/mobile browser
 journeys pass, including single-use refresh-token concurrency. Postmark delivery is
 verified against a local HTTP double only.
+
+Recursive imports now walk the entire external-scope dependency graph with cycle
+detection, production visibility checks, source configuration/release pins and
+explicit refresh. IAM must confirm each isolated import; all service receipts are
+required before Honeycomb installs its test catalog records. Existing ready apps
+remain available while an additional import is pending. CLI and console expose
+imports and their progress. Imported production webhook/app secrets are never copied.
+Selected source releases are recorded; copying archives into test storage still
+requires the protected cross-service import implementation.
+
+Import checkpoint verification: all 19 backend API tests, workspace Rust tests,
+strict Clippy, CLI import journey, production web build and all 16 desktop/mobile
+browser journeys pass. Coverage includes a 40-node cyclic graph and root-key-only
+private-access denial. No live management integration was used.

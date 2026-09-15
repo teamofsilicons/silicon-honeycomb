@@ -231,6 +231,18 @@ enum Environments {
         #[arg(long, default_value = "")]
         description: String,
     },
+    /// Import an application's external-scope dependencies and pin accepted configurations.
+    Import {
+        id: String,
+        app_id: String,
+        #[arg(long)]
+        revision: i64,
+        #[arg(long)]
+        release: Option<String>,
+        /// Explicitly refresh the imported dependency graph from accepted production configurations.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Retrieve and save an environment root key. This action is audited by the backend.
     Key {
         id: String,
@@ -639,6 +651,23 @@ async fn run() -> Result<()> {
             } => show(
                 &client
                     .create_environment(org_id, name, description, &operation)
+                    .await?,
+            )?,
+            Environments::Import {
+                id,
+                app_id,
+                revision,
+                release,
+                refresh,
+            } => show(
+                &client
+                    .import_application(
+                        id,
+                        app_id,
+                        release.as_deref(),
+                        *refresh,
+                        &mutation(&cli, Some(*revision))?,
+                    )
                     .await?,
             )?,
             Environments::Key { id } => {

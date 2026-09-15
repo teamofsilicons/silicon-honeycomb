@@ -124,3 +124,18 @@ Cross-service production acceptance is separate and requires the IAM handoff.
 
 See [deployment and release instructions](deploy/README.md) for container builds,
 requested domains and six-platform release candidates.
+
+## Import an application into a test environment
+
+```sh
+honeycomb environments get ENVIRONMENT_ID
+honeycomb environments import ENVIRONMENT_ID 'tos>example' --revision 1
+# Explicitly refresh existing pins; use the current environment revision.
+honeycomb environments import ENVIRONMENT_ID 'tos>example' --revision 2 --refresh
+```
+
+Imports recursively include external-scope dependencies, preserve organizations,
+and pin accepted configurations and selected releases. Private dependencies require
+production access. Follow per-service progress with `environments get`; use
+`environments action ENVIRONMENT_ID retry --revision N` for an incomplete operation.
+The console exposes the same workflow under Testing environments → Manage.

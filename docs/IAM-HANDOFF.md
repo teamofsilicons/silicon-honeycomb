@@ -227,3 +227,16 @@ OBO TTL and one-use enforcement; cross-org OBO; invalid/mismatched test contexts
 key rotation/clean generation/restore/purge; lost receipt reconciliation; safe
 bootstrap retry. Production activation is blocked until P0 is available; test
 lifecycle completion is blocked until P1 and participating services are available.
+
+### Import receipt details implemented in Honeycomb
+
+The current proposed `import` lifecycle request sends `snapshot.imports` to IAM.
+Each entry identifies app_id, org_id, source_revision, configuration_revision,
+configuration, selected_release and initial private test visibility. Its completed
+receipt includes an `imports` array with matching app_id/source_revision/
+configuration_revision, a positive test iam_revision, the exact
+effective_configuration and visibility=private. Honeycomb persists only the
+nonsecret receipt identifiers. Production approvals and secrets are not copied.
+An import adds per-app readiness gates while existing ready app instances remain
+available. IAM must not activate newly imported app access until Honeycomb reports
+all participating services ready. Retrying uses the same operation and snapshots.

@@ -191,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
         encryption_key: [7; 32],
         webhook_secret: "fixture-webhook-secret-0000000000000".into(),
     };
-    sqlx::query("UPDATE applications SET webhook_secret=?")
+    sqlx::query("UPDATE applications SET effective_revision=revision,webhook_secret=?")
         .bind(
             state
                 .encrypt("fixture-webhook-secret-0000000000000")
@@ -199,6 +199,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .execute(&state.db)
         .await?;
+    for project in ["desktop", "mobile"] {
+        sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated import journey',?,?,'ready',1,1)")
+            .bind(format!("fixture-import-{project}")).bind(format!("Import sandbox {project}"))
+            .bind(state.encrypt("fixture-import-root-key-0000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("fixture-import-unused-hash-{project}")).execute(&state.db).await?;
+    }
     let app = silicon_honeycomb_server::api::router(state).route("/login", get(fixture_login));
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     println!(

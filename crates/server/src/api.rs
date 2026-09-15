@@ -72,6 +72,10 @@ pub fn router(state: State) -> Router {
             "/api/v1/environments/{id}/actions/{action}",
             post(super::control::environment_action),
         )
+        .route(
+            "/api/v1/environments/{id}/imports",
+            post(super::imports::import),
+        )
         .route("/webhook/", post(super::control::webhook))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(axum::middleware::from_fn(response_headers))
@@ -300,6 +304,7 @@ fn app_from(row: &SqliteRow, admin: bool) -> Result<App> {
         state: row.get("state"),
         revision: row.get("revision"),
         iam_revision: row.get("iam_revision"),
+        effective_revision: row.get("effective_revision"),
         config,
         latest_version: None,
         rating: row.get::<Option<f64>, _>("rating").unwrap_or(0.0),
@@ -583,6 +588,11 @@ async fn update_app(
         .bind(&id)
         .fetch_one(&s.db)
         .await?;
+        if encrypted.is_empty() {
+            return Err(Error::bad(
+                "An imported app must supply a test-only webhook secret to change its configuration; the production secret is never copied",
+            ));
+        }
         input.webhook_secret = s.decrypt(&encrypted)?;
     }
     save_app(&s, &h, input, Some(expected), Some(digest)).await
@@ -715,7 +725,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
                     && field != "app_secret"
             });
             let mut tx = s.db.begin().await?;
-            let updated=sqlx::query("UPDATE applications SET effective_config=?,iam_revision=?,state='active' WHERE plane=? AND app_id=? AND revision=? AND iam_revision=?").bind(Value::Object(effective).to_string()).bind(accepted).bind(&c.plane).bind(&app_id).bind(app.revision).bind(app.iam_revision).execute(&mut *tx).await?;
+            let updated=sqlx::query("UPDATE applications SET effective_config=?,iam_revision=?,effective_revision=revision,state='active' WHERE plane=? AND app_id=? AND revision=? AND iam_revision=?").bind(Value::Object(effective).to_string()).bind(accepted).bind(&c.plane).bind(&app_id).bind(app.revision).bind(app.iam_revision).execute(&mut *tx).await?;
             if updated.rows_affected() != 1 {
                 return Err(Error::conflict(
                     "Newer configuration arrived during IAM acceptance; reconcile before retrying",
@@ -1099,7 +1109,10 @@ async fn request_publication(
             "A publication justification of 1–10000 characters is required",
         ));
     }
-    if app.latest_version.is_none() || app.iam_revision == 0 {
+    if app.latest_version.is_none()
+        || app.iam_revision == 0
+        || app.effective_revision != app.revision
+    {
         return Err(Error::conflict(
             "Upload a valid CLI release and wait for IAM private activation before requesting publication",
         ));

@@ -66,7 +66,7 @@ pub async fn save_draft(
 fn environment_value(r: &SqliteRow) -> Value {
     json!({"environment_id":r.get::<String,_>("id"),"org_id":r.get::<String,_>("org_id"),"creator":r.get::<String,_>("creator"),"name":r.get::<String,_>("name"),"description":r.get::<String,_>("description"),"state":r.get::<String,_>("state"),"revision":r.get::<i64,_>("revision"),"generation":r.get::<i64,_>("generation"),"key_version":r.get::<i64,_>("key_version"),"idle_days":r.get::<i64,_>("idle_days"),"last_activity":r.get::<i64,_>("last_activity"),"purge_after":r.get::<Option<i64>,_>("purge_after")})
 }
-async fn manage(s: &State, h: &HeaderMap, id: &str) -> Result<(SqliteRow, String)> {
+pub(crate) async fn manage(s: &State, h: &HeaderMap, id: &str) -> Result<(SqliteRow, String)> {
     let row = sqlx::query("SELECT * FROM environments WHERE id=?")
         .bind(id)
         .fetch_optional(&s.db)
@@ -169,8 +169,14 @@ pub async fn environment(
 ) -> Result<Json<Value>> {
     let (row, _) = manage(&s, &h, &id).await?;
     let mut v = environment_value(&row);
-    let services=sqlx::query("SELECT app_id,state,error,operation_id FROM environment_services WHERE environment_id=? ORDER BY app_id").bind(id).fetch_all(&s.db).await?;
+    let services=sqlx::query("SELECT app_id,state,error,operation_id FROM environment_services WHERE environment_id=? ORDER BY app_id").bind(&id).fetch_all(&s.db).await?;
     v["services"]=json!(services.iter().map(|r|json!({"app_id":r.get::<String,_>("app_id"),"state":r.get::<String,_>("state"),"error":r.get::<Option<String>,_>("error"),"operation_id":r.get::<String,_>("operation_id")})).collect::<Vec<_>>());
+    let imports=sqlx::query("SELECT app_id,source_revision,snapshot FROM environment_imports WHERE environment_id=? ORDER BY app_id").bind(&id).fetch_all(&s.db).await?;
+    v["imports"]=json!(imports.iter().map(|r| {
+        let snapshot:Value=serde_json::from_str(&r.get::<String,_>("snapshot")).unwrap_or(Value::Null);
+        json!({"app_id":r.get::<String,_>("app_id"),"source_revision":r.get::<i64,_>("source_revision"),"selected_release":snapshot["selected_release"]})
+    }).collect::<Vec<_>>());
+    v["operation_pending"]=json!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM operations WHERE plane='production' AND resource=? AND kind LIKE 'environment.%' AND state='pending')").bind(&id).fetch_one(&s.db).await?);
     Ok(Json(v))
 }
 pub async fn environment_key(
@@ -222,6 +228,13 @@ pub async fn environment_action(
     if let Some(o)=sqlx::query("SELECT id,request_hash,state FROM operations WHERE plane='production' AND actor=? AND idempotency_key=?").bind(&actor).bind(k).fetch_optional(&s.db).await?{if o.get::<String,_>("request_hash")!=digest{return Err(Error::conflict("Idempotency key already used for different input"));}return Ok((StatusCode::ACCEPTED,Json(json!({"operation_id":o.get::<String,_>("id"),"state":o.get::<String,_>("state")}))));}
     if row.get::<i64, _>("revision") != expected {
         return Err(Error::conflict("Environment revision changed"));
+    }
+    let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane='production' AND resource=? AND kind LIKE 'environment.%' AND state='pending')")
+        .bind(&id).fetch_one(&s.db).await?;
+    if pending {
+        return Err(Error::conflict(
+            "Finish or retry the pending environment operation first",
+        ));
     }
     let state: String = row.get("state");
     if action == "restore" {
