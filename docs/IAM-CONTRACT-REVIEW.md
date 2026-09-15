@@ -1,7 +1,7 @@
 # Current IAM integration review
 
-Reviewed local IAM code commit `7abd575` and ownership documentation commit
-`0467ef0` (2026-09-16), SDK 1.10.0, against Honeycomb.
+Reviewed deployed IAM code commit `c57b3a3` and rollout documentation commit
+`af194db` (2026-09-16), SDK 1.10.0, against Honeycomb.
 The current upstream source of truth is `silicon-iam/docs/HONEYCOMB_INTEGRATION.md`
 and its OpenAPI contract. This review supersedes the earlier assumption that IAM
 has no management API in `IAM-HANDOFF.md`.
@@ -36,15 +36,42 @@ has no management API in `IAM-HANDOFF.md`.
 
 Configuration: `IAM_HONEYCOMB_SERVICE_CREDENTIAL` enables the management adapter;
 `IAM_HONEYCOMB_NOTIFICATION_SIGNING_KEY` enables the separate receiver. Without
-these, management remains pending. Do not provision production cutover merely to
-try the adapter: IAM provisioning retires its old management writers, while the
-remaining Honeycomb flows below are not yet integrated.
+these, management remains pending. Provisioning now leaves legacy management
+writers available: the independent `IAM_HONEYCOMB_RETIRE_LEGACY_WRITERS` switch
+defaults to false and remains false in production. Keep that switch off until
+Honeycomb adoption and replacement flows are verified.
 
-SDK 1.10.0 was absent from crates.io when checked. The new commit is also ahead
-of the remote default branch. `vendor/silicon-iam-client` contains unchanged SDK
+SDK 1.10.0 is still absent from crates.io (checked 2026-09-16). The deployed
+release does not change SDK source or its manifest from `7abd575`.
+`vendor/silicon-iam-client` contains unchanged SDK
 source from the exact local upstream commit, an expanded standalone manifest,
 license, and source hashes in `UPSTREAM.json`. Replace this with the published
 registry dependency once available. No IAM source was edited or published here.
+
+## Live rollout verification — 2026-09-16
+
+- `/readyz` returns 200; `/api/v1/version` reports
+  `c57b3a385fc6b0749f1cd9ae1e91e40169db531f`.
+- An unauthenticated management catalog read returns 401. The provisioned
+  service credential reads the catalog and `tos>honeycomb` with 200.
+- The authentication app is verified/public, with IAM revision 2 and
+  configuration revision 0. Its identity UUID is
+  `01a0a751-69c0-70b2-8456-96806349f999`.
+- The protected handoff is at
+  `/Users/codanium/.config/silicon/honeycomb/iam-production.env` (0600), also
+  held in AWS Secrets Manager as `silicon-honeycomb/production/iam-management`.
+  Its environment variable names match Honeycomb's existing backend adapter.
+  Credentials stay outside this repository.
+- IAM notifications are queued pending Honeycomb's live HTTPS receiver.
+  Scheduled testing remains disabled. The rollout does not resolve the contract
+  gaps below or establish authenticated actor mutations through Honeycomb.
+
+Repeat the read-only SDK check with
+`python3 scripts/check_iam_management.py /Users/codanium/.config/silicon/honeycomb/iam-production.env`.
+The helper parses dotenv values without shell evaluation; do not shell-source
+this handoff because its unquoted `>` in the application ID is shell redirection.
+It checks the real SDK's service authentication and response mapping without
+printing credentials or mutating applications.
 
 ## Remaining contract gaps and work
 
@@ -66,4 +93,5 @@ registry dependency once available. No IAM source was edited or published here.
 The backend intentionally retains pending responses for these incomplete flows.
 Service credentials are not substitutes for actor, app, root-key or reviewer
 authority. Local HTTP-double tests validate the SDK wire mapping; they do not
-establish live IAM deployment or cross-service readiness.
+establish authenticated actor mutations or cross-service readiness. The live
+read-only check above separately verifies the deployed management API.

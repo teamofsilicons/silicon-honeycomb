@@ -6,6 +6,16 @@ published to `main` under MIT. No domains or public CLI releases were provisione
 The dedicated Space Station table/key is provisioned locally. Hosted CI and the
 six-platform candidate workflow have started; success is not yet established.
 
+IAM's management API and the `tos>honeycomb` authentication app are now deployed.
+The protected IAM handoff supplies the five existing backend environment settings
+at `/Users/codanium/.config/silicon/honeycomb/iam-production.env`; keep it outside
+Git and merge it into the host's protected backend configuration. The handoff
+does not supply Honeycomb's database encryption key, ordinary application webhook
+key, web session keys, Briefcase grants or hosting. See
+`docs/IAM-CONTRACT-REVIEW.md` for live read verification and remaining contracts.
+Leave IAM's legacy-writer cutover and scheduled-testing switches disabled until
+the corresponding Honeycomb flows are verified.
+
 ## Containers and requested domains
 
 ```sh
