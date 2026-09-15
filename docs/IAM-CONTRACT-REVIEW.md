@@ -73,6 +73,31 @@ this handoff because its unquoted `>` in the application ID is shell redirection
 It checks the real SDK's service authentication and response mapping without
 printing credentials or mutating applications.
 
+### Required bootstrap grants
+
+The live app currently has only `self.identity.read` and `self.profile.read`.
+Before authenticated application management, add effective `self.membership.read`
+and require users to consent to it so role disclosure is available. The adapter
+maps IAM's `owner`, `admin`, and `member` wire values to Honeycomb's existing
+`org_owner`, `org_admin`, and `org_member` API values. Unknown or absent roles
+grant no administrative authority.
+
+Archive/logo operations also require the four external scopes on `tos>briefcase`:
+`briefcase.uploads.reserve`, `briefcase.uploads.commit`, `briefcase.files.read`,
+and `briefcase.link_access.update`. The last grants public link sharing and needs
+the provider's approval. No external scopes are currently effective.
+Add `--require-ready` to the check above to fail until all six required identity,
+membership and storage scopes are effective. This is a prerequisite check, not
+proof of user consent, resource authorization, or end-to-end storage success.
+
+Also confirm unscoped token introspection discloses roles under
+`self.membership.read`: the latest definition of
+`iam_private.list_current_application_authorizations` found in migration 0072
+still gates `org_role` on the retired `roles.read` scope, while the single-org
+function updated by migration 0093 uses `self.membership.read`. Honeycomb's
+website login does not pin an organization. This source discrepancy needs a
+live actor regression check/fix in IAM; Honeycomb must not infer missing roles.
+
 ## Remaining contract gaps and work
 
 | Area | Current IAM behavior | Needed next step |

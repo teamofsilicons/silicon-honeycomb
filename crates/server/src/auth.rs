@@ -146,9 +146,16 @@ impl IdentityProvider for Iam {
             }
             identity.testing_environment_id = env;
             if let Some(org) = a["org_id"].as_str() {
-                identity
-                    .organizations
-                    .insert(org.into(), a["org_role"].as_str().map(str::to_owned));
+                // IAM's authorization snapshot uses database role values.
+                // The Honeycomb API uses org-prefixed roles consistently with
+                // its existing clients. Undisclosed/unknown roles grant nothing.
+                let role = match a["org_role"].as_str() {
+                    Some("owner") => Some("org_owner".to_owned()),
+                    Some("admin") => Some("org_admin".to_owned()),
+                    Some("member") => Some("org_member".to_owned()),
+                    _ => None,
+                };
+                identity.organizations.insert(org.into(), role);
             }
         }
         // IAM 1.9 does not disclose Honeycomb's platform validator capability.

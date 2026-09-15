@@ -10,6 +10,7 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("handoff", type=Path)
+    parser.add_argument("--require-ready", action="store_true", help="Fail if required effective scopes are missing")
     args = parser.parse_args()
     env = os.environ.copy()
     allowed = {"IAM_BASE_URL", "HONEYCOMB_APP_ID", "IAM_HONEYCOMB_SERVICE_CREDENTIAL"}
@@ -26,7 +27,8 @@ def main():
     if missing:
         parser.error(f"Missing settings: {', '.join(sorted(missing))}")
     return subprocess.call(
-        ["cargo", "run", "-p", "silicon-honeycomb-server", "--example", "iam_management_check", "--locked"],
+        ["cargo", "run", "-p", "silicon-honeycomb-server", "--example", "iam_management_check", "--locked"]
+        + (["--", "--require-ready"] if args.require_ready else []),
         cwd=Path(__file__).resolve().parents[1], env=env,
     )
 

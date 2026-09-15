@@ -37,23 +37,28 @@ async fn introspection(server: &MockServer, body: Value) {
 async fn sdk_live_membership_disclosure_revocation_and_plane_checks() {
     let server = MockServer::start().await;
     let iam = adapter(&server);
-    introspection(&server, snapshot(Some("org_admin"))).await;
-    assert!(
-        iam.authenticate("oat_fixture", None)
-            .await
-            .unwrap()
-            .admin("tos")
-    );
+    for (wire, expected, admin) in [
+        ("owner", Some("org_owner"), true),
+        ("admin", Some("org_admin"), true),
+        ("member", Some("org_member"), false),
+        ("unexpected", None, false),
+        ("org_admin", None, false),
+    ] {
+        introspection(&server, snapshot(Some(wire))).await;
+        let actor = iam.authenticate("oat_fixture", None).await.unwrap();
+        assert_eq!(actor.organizations["tos"].as_deref(), expected);
+        assert_eq!(actor.admin("tos"), admin);
+    }
     introspection(&server, snapshot(None)).await;
     let actor = iam.authenticate("oat_fixture", None).await.unwrap();
     assert!(actor.member("tos"));
     assert!(!actor.admin("tos"));
     assert!(!actor.validator);
-    let mut wrong = snapshot(Some("org_admin"));
+    let mut wrong = snapshot(Some("admin"));
     wrong["client_id"] = json!("other>app");
     introspection(&server, wrong).await;
     assert!(iam.authenticate("oat_fixture", None).await.is_err());
-    let mut testing = snapshot(Some("org_admin"));
+    let mut testing = snapshot(Some("admin"));
     testing["authorizations"][0]["testing_environment_id"] =
         json!("44444444-4444-4444-4444-444444444444");
     introspection(&server, testing).await;

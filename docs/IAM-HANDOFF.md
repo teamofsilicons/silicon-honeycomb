@@ -1,6 +1,6 @@
 # IAM changes required by Honeycomb
 
-Current update: local IAM commit `7abd575` now implements part of this integration.
+Current update: deployed IAM commit `c57b3a3` now implements part of this integration.
 Read [IAM-CONTRACT-REVIEW.md](IAM-CONTRACT-REVIEW.md) first for the implemented
 contract, adapter coverage, unpublished SDK pin and remaining gaps.
 
