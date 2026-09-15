@@ -1,7 +1,8 @@
 # Deployment and release preparation
 
-These are reviewable local deployment artifacts. They have not been deployed and
-no domains, credentials, remote repository or public releases were provisioned.
+These are reviewable local deployment artifacts. They have not been deployed.
+The user-provided GitHub repository is configured as `origin`; no commits have
+been pushed, and no domains, credentials or public releases were provisioned.
 
 ## Containers and requested domains
 
@@ -52,6 +53,16 @@ version before activation. Publish the repository's `install.sh` at the document
 raw URL. macOS signing/notarization and any Windows code signing require the
 organization's signing identity before distributing signed builds.
 
+Before publication, verify all three distributable crates together:
+
+```sh
+cargo package --workspace --exclude silicon-honeycomb-server --locked
+```
+
+Cargo 1.98 builds the packages against a temporary local registry, so this verifies
+their packaged contents and dependency resolution before the first publication.
+This check runs in CI. It does not publish anything or prove crates.io installation.
+
 Crates must be published in dependency order (each with `--locked`):
 
 1. `silicon-honeycomb-core`
@@ -63,6 +74,8 @@ cannot resolve their registry dependencies until the preceding crates exist on
 crates.io. Local Cargo source installation is tested independently. The server is
 marked `publish = false`.
 
-No cross-platform release job has run yet because this checkout has no Git remote.
+The native release matrix also checks isolated Cargo source installation on each
+platform. No cross-platform release job has run yet; the repository has not been
+pushed and the candidate workflow has not been dispatched.
 Local verification covers native macOS arm64 CLI execution, Linux arm64 container
 build/startup, all six archive mappings, and desktop/mobile Chromium journeys.

@@ -11,7 +11,7 @@ with tempfile.TemporaryDirectory(prefix='honeycomb-cargo-install-') as temp:
     root = Path(temp)
     env = dict(os.environ, SILICON_HOME=str(root), CARGO_TARGET_DIR=str(repo / 'target'))
     subprocess.run(['cargo', 'install', '--locked', '--debug', '--path', str(repo / 'crates/cli'), '--root', str(root / 'cargo'), '--bin', 'honeycomb'], env=env, check=True)
-    binary = root / 'cargo/bin/honeycomb'
+    binary = root / 'cargo/bin' / ('honeycomb.exe' if os.name == 'nt' else 'honeycomb')
     assert subprocess.check_output([str(binary), '--version'], env=env, text=True).startswith('honeycomb ')
     subprocess.run([str(binary), 'config', 'set', 'auto_update', 'false'], env=env, check=True, stdout=subprocess.DEVNULL)
     subprocess.run([str(binary), 'daemon', '--once'], env=env, check=True, timeout=10)

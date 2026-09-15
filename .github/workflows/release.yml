@@ -25,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install 1.98.0 --profile minimal
+      - run: rustup default 1.98.0
       - run: cargo +1.98.0 test --workspace --locked
+      - run: python scripts/test_cargo_install.py
       - run: cargo +1.98.0 build -p silicon-honeycomb-cli --release --locked
       - run: python scripts/release_asset.py ${{ matrix.target }}
       - uses: actions/upload-artifact@v7.0.1

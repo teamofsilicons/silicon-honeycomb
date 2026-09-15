@@ -113,6 +113,7 @@ cargo build --workspace --examples --bins --locked
 python3 scripts/test_cli.py
 python3 scripts/test_install.py
 python3 scripts/test_cargo_install.py
+cargo package --workspace --exclude silicon-honeycomb-server --locked
 cd web
 npm ci
 npx playwright install chromium

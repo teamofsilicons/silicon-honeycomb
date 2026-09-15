@@ -250,3 +250,17 @@ web build, real CLI HTTP journey and all 30 browser cases pass. The final databa
 migration also passed the 37-case backend suite. Tests exercise exact retirement
 receipts, IAM-first sequencing, failed storage retry, active/dependency/production
 preservation, disabled-access barriers, recovery deadlines and retry backoff.
+
+### Cargo distribution verification
+
+Verified all three publishable crates with `cargo package --workspace --exclude
+silicon-honeycomb-server --locked`. Cargo 1.98 builds their packaged contents
+against its temporary registry before any public publication. Added this check
+and isolated Cargo source installation to CI. The six-platform release workflow
+now also checks source installation, including the Windows executable suffix,
+and explicitly selects the required toolchain for Python-invoked Cargo commands.
+
+Corrected the deployment notes to reflect the configured SSH remote and distinguish
+local package verification from crates.io installation. Local Cargo installation
+passed again, including version, unauthenticated status and updater opt-out.
+No Git push, public release, crate publication or deployment was performed.

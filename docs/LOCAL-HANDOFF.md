@@ -30,7 +30,9 @@ and sample applications; no production credentials or email delivery are involve
 - CLI HTTP journey includes private creation, six-target archive validation,
   releases, install/execute/update/uninstall, review/activation and anonymous install.
 - curl/bash installer checks and isolated Cargo source installation passed.
-- Production backend and both web container modes passed smoke tests.
+- Production backend and both web container modes passed smoke tests at the earlier
+  container checkpoint; the latest lifecycle changes have not been rebuilt in images.
+- All three distributable Cargo packages build with Cargo's temporary local registry.
 - Both preview websites were visually inspected; source provenance hashes pass.
 
 Cross-platform archive validation is not native execution on all six platforms.

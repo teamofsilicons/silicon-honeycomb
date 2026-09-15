@@ -10,13 +10,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+      - run: rustup default 1.98.0
       - run: python3 scripts/verify_vendored_iam.py
       - run: cargo +1.98.0 fmt --all --check
       - run: cargo +1.98.0 clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo +1.98.0 test --workspace --locked
+      - run: cargo +1.98.0 package --workspace --exclude silicon-honeycomb-server --locked
       - run: cargo +1.98.0 build --workspace --examples --bins --locked
       - run: python3 scripts/test_cli.py
       - run: python3 scripts/test_install.py
+      - run: python3 scripts/test_cargo_install.py
       - run: bash -n install.sh
   websites:
     runs-on: ubuntu-24.04
