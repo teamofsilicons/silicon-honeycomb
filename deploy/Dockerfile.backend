@@ -1,0 +1,14 @@
+FROM rust:1.98-bookworm AS build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build -p silicon-honeycomb-server --release --locked
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* && useradd -u 10001 -m honeycomb
+WORKDIR /app
+COPY --from=build /build/target/release/silicon-honeycomb-server /usr/local/bin/
+RUN mkdir /data && chown honeycomb:honeycomb /data
+USER honeycomb
+ENV HONEYCOMB_BIND=0.0.0.0:8080 HONEYCOMB_DATABASE=/data/honeycomb.db
+EXPOSE 8080
+ENTRYPOINT ["silicon-honeycomb-server"]

@@ -57,10 +57,10 @@ impl State {
     }
 }
 pub async fn database(path: &str) -> anyhow::Result<SqlitePool> {
-    if !path.starts_with("sqlite:") {
-        if let Some(parent) = Path::new(path).parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+    if !path.starts_with("sqlite:")
+        && let Some(parent) = Path::new(path).parent()
+    {
+        tokio::fs::create_dir_all(parent).await?;
     }
     let options = if path.starts_with("sqlite:") {
         SqliteConnectOptions::from_str(path)?

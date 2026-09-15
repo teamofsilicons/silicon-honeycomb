@@ -51,5 +51,6 @@ pub trait ArchiveStorage: Send + Sync {
         reference: &str,
         actor_token: &str,
         environment: Option<&str>,
-    ) -> Result<()>;
+        operation_id: &str,
+    ) -> Result<String>;
 }

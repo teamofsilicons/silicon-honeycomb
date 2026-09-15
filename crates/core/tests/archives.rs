@@ -99,3 +99,46 @@ fn rejects_symlinked_target_roots() {
     std::os::unix::fs::symlink("macos-aarch64", d.path().join("targets/linux-x86_64")).unwrap();
     assert!(!validate_dir(d.path()).valid);
 }
+
+#[cfg(unix)]
+#[test]
+fn rejects_linked_target_ancestors_and_destination() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let relocated = tempfile::tempdir().unwrap();
+    fs::rename(
+        root.path().join("targets"),
+        relocated.path().join("targets"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        relocated.path().join("targets"),
+        root.path().join("targets"),
+    )
+    .unwrap();
+    assert!(!validate_dir(root.path()).valid);
+    let source = tempfile::tempdir().unwrap();
+    fixture(source.path());
+    let archive = pack(source.path(), None).unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let link = root.path().join("extraction-link");
+    std::os::unix::fs::symlink(target.path(), &link).unwrap();
+    assert!(unpack(&archive, &link).is_err());
+    assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+}
+#[test]
+fn rejects_windows_device_names_and_nonportable_paths() {
+    for name in ["CON", "con.txt", "LPT9", "com2.exe"] {
+        assert!(!safe_command(name));
+    }
+    for path in [
+        "targets/a/con.txt",
+        "targets/a/name.",
+        "targets/a/name ",
+        "targets/a/what?",
+        "targets/a/b\n",
+    ] {
+        assert!(!safe_relative(path));
+    }
+    assert!(safe_relative("targets/linux-x86_64/bin/a tool"));
+}

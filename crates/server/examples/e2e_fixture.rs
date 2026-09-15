@@ -98,8 +98,8 @@ impl ArchiveStorage for FixtureStorage {
             .cloned()
             .ok_or_else(Error::missing)
     }
-    async fn publish(&self, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-        Ok(())
+    async fn publish(&self, reference: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+        Ok(reference.into())
     }
 }
 async fn fixture_login(Query(q): Query<BTreeMap<String, String>>) -> Result<Redirect> {

@@ -2336,6 +2336,8 @@ name = "silicon-honeycomb-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
+ "flate2",
  "hex",
  "reqwest",
  "semver",
@@ -2343,6 +2345,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "silicon-honeycomb-core",
+ "tar",
  "tempfile",
  "tokio",
  "url",

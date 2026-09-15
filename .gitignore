@@ -12,3 +12,5 @@ playwright-report/
 
 web/dist-server/
 web/data/
+/deploy/*.env
+/release-assets/

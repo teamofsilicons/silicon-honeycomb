@@ -77,6 +77,28 @@ test("console is gated and creates a private application through the backend", a
     .filter({ has: page.getByRole("heading", { name, exact: true }) });
   await expect(card).toContainText("private");
   await card.click();
+  await page
+    .getByRole("button", { name: "Edit configuration", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("Application name", { exact: true })
+    .fill(name + " updated");
+  await expect(
+    page.getByRole("dialog").getByLabel("Webhook signing secret"),
+  ).toHaveValue("");
+  await page
+    .getByRole("button", { name: "Save configuration", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: name + " updated", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button")
+    .filter({
+      has: page.getByRole("heading", { name: name + " updated", exact: true }),
+    })
+    .click();
   await page.getByRole("button", { name: "Releases & publication" }).click();
   await expect(
     page.getByRole("button", { name: "Request publication", exact: true }),

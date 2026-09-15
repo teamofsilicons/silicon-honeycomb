@@ -31,9 +31,7 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route(
             "/api/v1/apps/{id}/releases",
-            get(releases)
-                .post(upload_release)
-                .layer(archive_limit.clone()),
+            get(releases).post(upload_release).layer(archive_limit),
         )
         .route("/api/v1/apps/{id}/download", get(download))
         .route("/api/v1/apps/{id}/reviews", get(reviews).put(review))
@@ -182,12 +180,12 @@ pub(crate) async fn context(s: &State, h: &HeaderMap) -> Result<Context> {
         Some(t) => Some(s.identity.authenticate(t, environment.as_deref()).await?),
         None => None,
     };
-    if let Some(identity) = &identity {
-        if (plane == "production" && identity.testing_environment_id.is_some())
-            || (plane != "production" && identity.testing_environment_id.as_deref() != Some(&plane))
-        {
-            return Err(Error::unauthorized());
-        }
+    if let Some(identity) = &identity
+        && ((plane == "production" && identity.testing_environment_id.is_some())
+            || (plane != "production"
+                && identity.testing_environment_id.as_deref() != Some(&plane)))
+    {
+        return Err(Error::unauthorized());
     }
     Ok(Context {
         plane,
@@ -369,7 +367,7 @@ fn trigrams(s: &str) -> std::collections::BTreeSet<String> {
     let c: Vec<char> = s.chars().collect();
     c.windows(3).map(|w| w.iter().collect()).collect()
 }
-fn relevance(app: &App, q: &str) -> i64 {
+fn relevance(app: &App, q: &str, full_text: Option<f64>) -> i64 {
     if q.is_empty() {
         return 1;
     }
@@ -388,16 +386,25 @@ fn relevance(app: &App, q: &str) -> i64 {
     if name.contains(&q) || id.contains(&q) {
         return 70_000;
     }
+    let weighted = full_text.map(|rank| (-rank * 1000.0).clamp(1.0, 9999.0) as i64);
+    let words: Vec<&str> = q
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if let Some(rank) = weighted
+        && words
+            .iter()
+            .any(|word| name.split_whitespace().any(|part| part.starts_with(word)))
+    {
+        return 60_000 + rank;
+    }
     let a = trigrams(&name);
     let b = trigrams(&q);
     let similarity = 2.0 * a.intersection(&b).count() as f64 / (a.len() + b.len()).max(1) as f64;
     if similarity >= 0.25 {
         return 40_000 + (similarity * 1000.0) as i64;
     }
-    let words: Vec<&str> = q.split_whitespace().collect();
-    let description = app.description.to_lowercase();
-    let hits = words.iter().filter(|w| description.contains(**w)).count();
-    if hits > 0 { 10_000 + hits as i64 } else { 0 }
+    weighted.map(|rank| 10_000 + rank).unwrap_or(0)
 }
 async fn search(
     ExtractState(s): ExtractState<State>,
@@ -417,6 +424,28 @@ async fn search(
         .bind(&c.plane)
         .fetch_all(&s.db)
         .await?;
+    // FTS weights identity/name above description. Literal token construction prevents
+    // user query punctuation from becoming FTS operators or malformed syntax.
+    let query =
+        q.q.split(|ch: char| !ch.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(|word| format!("\"{word}\"*"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+    let mut ranks = std::collections::HashMap::new();
+    if !query.is_empty() {
+        let ranked = sqlx::query("SELECT app_id,variant,bm25(catalog_search,0.0,12.0,0.0,8.0,1.0) AS rank FROM catalog_search WHERE catalog_search MATCH ? AND plane=?")
+            .bind(query).bind(&c.plane).fetch_all(&s.db).await?;
+        for row in ranked {
+            ranks.insert(
+                (
+                    row.get::<String, _>("app_id"),
+                    row.get::<String, _>("variant"),
+                ),
+                row.get::<f64, _>("rank"),
+            );
+        }
+    }
     let mut matches = vec![];
     for row in rows {
         let org: String = row.get("org_id");
@@ -431,7 +460,16 @@ async fn search(
             continue;
         }
         let app = app_from(&row, admin)?;
-        let score = relevance(&app, q.q.trim());
+        let score = relevance(
+            &app,
+            q.q.trim(),
+            ranks
+                .get(&(
+                    app.app_id.clone(),
+                    if admin { "desired" } else { "effective" }.into(),
+                ))
+                .copied(),
+        );
         if score > 0 {
             matches.push((score, app));
         }
@@ -519,13 +557,13 @@ async fn create_app(
     h: HeaderMap,
     Json(input): Json<AppInput>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    save_app(&s, &h, input, None).await
+    save_app(&s, &h, input, None, None).await
 }
 async fn update_app(
     ExtractState(s): ExtractState<State>,
     h: HeaderMap,
     Path(id): Path<String>,
-    Json(input): Json<AppInput>,
+    Json(mut input): Json<AppInput>,
 ) -> Result<(StatusCode, Json<Value>)> {
     if id != input.app_id() {
         return Err(Error::bad(
@@ -533,20 +571,35 @@ async fn update_app(
         ));
     }
     let expected = revision(&h)?;
-    save_app(&s, &h, input, Some(expected)).await
+    let digest = hash(&json!({"kind":"configure","expected":expected,"input":input}));
+    if input.webhook_secret.is_empty() {
+        let c = context(&s, &h).await?;
+        find_app(&s, &c, &id, true).await?;
+        let encrypted: String = sqlx::query_scalar(
+            "SELECT webhook_secret FROM applications WHERE plane=? AND app_id=?",
+        )
+        .bind(&c.plane)
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await?;
+        input.webhook_secret = s.decrypt(&encrypted)?;
+    }
+    save_app(&s, &h, input, Some(expected), Some(digest)).await
 }
 async fn save_app(
     s: &State,
     h: &HeaderMap,
     input: AppInput,
     expected: Option<i64>,
+    request_digest: Option<String>,
 ) -> Result<(StatusCode, Json<Value>)> {
     validate_input(&input)?;
     let c = context(s, h).await?;
     let actor = c.admin(&input.org_id)?;
     let app_id = input.app_id();
     let k = key(h)?;
-    let digest = hash(&json!({"kind":"configure","expected":expected,"input":input}));
+    let digest = request_digest
+        .unwrap_or_else(|| hash(&json!({"kind":"configure","expected":expected,"input":input})));
     if let Some(o) = existing_operation(s, &c, k, &digest).await? {
         return Ok((StatusCode::ACCEPTED, Json(o)));
     }
@@ -805,7 +858,7 @@ async fn upload_release(
         sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(&op).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind("release").bind(&id).bind(digest).bind(app.revision).bind(now()).execute(&s.db).await?;
         op
     };
-    let reference = s
+    let mut reference = s
         .storage
         .put(
             &id,
@@ -817,11 +870,13 @@ async fn upload_release(
         )
         .await?;
     if app.visibility == "public" {
-        s.storage
+        reference = s
+            .storage
             .publish(
                 &reference,
                 c.token.as_deref().unwrap(),
                 c.environment.as_deref(),
+                &op,
             )
             .await?;
     }

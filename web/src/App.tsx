@@ -148,6 +148,7 @@ export default function App() {
   const [publication, setPublication] = createSignal<any>();
   const [showCreate, setShowCreate] = createSignal(false);
   const [form, setForm] = createSignal<Record<string, any>>(blank());
+  const editing = () => form().draft_edit_app_id as string | undefined;
   const [advanced, setAdvanced] = createSignal(false);
   const [scopeText, setScopeText] = createSignal(
     JSON.stringify(blank().app_scope, null, 2),
@@ -285,6 +286,17 @@ export default function App() {
     setDraftStatus(draft ? "Saved draft" : "");
     setShowCreate(true);
   }
+  function beginEdit(app: AppRecord) {
+    beginCreate({
+      org_id: app.org_id,
+      body: {
+        ...app.config,
+        draft_edit_app_id: app.app_id,
+        draft_edit_revision: app.revision,
+      },
+    });
+    setSelected(undefined);
+  }
   function edit(key: string, value: any) {
     setForm({ ...form(), [key]: value });
     scheduleSave();
@@ -344,21 +356,29 @@ export default function App() {
         app_scope: JSON.parse(scopeText()),
         obo_endpoints: JSON.parse(oboText()),
       };
-      delete payload.draft_scope_text;
-      delete payload.draft_obo_text;
+      for (const field of Object.keys(payload))
+        if (field.startsWith("draft_")) delete payload[field];
       for (const key of ["base_url", "website_url", "docs_url", "logo_url"])
         if (!payload[key]) payload[key] = null;
-      const result = await request("/api/v1/apps", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const result = await request(
+        editing() ? endpoint(editing()!) : "/api/v1/apps",
+        {
+          method: editing() ? "PUT" : "POST",
+          headers: editing()
+            ? { "If-Match": String(form().draft_edit_revision) }
+            : {},
+          body: JSON.stringify(payload),
+        },
+      );
       setShowCreate(false);
       saveGeneration++;
       clearTimeout(saveTimer);
       if (result.app_secret) setSecret(result.app_secret);
       setNotice(
         result.state === "accepted"
-          ? "Application created. Upload its first CLI release to continue."
+          ? editing()
+            ? "Application configuration updated."
+            : "Application created. Upload its first CLI release to continue."
           : "Application saved. IAM configuration is pending.",
       );
       await load();
@@ -1002,6 +1022,14 @@ export default function App() {
                   </span>
                 </div>
                 <p class="description">{app().description}</p>
+                <Show when={config().site === "console" && canManage(app())}>
+                  <button
+                    class="button outline"
+                    onClick={() => beginEdit(app())}
+                  >
+                    Edit configuration
+                  </button>
+                </Show>
                 <Show when={app().latest_version}>
                   <h3 class="section-label">INSTALL FROM YOUR TERMINAL</h3>
                   <Code text={`honeycomb install '${app().app_id}'`} />
@@ -1236,7 +1264,7 @@ export default function App() {
       </Dialog>
       <Dialog
         open={showCreate()}
-        title="Create an application"
+        title={editing() ? "Edit application" : "Create an application"}
         close={() => void closeCreate()}
       >
         <form class="application-form" onSubmit={createApp}>
@@ -1246,8 +1274,9 @@ export default function App() {
             </p>
           </Show>
           <p class="muted">
-            Start with a private home for your application. Your organization’s
-            admins can continue from this draft.
+            {editing()
+              ? "Changes take effect after IAM accepts them. Other organization admins can continue from this draft."
+              : "Start with a private home for your application. Your organization’s admins can continue from this draft."}
           </p>
           <div class="form-grid">
             <label>
@@ -1255,6 +1284,7 @@ export default function App() {
               <select
                 required
                 value={form().org_id}
+                disabled={!!editing()}
                 onChange={(e) => {
                   saveGeneration++;
                   setDraftId(crypto.randomUUID());
@@ -1273,6 +1303,7 @@ export default function App() {
                 required
                 pattern="[a-z0-9][a-z0-9-]{0,63}"
                 maxLength={64}
+                disabled={!!editing()}
                 placeholder="my-application"
                 value={form().local_app_id}
                 onInput={(e) => edit("local_app_id", e.currentTarget.value)}
@@ -1327,7 +1358,7 @@ export default function App() {
               <input
                 type="password"
                 autocomplete="new-password"
-                required
+                required={!editing()}
                 minLength={32}
                 maxLength={512}
                 value={form().webhook_secret}
@@ -1335,7 +1366,11 @@ export default function App() {
                   setForm({ ...form(), webhook_secret: e.currentTarget.value })
                 }
               />
-              <small>At least 32 characters. Not saved in drafts.</small>
+              <small>
+                {editing()
+                  ? "Leave blank to keep the current secret. New values need at least 32 characters."
+                  : "At least 32 characters. Not saved in drafts."}
+              </small>
             </label>
           </div>
           <fieldset>
@@ -1441,7 +1476,11 @@ export default function App() {
               class="button primary"
               disabled={busy() || !admins().length}
             >
-              {busy() ? "Saving…" : "Create private application"}
+              {busy()
+                ? "Saving…"
+                : editing()
+                  ? "Save configuration"
+                  : "Create private application"}
               <ArrowRight size={16} />
             </button>
           </div>

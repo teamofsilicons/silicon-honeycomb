@@ -36,10 +36,10 @@ pub fn install_archive(
         .targets
         .get(target)
         .with_context(|| format!("{} has no payload for {target}", m.app_id))?;
-    if let Some(p) = previous {
-        if p.app_id != m.app_id {
-            bail!("The existing installation belongs to a different application");
-        }
+    if let Some(p) = previous
+        && p.app_id != m.app_id
+    {
+        bail!("The existing installation belongs to a different application");
     }
     for name in aliases.keys() {
         if !m.bin.contains_key(name) {
@@ -71,16 +71,14 @@ pub fn install_archive(
             );
         }
         // Include commands already found elsewhere on PATH in collision detection.
-        if !owned {
-            if let Some(paths) = std::env::var_os("PATH") {
-                for p in std::env::split_paths(&paths) {
-                    let candidate = p.join(command);
-                    if candidate.exists() && candidate != destination {
-                        bail!(
-                            "Command collision: {} is already on PATH. Use --alias {original}=another-name",
-                            candidate.display()
-                        );
-                    }
+        if !owned && let Some(paths) = std::env::var_os("PATH") {
+            for p in std::env::split_paths(&paths) {
+                let candidate = p.join(command);
+                if candidate.exists() && candidate != destination {
+                    bail!(
+                        "Command collision: {} is already on PATH. Use --alias {original}=another-name",
+                        candidate.display()
+                    );
                 }
             }
         }

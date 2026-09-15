@@ -48,5 +48,9 @@ integration. No repository, crates, binaries or websites have been published.
 Still required before the full understanding is complete: provider/validator
 review decisions and IAM activation/reconciliation; protected app secret rotation;
 complete per-service testing lifecycle/import/migration/retention coordination;
-Postmark report/notification delivery; public Briefcase download link persistence;
-release distribution CI/deployment artifacts and actual live cross-service E2E.
+Postmark report/notification delivery; actual release publication/deployment and live cross-service E2E.
+
+Added since the frontend checkpoint: persisted public Briefcase download paths;
+weighted FTS5 plus trigram search; prebuilt binary updater; six-platform release
+candidate workflow; production container and HTTPS routing artifacts. Cargo source
+installation and both production container modes have been smoke-tested locally.

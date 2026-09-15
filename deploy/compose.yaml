@@ -1,0 +1,44 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    env_file: backend.env
+    volumes: [backend-data:/data]
+    restart: unless-stopped
+  library:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    env_file: library.env
+    environment:
+      HONEYCOMB_SITE: library
+      HONEYCOMB_API_URL: https://backend.honeycomb.teamofsilicons.com
+      WEB_ORIGIN: https://honeycomb.teamofsilicons.com
+    volumes: [library-data:/data]
+    restart: unless-stopped
+  console:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    env_file: console.env
+    environment:
+      HONEYCOMB_SITE: console
+      HONEYCOMB_API_URL: https://backend.honeycomb.teamofsilicons.com
+      WEB_ORIGIN: https://console.honeycomb.teamofsilicons.com
+    volumes: [console-data:/data]
+    restart: unless-stopped
+  proxy:
+    image: caddy:2
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+volumes:
+  backend-data:
+  library-data:
+  console-data:
+  caddy-data:
+  caddy-config:

@@ -96,8 +96,8 @@ impl ArchiveStorage for Store {
     async fn read(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
         Ok(vec![])
     }
-    async fn publish(&self, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-        Ok(())
+    async fn publish(&self, reference: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+        Ok(reference.into())
     }
 }
 async fn setup(accept: bool) -> (State, Arc<AtomicBool>) {
@@ -673,5 +673,88 @@ async fn logout_revokes_refresh_family_even_when_access_has_expired() {
     assert_eq!(
         *identity.0.lock().unwrap(),
         ["session-refresh", "expired-access"]
+    );
+}
+
+#[tokio::test]
+async fn weighted_search_prioritizes_names_over_description_and_tolerates_query_punctuation() {
+    let (s, _) = setup(true).await;
+    for (id, name, description) in [
+        (
+            "name-hit",
+            "Comet browser",
+            "A useful application for teams. ".repeat(12),
+        ),
+        (
+            "description-hit",
+            "Another tool",
+            "Comet browser helps organize applications for your team. ".repeat(8),
+        ),
+    ] {
+        let mut body = input(id);
+        body["name"] = json!(name);
+        body["description"] = json!(description);
+        assert_eq!(
+            call(
+                &s,
+                "POST",
+                "/api/v1/apps",
+                Some("admin"),
+                body,
+                &format!("search-create-{id}"),
+                None
+            )
+            .await
+            .0,
+            202
+        );
+    }
+    call(
+        &s,
+        "PUT",
+        "/api/v1/apps/tos%3Edescription-hit/reviews",
+        Some("member"),
+        json!({"rating":5.0,"review":"Excellent"}),
+        "search-rating-0001",
+        None,
+    )
+    .await;
+    let (status, result) = call(
+        &s,
+        "GET",
+        "/api/v1/apps?q=comet",
+        Some("member"),
+        Value::Null,
+        "unused-unused-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(result["total"], 2);
+    assert_eq!(result["items"][0]["app_id"], "tos>name-hit");
+    let (_, typo) = call(
+        &s,
+        "GET",
+        "/api/v1/apps?q=comte%20browser",
+        Some("member"),
+        Value::Null,
+        "unused-unused-0001",
+        None,
+    )
+    .await;
+    assert_eq!(typo["items"][0]["app_id"], "tos>name-hit");
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps?q=%22%20OR%20%2A%20%3A",
+            Some("member"),
+            Value::Null,
+            "unused-unused-0001",
+            None
+        )
+        .await
+        .0,
+        200
     );
 }

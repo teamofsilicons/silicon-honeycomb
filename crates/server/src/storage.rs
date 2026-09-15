@@ -155,20 +155,36 @@ impl ArchiveStorage for Briefcase {
         token: Option<&str>,
         environment: Option<&str>,
     ) -> Result<Vec<u8>> {
-        let token = token.ok_or_else(|| {
-            Error::unavailable(
-                "Anonymous Briefcase download link is not yet recorded for this release",
-            )
-        })?;
-        let (response, _) = self
-            .control(
+        let stored: Option<Value> = serde_json::from_str(reference).ok();
+        let response = if let Some(path) = stored.as_ref().and_then(|s| s["public_path"].as_str()) {
+            // Only a path on the configured Briefcase API is stored. No arbitrary fetch URL.
+            if !path.starts_with("/api/v1/public/") || path.contains("..") {
+                return Err(Error::unavailable("Invalid stored public archive path"));
+            }
+            self.http
+                .get(format!("{}{path}", self.base_url))
+                .send()
+                .await
+                .map_err(|_| Error::unavailable("Briefcase public download interrupted"))?
+        } else {
+            let token = token.ok_or_else(Error::unauthorized)?;
+            let entry = stored
+                .as_ref()
+                .and_then(|s| s["entry_id"].as_str())
+                .unwrap_or(reference);
+            self.control(
                 "briefcase.files.read",
                 "/api/v1/obo/files/read",
-                json!({"entry_id":reference,"download":true}),
+                json!({"entry_id":entry,"download":true}),
                 token,
                 environment,
             )
-            .await?;
+            .await?
+            .0
+        };
+        if !response.status().is_success() {
+            return Err(Error::unavailable("Briefcase could not serve this archive"));
+        }
         if response
             .content_length()
             .is_some_and(|n| n > honeycomb_core::package::MAX_ARCHIVE_BYTES)
@@ -189,8 +205,98 @@ impl ArchiveStorage for Briefcase {
         }
         Ok(data)
     }
-    async fn publish(&self, reference: &str, token: &str, environment: Option<&str>) -> Result<()> {
-        self.control("briefcase.link_access.update","/api/v1/obo/link-access",json!({"operation_id":uuid::Uuid::new_v4().to_string(),"entry_id":reference,"enabled":true}),token,environment).await?;
-        Ok(())
+    async fn publish(
+        &self,
+        reference: &str,
+        token: &str,
+        environment: Option<&str>,
+        operation_id: &str,
+    ) -> Result<String> {
+        let stored: Option<Value> = serde_json::from_str(reference).ok();
+        let entry = stored
+            .as_ref()
+            .and_then(|s| s["entry_id"].as_str())
+            .unwrap_or(reference);
+        // A stable operation UUID avoids repeated side effects after a lost link response.
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(format!("{operation_id}:publish:{entry}"));
+        let link_operation =
+            uuid::Uuid::from_slice(&digest[..16]).map_err(|e| anyhow::anyhow!(e))?;
+        let (response, _) = self
+            .control(
+                "briefcase.link_access.update",
+                "/api/v1/obo/link-access",
+                json!({"operation_id":link_operation,"entry_id":entry,"enabled":true}),
+                token,
+                environment,
+            )
+            .await?;
+        let link: Value = response
+            .json()
+            .await
+            .map_err(|_| Error::unavailable("Invalid Briefcase sharing response"))?;
+        public_reference(entry, &link, environment.is_some())
+    }
+}
+
+fn public_reference(entry: &str, link: &Value, testing: bool) -> Result<String> {
+    if link["effective"] != true {
+        return Err(Error::unavailable(
+            "Briefcase did not enable public archive access",
+        ));
+    }
+    let url = link["url"]
+        .as_str()
+        .and_then(|u| url::Url::parse(u).ok())
+        .ok_or_else(|| Error::unavailable("Briefcase returned no public archive URL"))?;
+    let path = url
+        .path()
+        .strip_prefix("/org/")
+        .filter(|p| !p.is_empty() && !p.contains(".."))
+        .ok_or_else(|| Error::unavailable("Briefcase public URL has an invalid path"))?;
+    let mut download = url::Url::parse("https://briefcase.invalid").unwrap();
+    download.set_path(&format!("/api/v1/public/{path}"));
+    download.query_pairs_mut().append_pair("view", "attachment");
+    let test_id = url
+        .query_pairs()
+        .find(|(key, _)| key == "test_environment")
+        .map(|(_, v)| v.into_owned());
+    if testing != test_id.is_some() {
+        return Err(Error::unavailable(
+            "Briefcase sharing response belongs to a different environment plane",
+        ));
+    }
+    if let Some(id) = test_id {
+        uuid::Uuid::parse_str(&id)
+            .map_err(|_| Error::unavailable("Invalid Briefcase test environment"))?;
+        download
+            .query_pairs_mut()
+            .append_pair("test_environment", &id);
+    }
+    Ok(json!({"entry_id":entry,"public_path":format!("{}?{}",download.path(),download.query().unwrap())}).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn public_download_uses_configured_backend_and_preserves_encoded_segments() {
+        let value:Value = serde_json::from_str(&public_reference("entry", &json!({"effective":true,"url":"https://briefcase.teamofsilicons.com/org/tos/apps/tos%3Ehoneycomb/public/package.tar.gz"}), false).unwrap()).unwrap();
+        assert_eq!(
+            value["public_path"],
+            "/api/v1/public/tos/apps/tos%3Ehoneycomb/public/package.tar.gz?view=attachment"
+        );
+        assert!(!value.to_string().contains("https:"));
+    }
+    #[test]
+    fn public_download_rejects_cross_plane_links() {
+        let link = json!({"effective":true,"url":"https://briefcase.teamofsilicons.com/org/tos/file?test_environment=12345678-1234-1234-1234-123456789abc"});
+        assert!(public_reference("entry", &link, false).is_err());
+        assert!(
+            public_reference("entry", &link, true)
+                .unwrap()
+                .contains("test_environment=")
+        );
+        assert!(public_reference("entry", &json!({"effective":false}), false).is_err());
     }
 }

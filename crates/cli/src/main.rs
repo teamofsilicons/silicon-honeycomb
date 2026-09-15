@@ -129,8 +129,12 @@ enum Command {
         command: Config,
     },
     /// Run the hourly update worker, including while no interactive commands run.
-    Daemon,
-    /// Check for and install the latest published Honeycomb CLI with Cargo.
+    Daemon {
+        /// Run one scheduled check and exit, honoring auto_update.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Check for and install the latest verified Honeycomb CLI binary.
     SelfUpdate,
     /// Register the per-user hourly update worker.
     Service {
@@ -435,13 +439,16 @@ async fn run() -> Result<()> {
     if matches!(cli.command, Command::SelfUpdate) {
         return self_update(&root, true).await;
     }
-    if matches!(cli.command, Command::Daemon) {
+    if let Command::Daemon { once } = cli.command {
         loop {
             let config: Settings = read(&root.join("config.json"))?;
-            if config.auto_update {
-                if let Err(e) = self_update(&root, false).await {
-                    eprintln!("Honeycomb update check: {e}");
-                }
+            if config.auto_update
+                && let Err(e) = self_update(&root, false).await
+            {
+                eprintln!("Honeycomb update check: {e}");
+            }
+            if once {
+                return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
@@ -472,16 +479,15 @@ async fn run() -> Result<()> {
             | Command::Uninstall { .. }
     ) && session.access_token.is_some()
         && session.expires_at <= now() + 30
+        && let Some(refresh) = &session.refresh_token
     {
-        if let Some(refresh) = &session.refresh_token {
-            let tokens = client.refresh(refresh, &mutation(&cli, None)?).await?;
-            session = Session {
-                access_token: tokens["access_token"].as_str().map(str::to_owned),
-                refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
-                expires_at: now() + tokens["expires_in"].as_i64().unwrap_or(0),
-            };
-            write_private(&session_path, &session)?;
-        }
+        let tokens = client.refresh(refresh, &mutation(&cli, None)?).await?;
+        session = Session {
+            access_token: tokens["access_token"].as_str().map(str::to_owned),
+            refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
+            expires_at: now() + tokens["expires_in"].as_i64().unwrap_or(0),
+        };
+        write_private(&session_path, &session)?;
     }
     if let Some(token) = &session.access_token {
         client = client.with_token(token);
@@ -697,15 +703,16 @@ async fn run() -> Result<()> {
             )?;
         }
         Command::Config { .. }
-        | Command::Daemon
+        | Command::Daemon { .. }
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
     }
     // Maintenance failures must not change the user's successful command result.
-    if settings.auto_update && now() - settings.last_update_check >= 3600 {
-        if let Err(e) = self_update(&root, false).await {
-            eprintln!("Update check deferred: {e}");
-        }
+    if settings.auto_update
+        && now() - settings.last_update_check >= 3600
+        && let Err(e) = self_update(&root, false).await
+    {
+        eprintln!("Update check deferred: {e}");
     }
     Ok(())
 }

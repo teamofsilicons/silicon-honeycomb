@@ -47,14 +47,26 @@ pub struct Validation {
 
 pub fn safe_relative(path: &str) -> bool {
     !path.is_empty()
-        && !path.contains(['\\', ':', '\0'])
+        && !path.contains(['\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
+        && !path.chars().any(char::is_control)
         && !path.starts_with('/')
-        && path
-            .split('/')
-            .all(|p| !p.is_empty() && p != "." && p != "..")
+        && path.split('/').all(|p| {
+            !p.is_empty()
+                && p != "."
+                && p != ".."
+                && !p.ends_with([' ', '.'])
+                && !windows_reserved(p)
+        })
         && Path::new(path)
             .components()
             .all(|c| matches!(c, Component::Normal(_)))
+}
+fn windows_reserved(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(stem.as_str(), "con" | "prn" | "aux" | "nul" | "clock$")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 pub fn safe_command(s: &str) -> bool {
     !s.is_empty()
@@ -63,7 +75,7 @@ pub fn safe_command(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
         && !s.ends_with('.')
-        && !["con", "prn", "aux", "nul", "com1", "lpt1"].contains(&s.to_lowercase().as_str())
+        && !windows_reserved(s)
 }
 
 pub fn validate_dir(root: &Path) -> Validation {
@@ -76,7 +88,11 @@ pub fn validate_dir(root: &Path) -> Validation {
             manifest: None,
         };
     }
-    let bytes = match fs::read(&manifest_path) {
+    let bytes = match fs::File::open(&manifest_path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }) {
         Ok(b) if b.len() <= 1024 * 1024 => b,
         Ok(_) => {
             return Validation {
@@ -141,6 +157,17 @@ pub fn validate_dir(root: &Path) -> Validation {
         if !safe_relative(&t.root) || !t.root.starts_with("targets/") {
             errors.push(format!(
                 "targets.{id}.root: expected a safe path below targets/"
+            ));
+            continue;
+        }
+        let mut ancestor = root.to_path_buf();
+        let has_link = t.root.split('/').any(|segment| {
+            ancestor.push(segment);
+            fs::symlink_metadata(&ancestor).is_ok_and(|m| m.file_type().is_symlink())
+        });
+        if has_link {
+            errors.push(format!(
+                "targets.{id}.root: symbolic links in target paths are forbidden"
             ));
             continue;
         }
@@ -214,6 +241,9 @@ pub fn validate_dir(root: &Path) -> Validation {
 pub fn unpack(archive: &Path, destination: &Path) -> Result<Manifest> {
     if fs::metadata(archive)?.len() > MAX_ARCHIVE_BYTES {
         bail!("archive exceeds 512 MiB compressed limit");
+    }
+    if fs::symlink_metadata(destination).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!("destination must not be a symbolic link");
     }
     fs::create_dir_all(destination)?;
     let mut tar = tar::Archive::new(GzDecoder::new(fs::File::open(archive)?));
@@ -289,8 +319,8 @@ pub fn validate(path: &Path) -> Validation {
     if path.is_dir() {
         return validate_dir(path);
     }
-    match tempfile::tempdir().and_then(|d| Ok((d, ()))) {
-        Ok((d, _)) => match unpack(path, d.path()) {
+    match tempfile::tempdir() {
+        Ok(d) => match unpack(path, d.path()) {
             Ok(m) => Validation {
                 valid: true,
                 errors: vec![],

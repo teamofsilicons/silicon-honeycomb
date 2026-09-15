@@ -105,9 +105,11 @@ impl IdentityProvider for Iam {
             return Err(Error::unauthorized());
         }
         let value = serde_json::to_value(&inspected).map_err(|e| anyhow::anyhow!(e))?;
-        if value["client_id"].as_str() != Some(&self.app_id)
-            && value["audience"].as_str() != Some(&self.app_id)
-        {
+        let audiences: Vec<&str> = [value["client_id"].as_str(), value["audience"].as_str()]
+            .into_iter()
+            .flatten()
+            .collect();
+        if audiences.is_empty() || audiences.iter().any(|audience| *audience != self.app_id) {
             return Err(Error::unauthorized());
         }
         let principal_id = inspected

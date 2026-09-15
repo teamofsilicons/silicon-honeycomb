@@ -1,0 +1,9 @@
+.git
+**/node_modules
+**/target
+**/dist
+**/dist-server
+**/data
+**/.env
+**/.env.*
+**/test-results

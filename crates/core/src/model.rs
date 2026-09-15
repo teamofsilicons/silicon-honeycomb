@@ -51,6 +51,8 @@ pub struct AppInput {
     #[serde(default)]
     pub base_url: Option<String>,
     pub webhook_url: String,
+    /// Empty on updates retains the existing secret; creation requires a new secret.
+    #[serde(default)]
     pub webhook_secret: String,
     #[serde(default)]
     pub webhook_scope: Vec<String>,
@@ -117,12 +119,12 @@ impl AppInput {
         if !self.obo_endpoints.is_empty() && self.base_url.is_none() {
             errors.push("base_url: required when exposing OBO endpoints".into());
         }
-        if let Some(base) = &self.base_url {
-            if url::Url::parse(base).is_ok_and(|u| u.origin().ascii_serialization() != *base) {
-                errors.push(
-                    "base_url: use a backend origin without a path, query or trailing slash".into(),
-                );
-            }
+        if let Some(base) = &self.base_url
+            && url::Url::parse(base).is_ok_and(|u| u.origin().ascii_serialization() != *base)
+        {
+            errors.push(
+                "base_url: use a backend origin without a path, query or trailing slash".into(),
+            );
         }
         let mut ids = std::collections::HashSet::new();
         for e in &self.obo_endpoints {
