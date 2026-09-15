@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 fail() { printf 'honeycomb installer: %s\n' "$*" >&2; exit 1; }
+printf 'Installing Honeycomb…\n'
 honeycomb_home="${SILICON_HOME:-${HOME:?HOME or SILICON_HOME must be set}}"
 honeycomb_dir="$honeycomb_home/.honeycomb/dir"
 honeycomb_bin="$honeycomb_dir/system/bin"
@@ -34,8 +35,9 @@ else
     *) fail 'Release URL must use HTTPS.' ;;
   esac
   honeycomb_archive="honeycomb-$honeycomb_target.tar.gz"
-  curl --proto "$honeycomb_protocol" -fsSL --retry 2 "$honeycomb_base/$honeycomb_archive" -o "$honeycomb_temp/$honeycomb_archive"
-  curl --proto "$honeycomb_protocol" -fsSL --retry 2 "$honeycomb_base/$honeycomb_archive.sha256" -o "$honeycomb_temp/checksum"
+  printf 'Downloading %s…\n' "$honeycomb_archive"
+  curl --proto "$honeycomb_protocol" -fL --progress-bar --connect-timeout 20 --max-time 600 --retry 2 "$honeycomb_base/$honeycomb_archive" -o "$honeycomb_temp/$honeycomb_archive"
+  curl --proto "$honeycomb_protocol" -fsSL --connect-timeout 20 --max-time 60 --retry 2 "$honeycomb_base/$honeycomb_archive.sha256" -o "$honeycomb_temp/checksum"
   honeycomb_expected="$(awk 'NR==1 {print $1}' "$honeycomb_temp/checksum")"
   [[ "$honeycomb_expected" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'Release checksum has an invalid format.'
   if command -v sha256sum >/dev/null; then
@@ -60,6 +62,34 @@ fi
 
 "$honeycomb_bin/honeycomb" --version
 "$honeycomb_bin/honeycomb" config env > "$honeycomb_dir/env"
+# The installer is a child process: startup files configure subsequent shells.
+# Quote paths as shell data, including spaces, apostrophes and dollar signs.
+printf -v honeycomb_env_quoted '%q' "$honeycomb_dir/env"
+honeycomb_shell_line="[ ! -f $honeycomb_env_quoted ] || . $honeycomb_env_quoted"
+honeycomb_shell_files=()
+if [ "${HONEYCOMB_NO_MODIFY_PATH:-0}" != 1 ]; then
+  case "${SHELL##*/}" in
+    zsh) honeycomb_shell_files=("${ZDOTDIR:-$HOME}/.zshrc") ;;
+    bash)
+      honeycomb_shell_files=("$HOME/.bashrc")
+      if [ -f "$HOME/.bash_profile" ]; then
+        honeycomb_shell_files+=("$HOME/.bash_profile")
+      elif [ -f "$HOME/.bash_login" ]; then
+        honeycomb_shell_files+=("$HOME/.bash_login")
+      else
+        honeycomb_shell_files+=("$HOME/.profile")
+      fi
+      ;;
+    sh|dash|ksh) honeycomb_shell_files=("$HOME/.profile") ;;
+  esac
+fi
+for honeycomb_shell_file in "${honeycomb_shell_files[@]}"; do
+  mkdir -p "$(dirname "$honeycomb_shell_file")"
+  if ! grep -Fqx -- "$honeycomb_shell_line" "$honeycomb_shell_file" 2>/dev/null; then
+    printf '\n# Honeycomb CLI\n%s\n' "$honeycomb_shell_line" >> "$honeycomb_shell_file"
+  fi
+  printf 'Shell configured: %s\n' "$honeycomb_shell_file"
+done
 if [ "${HONEYCOMB_NO_SERVICE:-0}" != 1 ]; then
   case "$(uname -s)" in
     Darwin)
@@ -71,4 +101,9 @@ if [ "${HONEYCOMB_NO_SERVICE:-0}" != 1 ]; then
       ;;
   esac
 fi
-printf '\nHoneycomb installed. Add it to your shell:\n  source "%s/env"\n\nThen run:\n  honeycomb --help\n  honeycomb login <slt>\n' "$honeycomb_dir"
+if [ "${#honeycomb_shell_files[@]}" -gt 0 ]; then
+  printf '\nHoneycomb installed and added to your shell. Open a new terminal,\nor activate it in this terminal now:\n  . %s\n' "$honeycomb_env_quoted"
+else
+  printf '\nHoneycomb installed. Add it to your shell PATH with:\n  . %s\n' "$honeycomb_env_quoted"
+fi
+printf '\nThen run:\n  honeycomb --help\n  honeycomb login <slt>\n'

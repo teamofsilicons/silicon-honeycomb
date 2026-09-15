@@ -50,12 +50,33 @@ def main():
             base = f'http://127.0.0.1:{server.server_port}'
             home = root / 'isolated home'
             home.mkdir()
-            env = dict(os.environ, SILICON_HOME=str(home), HONEYCOMB_RELEASE_BASE=base,
+            env = dict(os.environ, HOME=str(home), SILICON_HOME=str(home), SHELL='/bin/bash', HONEYCOMB_RELEASE_BASE=base,
                        HONEYCOMB_ALLOW_LOCAL='1', HONEYCOMB_NO_SERVICE='1')
+            env.pop('ZDOTDIR', None)
+            env.pop('HONEYCOMB_NO_MODIFY_PATH', None)
+            (home / '.bashrc').write_text('# existing shell configuration\n')
             # The exact curl -> bash invocation requested by the user, against a local fixture.
             run(['/bin/bash', '-c', f'/bin/bash -c "$(curl -fsSL {base}/install.sh)"'], env)
             installed = home / '.honeycomb/dir/system/bin/honeycomb'
             assert installed.is_file()
+            assert (home / '.bashrc').read_text().startswith('# existing shell configuration\n')
+            bashrc = (home / '.bashrc').read_text()
+            run(['/bin/bash', str(REPO / 'install.sh')], env)
+            assert (home / '.bashrc').read_text() == bashrc
+            assert run(['/bin/bash', '--noprofile', '--rcfile', str(home / '.bashrc'), '-ic', 'command -v honeycomb'], env).stdout.strip() == str(installed)
+            assert run(['/bin/bash', '-lc', 'command -v honeycomb'], env).stdout.strip() == str(installed)
+            if Path('/bin/zsh').exists():
+                zdot = home / 'zsh config'
+                zenv = dict(env, SHELL='/bin/zsh', ZDOTDIR=str(zdot))
+                run(['/bin/bash', str(REPO / 'install.sh')], zenv)
+                zshrc = (zdot / '.zshrc').read_text()
+                run(['/bin/bash', str(REPO / 'install.sh')], zenv)
+                assert (zdot / '.zshrc').read_text() == zshrc
+                assert run(['/bin/zsh', '-ic', 'command -v honeycomb'], zenv).stdout.strip() == str(installed)
+            untouched = home / 'no-shell-changes'
+            untouched.mkdir()
+            run(['/bin/bash', str(REPO / 'install.sh')], dict(env, HOME=str(untouched), HONEYCOMB_NO_MODIFY_PATH='1'))
+            assert not (untouched / '.bashrc').exists()
             assert run([str(installed), '--version'], env).stdout.startswith('honeycomb ')
             run([str(installed), 'config', 'set', 'auto_update', 'false'], env)
             status = json.loads(run([str(installed), 'login', 'status', '--json'], env).stdout)

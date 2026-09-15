@@ -137,7 +137,7 @@ export default function App() {
   const [config, setConfig] = createSignal<Config>({
     site: "library",
     libraryOrigin: "/",
-    consoleOrigin: "http://localhost:4174",
+    consoleOrigin: "https://console.honeycomb.teamofsilicons.com",
   });
   const [session, setSession] = createSignal<Session>({ authenticated: false });
   const [sessionReady, setSessionReady] = createSignal(false);
@@ -555,6 +555,11 @@ export default function App() {
             <span>{isConsole() ? "Console" : "Library"}</span>
           </div>
           <div class="topbar-actions">
+            <Show when={!isConsole()}>
+              <a class="button primary" href={config().consoleOrigin}>
+                Create an app <ArrowUpRight size={16} />
+              </a>
+            </Show>
             <button class="icon-button" aria-label="Telemetry settings" onClick={() => setShowSettings(true)}><Settings2 size={18} /></button>
             <Show
               when={session().authenticated}
@@ -640,6 +645,16 @@ export default function App() {
                 </section>
               }
             >
+              <Show when={!admins().length && isConsole()}>
+                <div class="banner notice" id="application-access-help" role="status">
+                  <span>
+                    {memberships().some(([, role]) => role == null) || !memberships().length
+                      ? "IAM hasn’t provided an organization owner or admin role. Honeycomb needs membership access from IAM before you can create applications. After that access is enabled, sign in again and approve it."
+                      : "Creating applications requires an organization owner or admin role. Ask an organization owner to update your access, then sign in again."}
+                  </span>
+                  <a class="text-link" href="/auth/login">Sign in again <ArrowRight size={16} /></a>
+                </div>
+              </Show>
               <Show when={view() === "review-requests"}>
                 <section class="page-heading"><div><span class="eyebrow">APPLICATION ACCESS</span><h1>Review requests.</h1><p>Review applications requesting your critical scopes. Honeycomb validation follows accepted provider decisions.</p></div></section>
                 <Show when={!reviewInbox().length}><p class="muted">There are no requests you can currently review. Provider reviews require current owner/admin access; Honeycomb validation requires explicit reviewer permission.</p></Show>
@@ -666,6 +681,7 @@ export default function App() {
                     <button
                       class="button primary"
                       disabled={!admins().length}
+                      aria-describedby={!admins().length ? "application-access-help" : undefined}
                       onClick={() => beginCreate()}
                     >
                       <Plus size={17} />

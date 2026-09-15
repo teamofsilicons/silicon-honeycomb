@@ -6,6 +6,46 @@ The current upstream source of truth is `silicon-iam/docs/HONEYCOMB_INTEGRATION.
 and its OpenAPI contract. This review supersedes the earlier assumption that IAM
 has no management API in `IAM-HANDOFF.md`.
 
+## Action list for the IAM rollout
+
+### Now: authenticated application creation
+
+1. Keep `self.identity.read` and `self.profile.read` effective on `tos>honeycomb`.
+   Add effective `self.membership.read`, then require renewed consent when users
+   sign in. Existing sessions must not gain undisclosed authority automatically.
+2. Ensure both organization-scoped and unscoped introspection disclose current
+   `owner` / `admin` / `member` roles with that membership grant and consent.
+   Check `iam_private.list_current_application_authorizations`: its last inspected
+   definition checks retired `roles.read` (details below). Missing disclosure
+   correctly keeps Honeycomb's Create application button disabled.
+3. Exercise a real owner/admin actor through private application creation with
+   the existing Honeycomb management service credential. Confirm that members,
+   revoked memberships and service-only requests cannot perform that mutation.
+   The management service credential is already provisioned; no replacement is
+   needed merely to add the membership scope.
+4. Configure queued management notifications to the now-live receiver at
+   `https://backend.honeycomb.teamofsilicons.com/management/webhook/`, using the
+   existing independent management notification signing key. Verify signed
+   delivery, retry and authoritative revision reconciliation.
+
+### After Briefcase setup
+
+Add external scopes on provider `tos>briefcase`: `briefcase.uploads.reserve`,
+`briefcase.uploads.commit`, `briefcase.files.read`, and
+`briefcase.link_access.update`. Obtain the required provider approval and user
+consent. These support logo/archive storage and public links; they are deferred
+and are not the cause of the disabled application-creation button.
+
+### Remaining IAM contract implementation
+
+The table below gives the exact gaps: app-owned test environments and credentials;
+Honeycomb-generated shared keys; additive imports into ready environments;
+isolated test-app administration; immutable review plans and current reviewer
+authority; publication activation receipts; authoritative webhook destinations;
+scoped notification recipients; lifecycle receipts and service-authorized
+retention; legacy adoption; and test webhook metadata. Keep legacy writers and
+scheduled testing cutovers disabled until their replacement flows pass live E2E.
+
 ## Available and wired locally
 
 - Official `honeycomb::ManagementClient`, separate random `hck_` service credential,

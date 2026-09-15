@@ -3,6 +3,35 @@ const logoPng = readFileSync(new URL("./fixtures/logo.png", import.meta.url));
 import { test, expect } from "@playwright/test";
 const library = "http://localhost:19173",
   consoleSite = "http://localhost:19174";
+test("library header opens the console", async ({ page }) => {
+  await page.goto(library);
+  const link = page.locator(".topbar").getByRole("link", { name: "Create an app" });
+  await expect(link).toHaveAttribute("href", consoleSite);
+  await link.click();
+  await expect(page.getByRole("heading", { name: /Your next application/ })).toBeVisible();
+});
+for (const role of [null, "org_member", "org_owner"]) {
+  test(`console explains creation access for ${role ?? "undisclosed"} role`, async ({ page }) => {
+    await page.route("**/api/session", route => route.fulfill({ json: {
+      authenticated: true,
+      identity: { principal_id: "fixture-access", organizations: { tos: role } },
+    } }));
+    await page.goto(consoleSite);
+    const create = page.getByRole("button", { name: "Create application", exact: true }).first();
+    if (role === "org_owner") {
+      await expect(create).toBeEnabled();
+      await expect(page.locator("#application-access-help")).toHaveCount(0);
+    } else {
+      await expect(create).toBeDisabled();
+      await expect(create).toHaveAttribute("aria-describedby", "application-access-help");
+      await expect(page.locator("#application-access-help")).toContainText(
+        role === null ? "Honeycomb needs membership access" : "Ask an organization owner",
+      );
+      await expect(page.locator("#application-access-help").getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/auth/login");
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+}
 test("public catalog, typo search, private visibility, sign-in and sign-out", async ({
   page,
 }) => {

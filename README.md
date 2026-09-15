@@ -72,6 +72,11 @@ honeycomb service install
 ```
 
 The shell installer uses prebuilt macOS/Linux binaries and SHA-256 verification.
+It adds Honeycomb to Bash and Zsh startup files automatically (including a custom
+`ZDOTDIR`). Open a new terminal after installation, or run the printed activation
+command in your existing terminal. Set `HONEYCOMB_NO_MODIFY_PATH=1` to manage
+your shell configuration yourself. Downloads display progress and time out with
+an error instead of waiting indefinitely.
 Cargo and release binaries also support Windows. The hourly worker checks for
 verified vendor releases, honors `config set auto_update false`, and works without
 a Rust toolchain. `honeycomb daemon --once` runs one scheduled check. The stateless

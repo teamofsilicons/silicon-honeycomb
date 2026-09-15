@@ -1043,6 +1043,12 @@ textarea {
   .breadcrumb {
     gap: 11px;
   }
+  .breadcrumb > span {
+    display: none;
+  }
+  .topbar-actions {
+    gap: 8px;
+  }
   .account {
     display: none;
   }
