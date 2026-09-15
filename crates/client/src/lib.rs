@@ -393,6 +393,10 @@ impl Client {
         )
         .await
     }
+    pub async fn reconcile_app(&self, id: &str, m: &Mutation) -> Result<Value> {
+        self.mutate(Method::POST, &["apps", id, "reconciliation"], &json!({}), m)
+            .await
+    }
     pub async fn activate_publication(&self, id: &str, m: &Mutation) -> Result<Value> {
         self.mutate(
             Method::POST,

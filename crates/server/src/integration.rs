@@ -43,7 +43,7 @@ pub trait Management: Send + Sync {
             "IAM protected operation recovery is not yet available",
         ))
     }
-    /// IAM derives critical scope gates from its current catalog and eligibility rules.
+    /// IAM atomically accepts a reviewed public configuration.
     async fn activate_publication(
         &self,
         _operation: &Value,
@@ -64,6 +64,17 @@ pub trait Management: Send + Sync {
             "IAM protected application reconciliation is not yet available",
         ))
     }
+    /// Read-only service authority for notification reconciliation; never grants a mutation.
+    async fn application_snapshot(
+        &self,
+        _app_id: &str,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM protected notification reconciliation is not yet available",
+        ))
+    }
+    /// IAM derives critical scope gates from its current catalog and eligibility rules.
     async fn publication_plan(
         &self,
         _request: &Value,

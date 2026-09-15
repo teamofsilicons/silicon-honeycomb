@@ -149,6 +149,7 @@ export default function App() {
   const [reviewDecision, setReviewDecision] = createSignal("approve");
   const [reviewReason, setReviewReason] = createSignal("");
   const [reviews, setReviews] = createSignal<any[]>([]);
+  const [reconciliation, setReconciliation] = createSignal<any>();
   const [appOperations, setAppOperations] = createSignal<any[]>([]);
   const [rotationConfirmation, setRotationConfirmation] = createSignal("");
   const [publication, setPublication] = createSignal<any>();
@@ -275,6 +276,7 @@ export default function App() {
     setReviews([]);
     setPublication(undefined);
     setAppOperations([]);
+    setReconciliation(undefined);
     setRotationConfirmation("");
     await act(async () => {
       setSelected(await request<AppRecord>(endpoint(app.app_id)));
@@ -282,6 +284,7 @@ export default function App() {
       if (canManage(app)) {
         setPublication(await request(endpoint(app.app_id) + "/publication"));
         setAppOperations((await request(endpoint(app.app_id) + "/operations")).items);
+        setReconciliation(await request(endpoint(app.app_id) + "/reconciliation"));
       }
     });
   }
@@ -1223,6 +1226,14 @@ export default function App() {
                 </Show>
               </Show>
               <Show when={detailsTab() === "access"}>
+                <h3>IAM synchronization</h3>
+                <p class="muted">Refresh the accepted configuration after an IAM change.</p>
+                <Show when={reconciliation()?.state !== "idle"}><p role="status">Synchronization {reconciliation()?.state}<Show when={reconciliation()?.error}> · {reconciliation()?.error}</Show></p></Show>
+                <button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{
+                  setReconciliation(await request(endpoint(app().app_id)+"/reconciliation",{method:"POST",body:"{}"}));
+                  setSelected(await request(endpoint(app().app_id)));await load();
+                })}>Refresh IAM state</button>
+                <div class="section-divider" />
                 <h3>Application access</h3>
                 <p class="muted">Requested revision {app().revision} · Effective revision {app().effective_revision}. IAM accepts scopes before they take effect.</p>
                 <details><summary>Requested scopes</summary><Code text={JSON.stringify(app().config.app_scope || {}, null, 2)} /></details>

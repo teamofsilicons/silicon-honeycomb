@@ -298,3 +298,32 @@ the protected accepted-state API. It must return `app_id`,
 and `effective_configuration`. Missing, superseded or revoked publication state
 must not be treated as public. Later revocation notifications still require
 reconciliation; this final read only protects the activation transaction.
+
+### Signed management notification projection
+
+Honeycomb's proposed event is `honeycomb.application.changed.v1`. Keep the current
+SDK envelope: `aggregate.type = application`, `aggregate.id` is IAM's internal UUID,
+`aggregate.version` is the positive IAM resource revision, and `data.app_id` is the
+canonical `org>local` identifier. The current SDK rejects a non-UUID aggregate ID.
+The signed test envelope additionally contains environment_id and generation.
+
+Honeycomb records only event ID, plane, resource and revision. A newer notification
+immediately removes anonymous catalog visibility and queues an authoritative read;
+it never applies a security grant from event data. The service-only read method
+`application_snapshot` needs app_id, iam_revision, configuration_revision,
+visibility, availability (`active`/`disabled`), effective_configuration and
+publication_request_id. This read-only service capability needs no fabricated user
+token. It must be scoped to Honeycomb-managed applications and the exact test plane.
+The previous activation read remains actor-bound. Public visibility resumes only
+when a completed local publication also matches. Duplicate/older events are ignored;
+failed reads remain pending with bounded retry cadence and an administrator retry.
+
+This notification name and management read are proposed, not present-day IAM APIs.
+
+SDK 1.9.0 currently rejects additional direct `test.metadata` fields via
+`deny_unknown_fields`, including the understanding's environment_id/generation.
+Please add these fields to the official verifier's test metadata contract. Until
+then, the compatible signed projection places both under `test.metadata.aggregate`;
+Honeycomb accepts that placement after normal SDK verification. No raw-body
+normalization or signature-verification bypass is used. Root keys must remain
+exactly 32 alphanumeric characters. Both wrong keys and stale generations fail.

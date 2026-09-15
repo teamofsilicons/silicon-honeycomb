@@ -2401,3 +2401,273 @@ async fn publication_rejects_wrong_receipts_and_rechecks_current_iam_visibility(
     assert_eq!(done["state"], "accepted");
     assert_eq!(storage.calls.lock().unwrap()["fixture-release"], 1);
 }
+
+struct SnapshotManager(std::sync::Mutex<Value>);
+#[async_trait]
+impl Management for SnapshotManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        unreachable!()
+    }
+    async fn application_snapshot(&self, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+async fn signed_event(s: &State, event: &Value, valid: bool) -> (StatusCode, Value) {
+    use hmac::{Hmac, Mac};
+    let body = event.to_string();
+    let timestamp = silicon_honeycomb_server::now().to_string();
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(s.webhook_secret.as_bytes()).unwrap();
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(body.as_bytes());
+    let signature = if valid {
+        hex::encode(mac.finalize().into_bytes())
+    } else {
+        "00".repeat(32)
+    };
+    let request = Request::builder()
+        .method("POST")
+        .uri("/webhook/")
+        .header("content-type", "application/json")
+        .header(
+            "x-silicon-iam-event-id",
+            event["event_id"]
+                .as_str()
+                .or_else(|| event["test"]["metadata"]["event_id"].as_str())
+                .unwrap(),
+        )
+        .header("x-silicon-iam-timestamp", timestamp)
+        .header("x-silicon-iam-key-version", "1")
+        .header("x-silicon-iam-signature", format!("v1={signature}"))
+        .body(Body::from(body))
+        .unwrap();
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    (
+        status,
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap(),
+    )
+}
+fn management_event(revision: i64) -> Value {
+    json!({"spec_version":"1.0","event_id":uuid::Uuid::new_v4(),"event_type":"honeycomb.application.changed.v1","occurred_at":"2026-09-16T00:00:00Z","organization_id":null,"aggregate":{"type":"application","id":"00000000-0000-0000-0000-000000000001","version":revision},"data":{"app_id":"tos>reconcile"}})
+}
+#[tokio::test]
+async fn signed_management_events_reconcile_revocation_without_stale_or_unpublished_grants() {
+    use silicon_honeycomb_server::reconciliation;
+    let (mut s, _) = setup(true).await;
+    s.webhook_secret = "test-webhook-signing-secret-000000000000000".into();
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("reconcile"),
+        "reconcile-create-0001",
+        None,
+    )
+    .await;
+    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='tos>reconcile'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let config: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let snapshot = json!({"app_id":"tos>reconcile","iam_revision":3,"configuration_revision":1,"visibility":"private","availability":"disabled","effective_configuration":config});
+    let manager = Arc::new(SnapshotManager(std::sync::Mutex::new(snapshot)));
+    s.management = manager.clone();
+    let event = management_event(3);
+    assert_eq!(
+        signed_event(&s, &event, false).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereconcile",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, receipt) = signed_event(&s, &event, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(signed_event(&s, &event, true).await.1["duplicate"], true);
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereconcile",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    reconciliation::reconcile(&s, "production", "tos>reconcile")
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereconcile",
+            Some("member"),
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereconcile",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(app["state"], "disabled");
+    assert_eq!(app["iam_revision"], 3);
+    signed_event(&s, &management_event(2), true).await;
+    let queued: String = sqlx::query_scalar("SELECT state FROM application_reconciliation")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(queued, "accepted");
+    signed_event(&s, &management_event(5), true).await;
+    assert!(
+        reconciliation::reconcile(&s, "production", "tos>reconcile")
+            .await
+            .is_err()
+    );
+    {
+        let mut snapshot = manager.0.lock().unwrap();
+        snapshot["iam_revision"] = json!(5);
+        snapshot["visibility"] = json!("public");
+        snapshot["availability"] = json!("active");
+        snapshot["effective_configuration"]["app_secret"] = json!("never-save-this");
+    }
+    reconciliation::reconcile(&s, "production", "tos>reconcile")
+        .await
+        .unwrap();
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereconcile",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(
+        app["visibility"], "private",
+        "IAM cannot bypass Honeycomb's archive/publication gate"
+    );
+    assert_eq!(app["iam_revision"], 5);
+    assert!(!app.to_string().contains("never-save-this"));
+    // A genuinely completed local publication may be restored by a newer accepted state.
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,created_at) VALUES('published-operation','production','admin','published-operation-key','publication.activate','tos>reconcile','test',1,'accepted',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,activation_operation) VALUES('published-request','production','tos>reconcile',1,'published','admin',1,'published-operation')").execute(&s.db).await.unwrap();
+    {
+        let mut snapshot = manager.0.lock().unwrap();
+        snapshot["iam_revision"] = json!(6);
+        snapshot["publication_request_id"] = json!("published-request");
+    }
+    signed_event(&s, &management_event(6), true).await;
+    reconciliation::reconcile(&s, "production", "tos>reconcile")
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereconcile",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn management_notifications_remain_in_their_signed_testing_generation() {
+    let (mut s, _) = setup(true).await;
+    s.webhook_secret = "test-webhook-signing-secret-000000000000000".into();
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("reconcile"),
+        "test-event-create-0001",
+        None,
+    )
+    .await;
+    let root = "Abcdefgh123456789012345678901234";
+    sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,generation,created_at,last_activity) VALUES('test-events','tos','admin','Events','',?,'unused-test-event-hash','ready',2,1,1)")
+        .bind(s.encrypt(root).unwrap()).execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,visibility,state,created_at,updated_at) SELECT 'test-events',app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,'public',state,created_at,updated_at FROM applications WHERE plane='production' AND app_id='tos>reconcile'").execute(&s.db).await.unwrap();
+    let mut metadata = management_event(2);
+    metadata.as_object_mut().unwrap().remove("data");
+    metadata["aggregate"]["environment_id"] = json!("test-events");
+    metadata["aggregate"]["generation"] = json!(1);
+    let mut event =
+        json!({"test":{"testing_key":root,"metadata":metadata,"data":{"app_id":"tos>reconcile"}}});
+    assert_eq!(signed_event(&s, &event, true).await.0, StatusCode::CONFLICT);
+    event["test"]["metadata"]["aggregate"]["generation"] = json!(2);
+    let (status, body) = signed_event(&s, &event, true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plane: String = sqlx::query_scalar("SELECT plane FROM application_reconciliation")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(plane, "test-events");
+    let production: i64 = sqlx::query_scalar(
+        "SELECT iam_revision FROM applications WHERE plane='production' AND app_id='tos>reconcile'",
+    )
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(production, 1);
+    let resource: String = sqlx::query_scalar("SELECT resource FROM webhook_events")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(resource, "tos>reconcile");
+    assert!(!resource.contains(root));
+    event["test"]["testing_key"] = json!("Bbcdefgh123456789012345678901234");
+    assert_eq!(
+        signed_event(&s, &event, true).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}

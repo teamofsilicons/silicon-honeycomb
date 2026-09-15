@@ -45,7 +45,7 @@ against the isolated backend fixture, curl/bash installer checks, and desktop an
 mobile browser journeys. These fixtures are not evidence of live IAM or Briefcase
 integration. No repository, crates, binaries or websites have been published.
 
-Still required before the full understanding is complete: IAM reconciliation and live activation/provider/validator integration; live protected app secret rotation;
+Still required before the full understanding is complete: live IAM reconciliation/activation/provider/validator integration; live protected app secret rotation;
 complete per-service testing lifecycle/import/migration/retention coordination;
 live Postmark delivery and IAM recipient discovery; actual release publication/deployment and live cross-service E2E.
 
@@ -121,3 +121,17 @@ production web build, and all 22 desktop/mobile browser journeys pass. Browser
 coverage includes archive upload, independent validator approval, console activation
 and anonymous library discovery. These use explicit IAM/storage doubles; live
 management activation, real archive sharing and deployment remain unverified.
+
+Signed management notifications now queue durable accepted-state reconciliation.
+Newer events suspend anonymous visibility until the protected read confirms current
+state and a completed Honeycomb publication. Duplicate/stale events cannot restore
+access; disabled apps cannot be downloaded. A retry worker and CLI/console refresh
+expose pending reads. SDK signature verification and test key/generation isolation
+remain mandatory; the SDK test-metadata incompatibility is in IAM-HANDOFF.md.
+
+Reconciliation checkpoint: 28 backend API cases pass, including signed tampering,
+stale/repeated events, revocation, publication gating, test-plane isolation and old
+generation rejection. Full workspace tests, strict Clippy, CLI journey, web build
+and 22 browser journeys passed; the four affected browser cases were rerun after
+adding synchronization UI and isolated CLI homes. Live management reads still
+require the future IAM service API.

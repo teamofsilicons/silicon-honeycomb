@@ -315,6 +315,13 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
     if !held {
         return Err(Error::conflict("Publication coordinator lease changed"));
     }
+    let newer: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM application_reconciliation WHERE plane=? AND app_id=? AND target_revision>?)")
+        .bind(&c.plane).bind(app).bind(iam).fetch_one(&mut *tx).await?;
+    if newer {
+        return Err(Error::conflict(
+            "A newer IAM notification must be reconciled before publication",
+        ));
+    }
     let updated=sqlx::query("UPDATE applications SET visibility='public',state='active',effective_config=?,effective_revision=?,iam_revision=?,updated_at=? WHERE plane=? AND app_id=? AND revision=? AND iam_revision<=?")
         .bind(effective.to_string()).bind(revision).bind(iam).bind(now()).bind(&c.plane).bind(app).bind(revision).bind(iam).execute(&mut *tx).await?;
     if updated.rows_affected() != 1 {

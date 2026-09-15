@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         state.clone(),
         mailer,
     ));
+    tokio::spawn(silicon_honeycomb_server::reconciliation::run(state.clone()));
     let app = silicon_honeycomb_server::api::router(state).layer(cors);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(address=%bind,"Honeycomb listening");

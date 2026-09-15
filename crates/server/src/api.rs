@@ -53,6 +53,10 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route("/api/v1/apps/{id}/operations", get(app_operations))
         .route(
+            "/api/v1/apps/{id}/reconciliation",
+            get(super::reconciliation::status).post(super::reconciliation::refresh),
+        )
+        .route(
             "/api/v1/apps/{id}/releases",
             get(releases).post(upload_release).layer(archive_limit),
         )
@@ -371,7 +375,9 @@ pub(crate) async fn find_app(s: &State, c: &Context, id: &str, manage: bool) -> 
     } else if !(row.get::<String, _>("visibility") == "public" || c.member(&org)) {
         return Err(Error::missing());
     }
-    if !admin && row.get::<i64, _>("iam_revision") == 0 {
+    if !admin
+        && (row.get::<i64, _>("iam_revision") == 0 || row.get::<String, _>("state") == "disabled")
+    {
         return Err(Error::missing());
     }
     let mut app = app_from(&row, admin)?;
@@ -497,7 +503,10 @@ async fn search(
         if row.get::<String, _>("visibility") != "public" && !c.member(&org) {
             continue;
         }
-        if row.get::<i64, _>("iam_revision") == 0 && !admin {
+        if !admin
+            && (row.get::<i64, _>("iam_revision") == 0
+                || row.get::<String, _>("state") == "disabled")
+        {
             continue;
         }
         let app = app_from(&row, admin)?;
@@ -1032,8 +1041,10 @@ async fn download(
 ) -> Result<Response> {
     let c = context(&s, &h).await?;
     let app = find_app(&s, &c, &id, false).await?;
-    if app.iam_revision == 0 {
-        return Err(Error::conflict("Application is awaiting IAM activation"));
+    if app.iam_revision == 0 || app.state == "disabled" {
+        return Err(Error::conflict(
+            "Application is awaiting IAM activation or is disabled",
+        ));
     }
     let version = q
         .version

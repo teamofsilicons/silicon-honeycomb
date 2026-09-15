@@ -150,6 +150,10 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum Apps {
+    /// Refresh accepted IAM state and retry notification reconciliation.
+    Reconcile {
+        app_id: String,
+    },
     /// Replace an application's secret through IAM. Save the one-time result securely.
     RotateSecret {
         app_id: String,
@@ -630,6 +634,9 @@ async fn run() -> Result<()> {
                         )
                         .await?,
                 )?;
+            }
+            Apps::Reconcile { app_id } => {
+                show(&client.reconcile_app(app_id, &mutation(&cli, None)?).await?)?
             }
             Apps::List { page } => show(&client.search("", *page, true).await?)?,
             Apps::Get { app_id } => show(&client.app(app_id).await?)?,

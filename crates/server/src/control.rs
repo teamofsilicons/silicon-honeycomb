@@ -322,8 +322,10 @@ pub async fn webhook(S(s): S<State>, h: HeaderMap, body: axum::body::Bytes) -> R
         let raw: Value =
             serde_json::from_slice(&body).map_err(|_| Error::bad("Invalid webhook body"))?;
         let metadata = &raw["test"]["metadata"];
+        // SDK 1.9 accepts additional aggregate fields but rejects extra metadata fields.
         let id = metadata["environment_id"]
             .as_str()
+            .or_else(|| metadata["aggregate"]["environment_id"].as_str())
             .ok_or_else(|| Error::bad("Test webhook requires environment_id"))?;
         let row = sqlx::query("SELECT encrypted_key,generation,state FROM environments WHERE id=?")
             .bind(id)
@@ -335,7 +337,10 @@ pub async fn webhook(S(s): S<State>, h: HeaderMap, body: axum::body::Bytes) -> R
         verified
             .verify_testing_environment(&expected)
             .map_err(|_| Error::unauthorized())?;
-        if metadata["generation"].as_i64() != Some(row.get("generation"))
+        if metadata["generation"]
+            .as_i64()
+            .or_else(|| metadata["aggregate"]["generation"].as_i64())
+            != Some(row.get("generation"))
             || row.get::<String, _>("state") != "ready"
         {
             return Err(Error::conflict(
@@ -346,12 +351,7 @@ pub async fn webhook(S(s): S<State>, h: HeaderMap, body: axum::body::Bytes) -> R
     } else {
         "production".into()
     };
-    let resource = event["resource_id"].as_str().unwrap_or("iam");
-    let rev = event["resource_revision"].as_i64().unwrap_or(0);
-    let inserted=sqlx::query("INSERT OR IGNORE INTO webhook_events(plane,id,resource,revision,created_at) VALUES(?,?,?,?,?)").bind(plane).bind(verified.event_id().to_string()).bind(resource).bind(rev).bind(now()).execute(&s.db).await?;
-    // Authentication is introspected live, so ordinary logout/removal notifications do not leave cached grants.
-    // Management event application is blocked until IAM defines its accepted configuration payload.
-    Ok(Json(
-        json!({"received":true,"duplicate":inserted.rows_affected()==0}),
-    ))
+    let inserted = crate::reconciliation::receive(&s, &plane, &event).await?;
+    // Authentication is introspected live; no cached membership grant survives logout.
+    Ok(Json(json!({"received":true,"duplicate":!inserted})))
 }

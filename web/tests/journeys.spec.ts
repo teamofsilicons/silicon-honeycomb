@@ -276,6 +276,9 @@ test("secret rotation is explicit and browser retries preserve the same operatio
   await page.getByRole("heading", { name, exact: true }).click();
   const dialog=page.getByRole("dialog");
   await dialog.getByRole("button", { name: "Access & secrets", exact: true }).click();
+  await dialog.getByRole("button", { name: "Refresh IAM state", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("Synchronization pending");
+  await expect(dialog.getByRole("status")).toContainText("not yet available");
   await expect(dialog.getByRole("button", { name: "Rotate application secret", exact: true })).toBeDisabled();
   await dialog.getByLabel("Type the application ID to rotate its secret").fill(appId);
   await dialog.getByRole("button", { name: "Rotate application secret", exact: true }).click();
@@ -311,7 +314,9 @@ test("provider administrators can discuss and approve their review gate", async 
 test("console uploads and activates an approved release visible in the anonymous library", async ({ page, request }, info) => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
-  const { join, resolve } = await import("node:path");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const cliPath = fileURLToPath(new URL("../../target/debug/honeycomb", import.meta.url));
   const { execFileSync } = await import("node:child_process");
   const root = mkdtempSync(join(tmpdir(), "honeycomb-browser-release-"));
   const handle = `release-${info.project.name}-${Date.now()}`;
@@ -335,7 +340,9 @@ test("console uploads and activates an approved release visible in the anonymous
     }
     writeFileSync(join(root, "honeycomb.yaml"), JSON.stringify({ format_version: 1, app_id: appId, version: "1.0.0", bin: { greet: "app" }, targets }));
     const archive = join(root, "release.tar.gz");
-    execFileSync(resolve("../target/debug/honeycomb"), ["pack", root, "--output", archive]);
+    const cliEnv = { ...process.env, SILICON_HOME: join(root, "isolated-cli-home") };
+    execFileSync(cliPath, ["config", "set", "auto_update", "false"], { env: cliEnv });
+    execFileSync(cliPath, ["pack", root, "--output", archive], { env: cliEnv });
     await page.reload();
     await page.getByRole("heading", { name, exact: true }).click();
     await page.getByRole("button", { name: "Releases & publication" }).click();
