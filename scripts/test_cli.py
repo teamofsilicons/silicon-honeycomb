@@ -32,7 +32,7 @@ def main():
             else:
                 raise AssertionError('Fixture did not start')
             homes = {}
-            for role in ['owner', 'member', 'outsider', 'anonymous']:
+            for role in ['owner', 'member', 'outsider', 'validator', 'anonymous']:
                 home = root / role
                 home.mkdir()
                 homes[role] = dict(os.environ, SILICON_HOME=str(home), HONEYCOMB_API_URL=api)
@@ -104,6 +104,15 @@ def main():
             request = run('publication', 'request', app_id, '--message', 'Please review this working release.', '--revision', '1')
             assert request
             assert run('apps', 'get', app_id, role='member')['visibility'] == 'private'
+            run('publication', 'decide', request['id'], 'honeycomb', 'approve', '--revision', '1', role='validator')
+            published = run('publication', 'activate', request['id'], '--revision', '1')
+            assert published['state'] == 'accepted'
+            assert run('apps', 'get', app_id, role='anonymous')['visibility'] == 'public'
+            public_install = run('install', app_id, role='anonymous')
+            assert public_install['version'] == '1.1.0'
+            public_executable = Path(public_install['bin_directory']) / 'honeycomb-e2e-greet'
+            assert subprocess.check_output([str(public_executable)], text=True).strip() == 'hello-1.1.0'
+            run('uninstall', app_id, role='anonymous')
             run('uninstall', app_id, role='member')
             assert not executable.exists()
             assert not run('installed', role='member')
@@ -120,7 +129,7 @@ def main():
             assert report['saved'] and report['notification'] == 'pending'
             run('logout', role='member')
             assert run('login', 'status', role='member') == {'authenticated': False}
-            print('PASS: CLI IAM discovery/login, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication gate, dependency import progress, reports, uninstall/logout')
+            print('PASS: CLI IAM discovery/login, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
         finally:
             fixture.terminate()
             fixture.wait(timeout=10)

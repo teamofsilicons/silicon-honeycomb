@@ -274,3 +274,27 @@ Provide explicit live IAM scope-reviewer eligibility and scoped notification
 recipients for external provider admins, IAM reviewers and Honeycomb validators.
 An ordinary platform-org admin is not automatically a validator. Honeycomb queues
 notifications until protected recipient discovery and Postmark are configured.
+
+## Public activation receipt and reconciliation contract
+
+After all plan gates and the Honeycomb validator decision are accepted, Honeycomb
+calls `activate_publication` through the future protected SDK. The request includes
+`operation_id`, `request_id`, `plan_id`, `app_id`, `configuration_revision`,
+`expected_iam_revision`, the reviewed `configuration`, `visibility: public`,
+accepted decision IDs, and matching pending `configuration_operations` IDs. IAM
+must atomically validate the current plan, exact configuration, all decision scopes,
+current actor authority and expected revision. Pending configuration operations for
+this same reviewed revision must be allowed to complete with activation.
+
+An accepted receipt must echo the operation/request/app/configuration identifiers,
+return `visibility: public`, a strictly newer `iam_revision`, and the complete
+`effective_configuration`. Replaying the same operation must return the same result.
+Honeycomb persists this receipt before sharing each archive through Briefcase with
+its own stable operation ID. Failed archive sharing leaves publication pending.
+
+Before updating the public catalog, Honeycomb performs `application_state` using
+the protected accepted-state API. It must return `app_id`,
+`publication_request_id`, `configuration_revision`, `visibility`, `iam_revision`
+and `effective_configuration`. Missing, superseded or revoked publication state
+must not be treated as public. Later revocation notifications still require
+reconciliation; this final read only protects the activation transaction.

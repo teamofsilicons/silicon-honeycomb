@@ -2025,7 +2025,8 @@ async fn review_denials_preserve_private_visibility_and_stale_decisions_cannot_a
 #[tokio::test]
 async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effective() {
     let (mut s, _) = setup(true).await;
-    s.management = Arc::new(ReviewManager::default());
+    s.management = Arc::new(PublicationManager::default());
+    s.storage = Arc::new(PublicationStorage::default());
     s.identity = Arc::new(ReviewIdentity);
     review_application(&s).await;
     sqlx::query("UPDATE applications SET visibility='public',revision=2 WHERE plane='production' AND app_id='tos>review-app'").execute(&s.db).await.unwrap();
@@ -2054,4 +2055,349 @@ async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effec
     .await;
     assert_eq!(app["effective_revision"], 1);
     assert_eq!(app["revision"], 2);
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES('pending-public-config','production','admin','pending-public-config-key','configure','tos>review-app','test-hash',2,1)").execute(&s.db).await.unwrap();
+    let id = result["id"].as_str().unwrap();
+    for (provider, actor) in [
+        ("other%3Eprovider", "outsider"),
+        ("iam", "iam-reviewer"),
+        ("honeycomb", "validator"),
+    ] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("/api/v1/review-requests/{id}/{provider}/decisions"),
+            Some(actor),
+            json!({"decision":"approve"}),
+            &format!("public-revision-two-{provider}"),
+            Some(2),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (_, activated) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/activate"),
+        Some("admin"),
+        Value::Null,
+        "public-revision-two-activate",
+        Some(2),
+    )
+    .await;
+    assert_eq!(activated["state"], "accepted", "{activated}");
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM operations WHERE id='pending-public-config'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(state, "accepted");
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app",
+        None,
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(app["effective_revision"], 2);
+}
+
+#[derive(Default)]
+struct PublicationManager {
+    calls: std::sync::atomic::AtomicUsize,
+    state: std::sync::Mutex<Option<Value>>,
+    revoked: AtomicBool,
+    wrong_receipt: AtomicBool,
+}
+#[async_trait]
+impl Management for PublicationManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("pending"))
+    }
+    async fn publication_plan(&self, r: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        ReviewManager::default().publication_plan(r, t, e).await
+    }
+    async fn iam_scope_reviewer(&self, t: &str, _: Option<&str>) -> Result<bool> {
+        Ok(t == "iam-reviewer")
+    }
+    async fn review_decision(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        ReviewManager {
+            accept: AtomicBool::new(true),
+        }
+        .review_decision(o, t, e)
+        .await
+    }
+    async fn activate_publication(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let response = json!({"state":"accepted","operation_id":if self.wrong_receipt.load(Ordering::SeqCst){json!("wrong-operation")}else{o["operation_id"].clone()},"request_id":o["request_id"],"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"visibility":"public","effective_configuration":o["configuration"]});
+        *self.state.lock().unwrap() = Some(response.clone());
+        Ok(response)
+    }
+    async fn application_state(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        let mut state = self.state.lock().unwrap().clone().unwrap();
+        state["publication_request_id"] = state["request_id"].clone();
+        if self.revoked.load(Ordering::SeqCst) {
+            state["visibility"] = json!("private");
+        }
+        Ok(state)
+    }
+}
+#[derive(Default)]
+struct PublicationStorage {
+    fail_second: AtomicBool,
+    calls: std::sync::Mutex<BTreeMap<String, usize>>,
+}
+#[async_trait]
+impl ArchiveStorage for PublicationStorage {
+    async fn put(
+        &self,
+        _: &str,
+        _: &str,
+        _: &std::path::Path,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<String> {
+        unreachable!()
+    }
+    async fn read(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
+        Ok(vec![])
+    }
+    async fn publish(&self, reference: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+        *self
+            .calls
+            .lock()
+            .unwrap()
+            .entry(reference.into())
+            .or_default() += 1;
+        if reference == "release-two" && self.fail_second.load(Ordering::SeqCst) {
+            return Err(Error::unavailable(
+                "Archive sharing temporarily unavailable",
+            ));
+        }
+        Ok(format!("public:{reference}"))
+    }
+}
+async fn approve_publication(s: &State, id: &str) {
+    for (provider, actor) in [
+        ("other%3Eprovider", "outsider"),
+        ("iam", "iam-reviewer"),
+        ("honeycomb", "validator"),
+    ] {
+        let (status, response) = call(
+            s,
+            "POST",
+            &format!("/api/v1/review-requests/{id}/{provider}/decisions"),
+            Some(actor),
+            json!({"decision":"approve"}),
+            &format!("activate-approval-{provider}-0001"),
+            Some(1),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+}
+#[tokio::test]
+async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete_sharing() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(PublicationManager::default());
+    let storage = Arc::new(PublicationStorage::default());
+    storage.fail_second.store(true, Ordering::SeqCst);
+    s.management = manager.clone();
+    s.storage = storage.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    let path = format!("/api/v1/review-requests/{id}/activate");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &path,
+            Some("admin"),
+            json!({}),
+            "activate-too-early-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    approve_publication(&s, &id).await;
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','2.0.0','fixture-only',1,'release-two',1)").execute(&s.db).await.unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &path,
+            Some("outsider"),
+            json!({}),
+            "activate-outsider-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (_, pending) = call(
+        &s,
+        "POST",
+        &path,
+        Some("admin"),
+        json!({}),
+        "activation-operation-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["archives"][0]["state"], "ready");
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereview-app",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            "/api/v1/apps/tos%3Ereview-app",
+            Some("admin"),
+            input("review-app"),
+            "activation-edit-block-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/apps/tos%3Ereview-app/secret-rotations",
+            Some("admin"),
+            json!({}),
+            "activation-rotate-block-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    storage.fail_second.store(false, Ordering::SeqCst);
+    let (_, done) = call(
+        &s,
+        "POST",
+        &path,
+        Some("admin"),
+        json!({}),
+        "activation-operation-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(done["state"], "accepted", "{done}");
+    assert_eq!(manager.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(storage.calls.lock().unwrap()["fixture-release"], 1);
+    let (status, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app",
+        None,
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(app["visibility"], "public");
+    let (_, again) = call(
+        &s,
+        "POST",
+        &path,
+        Some("admin"),
+        json!({}),
+        "activation-operation-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(again["id"], done["id"]);
+    assert_eq!(manager.calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn publication_rejects_wrong_receipts_and_rechecks_current_iam_visibility() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(PublicationManager::default());
+    let storage = Arc::new(PublicationStorage::default());
+    s.management = manager.clone();
+    s.storage = storage.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    approve_publication(&s, &id).await;
+    let path = format!("/api/v1/review-requests/{id}/activate");
+    manager.wrong_receipt.store(true, Ordering::SeqCst);
+    let (_, pending) = call(
+        &s,
+        "POST",
+        &path,
+        Some("admin"),
+        json!({}),
+        "activation-receipt-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["state"], "pending");
+    assert!(storage.calls.lock().unwrap().is_empty());
+    manager.wrong_receipt.store(false, Ordering::SeqCst);
+    manager.revoked.store(true, Ordering::SeqCst);
+    let (_, pending) = call(
+        &s,
+        "POST",
+        &path,
+        Some("admin"),
+        json!({}),
+        "activation-receipt-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereview-app",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    manager.revoked.store(false, Ordering::SeqCst);
+    let (_, done) = call(
+        &s,
+        "POST",
+        &path,
+        Some("admin"),
+        json!({}),
+        "activation-receipt-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(done["state"], "accepted");
+    assert_eq!(storage.calls.lock().unwrap()["fixture-release"], 1);
 }

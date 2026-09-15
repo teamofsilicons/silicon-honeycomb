@@ -393,6 +393,15 @@ impl Client {
         )
         .await
     }
+    pub async fn activate_publication(&self, id: &str, m: &Mutation) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["review-requests", id, "activate"],
+            &json!({}),
+            m,
+        )
+        .await
+    }
     pub async fn review_inbox(&self) -> Result<Value> {
         self.get(&["review-requests"]).await
     }

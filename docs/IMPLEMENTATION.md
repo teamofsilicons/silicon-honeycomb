@@ -45,7 +45,7 @@ against the isolated backend fixture, curl/bash installer checks, and desktop an
 mobile browser journeys. These fixtures are not evidence of live IAM or Briefcase
 integration. No repository, crates, binaries or websites have been published.
 
-Still required before the full understanding is complete: IAM activation/reconciliation and live provider/validator integration; live protected app secret rotation;
+Still required before the full understanding is complete: IAM reconciliation and live activation/provider/validator integration; live protected app secret rotation;
 complete per-service testing lifecycle/import/migration/retention coordination;
 live Postmark delivery and IAM recipient discovery; actual release publication/deployment and live cross-service E2E.
 
@@ -101,10 +101,23 @@ explicit validator authority, scoped discussions, denial reasons, durable decisi
 recipient-role notification queues, stale-revision rejection and provider-before-
 validator sequencing. Public apps can request review of new scopes while retaining
 older effective access. CLI and console expose the same inbox and decision flow.
-All approvals stop at awaiting_activation; final IAM public activation and archive
-sharing reconciliation are the next implementation step.
+Approvals lead to a separate recoverable activation operation.
 
 Review checkpoint verification: 24 backend API tests, full Rust workspace tests,
 strict Clippy, CLI review/decision journeys, production web build and all 20
 browser journeys pass. Review authority and receipt tests use explicit local doubles;
 they do not claim that IAM's protected management API exists yet.
+
+Public activation now persists IAM acceptance and per-release archive sharing,
+retries only unfinished sharing, and verifies IAM's current public revision before
+exposing the catalog entry. Config edits, rotations and release mutations are
+serialized against activation. A public app's pending configuration can complete
+through its approved publication. Operation leases prevent stale workers from
+committing results. CLI and console expose activation and recovery progress.
+
+Activation checkpoint verification: full Rust workspace tests (26 backend API
+cases), strict Clippy, CLI approval/activation/anonymous installation and execution,
+production web build, and all 22 desktop/mobile browser journeys pass. Browser
+coverage includes archive upload, independent validator approval, console activation
+and anonymous library discovery. These use explicit IAM/storage doubles; live
+management activation, real archive sharing and deployment remain unverified.

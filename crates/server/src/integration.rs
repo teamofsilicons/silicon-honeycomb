@@ -44,6 +44,26 @@ pub trait Management: Send + Sync {
         ))
     }
     /// IAM derives critical scope gates from its current catalog and eligibility rules.
+    async fn activate_publication(
+        &self,
+        _operation: &Value,
+        _actor_token: &str,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM protected publication activation is not yet available",
+        ))
+    }
+    async fn application_state(
+        &self,
+        _app_id: &str,
+        _actor_token: &str,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM protected application reconciliation is not yet available",
+        ))
+    }
     async fn publication_plan(
         &self,
         _request: &Value,

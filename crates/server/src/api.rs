@@ -30,6 +30,10 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/reports", post(super::notifications::report))
         .route("/api/v1/review-requests", get(super::reviews::inbox))
         .route(
+            "/api/v1/review-requests/{id}/activate",
+            post(super::activation::activate),
+        )
+        .route(
             "/api/v1/review-requests/{id}/{provider}",
             get(super::reviews::detail),
         )
@@ -694,10 +698,10 @@ async fn save_app(
     let config = input.public_config();
     let secret = s.encrypt(&input.webhook_secret)?;
     let mut tx = s.db.begin().await?;
-    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind='secret.rotate' AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
     if rotating {
         return Err(Error::conflict(
-            "Finish or retry the pending secret rotation before changing application configuration",
+            "Finish or retry the pending secret rotation or publication before changing application configuration",
         ));
     }
     if let Some(expected) = expected {
@@ -906,6 +910,13 @@ async fn upload_release(
     if existing.as_ref().is_some_and(|o| o["state"] == "accepted") {
         return Ok((StatusCode::OK, Json(existing.unwrap())));
     }
+    let mut operation_tx = s.db.begin().await?;
+    let publishing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind='publication.activate' AND state='pending')").bind(&c.plane).bind(&id).fetch_one(&mut *operation_tx).await?;
+    if publishing {
+        return Err(Error::conflict(
+            "Finish publication activation before adding another release",
+        ));
+    }
     let op = if let Some(o) = existing {
         o["id"].as_str().unwrap().to_owned()
     } else {
@@ -915,7 +926,7 @@ async fn upload_release(
         .bind(&c.plane)
         .bind(&id)
         .bind(&version)
-        .fetch_one(&s.db)
+        .fetch_one(&mut *operation_tx)
         .await?;
         if exists {
             return Err(Error::conflict(
@@ -923,9 +934,10 @@ async fn upload_release(
             ));
         }
         let op = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(&op).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind("release").bind(&id).bind(digest).bind(app.revision).bind(now()).execute(&s.db).await?;
+        sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(&op).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind("release").bind(&id).bind(digest).bind(app.revision).bind(now()).execute(&mut *operation_tx).await?;
         op
     };
+    operation_tx.commit().await?;
     let mut reference = s
         .storage
         .put(
@@ -1245,7 +1257,22 @@ async fn publication(
         .fetch_all(&s.db)
         .await?;
         let gates:Vec<Value>=gates.iter().map(|g|json!({"provider":g.get::<String,_>("provider"),"scopes":serde_json::from_str::<Value>(&g.get::<String,_>("scopes")).unwrap_or(Value::Null),"state":g.get::<String,_>("state")})).collect();
-        items.push(json!({"id":request_id,"revision":r.get::<i64,_>("revision"),"state":r.get::<String,_>("state"),"messages":messages,"gates":gates,"error":r.get::<Option<String>,_>("error")}));
+        let activation = if let Some(id) = r.get::<Option<String>, _>("activation_operation") {
+            let row =
+                sqlx::query("SELECT state,error,actor,idempotency_key FROM operations WHERE id=?")
+                    .bind(&id)
+                    .fetch_one(&s.db)
+                    .await?;
+            let archives=sqlx::query("SELECT version,state,error FROM publication_archives WHERE operation_id=? ORDER BY version").bind(&id).fetch_all(&s.db).await?;
+            let mut value = json!({"id":id,"state":row.get::<String,_>("state"),"error":row.get::<Option<String>,_>("error"),"archives":archives.iter().map(|a|json!({"version":a.get::<String,_>("version"),"state":a.get::<String,_>("state"),"error":a.get::<Option<String>,_>("error")})).collect::<Vec<_>>()});
+            if row.get::<String, _>("actor") == c.identity()?.principal_id {
+                value["idempotency_key"] = json!(row.get::<String, _>("idempotency_key"));
+            }
+            value
+        } else {
+            Value::Null
+        };
+        items.push(json!({"id":request_id,"revision":r.get::<i64,_>("revision"),"state":r.get::<String,_>("state"),"messages":messages,"gates":gates,"error":r.get::<Option<String>,_>("error"),"activation":activation}));
     }
     Ok(Json(json!({"items":items})))
 }

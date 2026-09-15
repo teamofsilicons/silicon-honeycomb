@@ -307,3 +307,62 @@ test("provider administrators can discuss and approve their review gate", async 
   await expect(dialog).toContainText("approved");
   await expect(dialog.getByRole("button", { name: "Submit decision", exact: true })).toBeDisabled();
 });
+
+test("console uploads and activates an approved release visible in the anonymous library", async ({ page, request }, info) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, resolve } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const root = mkdtempSync(join(tmpdir(), "honeycomb-browser-release-"));
+  const handle = `release-${info.project.name}-${Date.now()}`;
+  const appId = `tos>${handle}`, name = `Public release ${info.project.name}`;
+  try {
+    await page.goto(consoleSite);
+    await page.getByRole("link", { name: "Continue with IAM" }).click();
+    await expect(page.getByRole("heading", { name: "Your applications." })).toBeVisible();
+    const create = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
+      headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
+      data: { org_id: "tos", local_app_id: handle, name,
+        description: "This release exercises uploading, review, activation and public discovery in the Silicon ecosystem. ".repeat(7),
+        webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
+    });
+    expect(create.ok()).toBe(true);
+    const targets: Record<string, unknown> = {};
+    for (const target of ["linux-x86_64", "linux-aarch64", "windows-x86_64", "windows-aarch64", "macos-x86_64", "macos-aarch64"]) {
+      mkdirSync(join(root, "targets", target, "bin"), { recursive: true });
+      writeFileSync(join(root, "targets", target, "bin", "greet"), "#!/bin/sh\necho hello\n", { mode: 0o755 });
+      targets[target] = { root: `targets/${target}`, executables: { app: "bin/greet" } };
+    }
+    writeFileSync(join(root, "honeycomb.yaml"), JSON.stringify({ format_version: 1, app_id: appId, version: "1.0.0", bin: { greet: "app" }, targets }));
+    const archive = join(root, "release.tar.gz");
+    execFileSync(resolve("../target/debug/honeycomb"), ["pack", root, "--output", archive]);
+    await page.reload();
+    await page.getByRole("heading", { name, exact: true }).click();
+    await page.getByRole("button", { name: "Releases & publication" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Upload CLI archive").setInputFiles(archive);
+    await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toBeEnabled();
+    await dialog.getByLabel("Tell reviewers about your application").fill("Please review this complete six-target release.");
+    await dialog.getByRole("button", { name: "Request publication", exact: true }).click();
+    await expect(dialog).toContainText("awaiting validator");
+    const publications = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/publication`)).json();
+    // The independent validator uses an explicit test identity; the owner cannot self-approve.
+    const login = await request.post("http://127.0.0.1:19180/api/v1/auth/login", {
+      headers: { "Idempotency-Key": `${handle}-validator-login` }, data: { slt: "fixture-validator" },
+    });
+    const session = await login.json();
+    const decision = await request.post(`http://127.0.0.1:19180/api/v1/review-requests/${publications.items[0].id}/honeycomb/decisions`, {
+      headers: { Authorization: `Bearer ${session.access_token}`, "Idempotency-Key": `${handle}-approve`, "If-Match": "1" }, data: { decision: "approve" },
+    });
+    expect(decision.ok()).toBe(true);
+    await page.reload();
+    await page.getByRole("heading", { name, exact: true }).click();
+    await page.getByRole("button", { name: "Releases & publication" }).click();
+    await page.getByRole("button", { name: "Activate public release", exact: true }).click();
+    await expect(page.getByRole("dialog")).toContainText("published");
+    await page.goto(library);
+    await page.getByRole("searchbox", { name: "Search applications" }).fill(name);
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with IAM" })).toBeVisible();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

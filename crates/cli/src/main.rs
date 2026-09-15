@@ -192,6 +192,12 @@ enum Releases {
 }
 #[derive(Subcommand)]
 enum Publication {
+    /// Activate an approved public revision and reconcile archive access.
+    Activate {
+        request_id: String,
+        #[arg(long)]
+        revision: i64,
+    },
     /// Requests you can review as a provider administrator or authorized validator.
     Inbox,
     Review {
@@ -659,6 +665,14 @@ async fn run() -> Result<()> {
             )?,
         },
         Command::Publication { command } => match command {
+            Publication::Activate {
+                request_id,
+                revision,
+            } => show(
+                &client
+                    .activate_publication(request_id, &mutation(&cli, Some(*revision))?)
+                    .await?,
+            )?,
             Publication::Inbox => show(&client.review_inbox().await?)?,
             Publication::Review {
                 request_id,

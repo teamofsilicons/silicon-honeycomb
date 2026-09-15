@@ -1337,6 +1337,14 @@ export default function App() {
                     <section class="review-thread">
                       <Badge>{p.state.replaceAll("_", " ")}</Badge>
                       <Show when={p.error}><p class="muted">{p.error}</p></Show>
+                      <Show when={p.activation?.error}><p class="field-error">{p.activation.error}</p></Show>
+                      <For each={p.activation?.archives || []}>{(archive)=><p>Release {archive.version} · {archive.state}{archive.error ? ` · ${archive.error}` : ""}</p>}</For>
+                      <Show when={p.state==="awaiting_activation" || p.state==="activating"}><button class="button primary" disabled={busy() || (p.state==="activating" && !p.activation?.idempotency_key)} onClick={()=>void act(async()=>{
+                        const headers:Record<string,string>={"If-Match":String(p.revision)};if(p.activation?.idempotency_key)headers["Idempotency-Key"]=p.activation.idempotency_key;
+                        const result=await request(`/api/v1/review-requests/${p.id}/activate`,{method:"POST",headers,body:"{}"});
+                        setPublication(await request(endpoint(app().app_id)+"/publication"));setSelected(await request(endpoint(app().app_id)));await load();
+                        setNotice(result.state==="accepted" ? "Application published." : "Publication is pending. Check IAM and archive progress above.");
+                      })}>{p.state==="activating" ? "Continue publication" : "Activate public release"}</button></Show>
                       <Show when={p.state === "awaiting_review_plan"}><button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{await request(`/api/v1/review-requests/${p.id}/plan`,{method:"POST",headers:{"If-Match":String(p.revision)},body:"{}"});setPublication(await request(endpoint(app().app_id)+"/publication"));})}>Retry review planning</button></Show>
                       <For each={p.gates || []}>{(gate)=><p>{gate.provider} · {gate.state} <button class="text-button" onClick={()=>void openReview({id:p.id,provider:gate.provider})}>Open discussion</button></p>}</For>
                       <For each={p.messages}>{(m) => <p>{m.message}</p>}</For>

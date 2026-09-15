@@ -42,6 +42,7 @@ impl IdentityProvider for FixtureIam {
             "fixture-owner" => "org_owner",
             "fixture-member" => "org_member",
             "fixture-outsider" => "outsider",
+            "fixture-validator" => "validator",
             _ => return Err(Error::unauthorized()),
         };
         let seconds = if std::env::var("HONEYCOMB_FIXTURE_SHORT_SESSION").as_deref() == Ok("1") {
@@ -80,20 +81,46 @@ impl IdentityProvider for FixtureIam {
             actor_type: Some("carbon".into()),
             organizations: BTreeMap::from([(
                 if role == "outsider" { "other" } else { "tos" }.into(),
-                Some(role.clone()),
+                Some(if role == "validator" {
+                    "org_member".into()
+                } else {
+                    role.clone()
+                }),
             )]),
             testing_environment_id: None,
-            validator: false,
+            validator: role == "validator",
         })
     }
 }
-struct FixtureManagement;
+#[derive(Default)]
+struct FixtureManagement(Mutex<BTreeMap<String, Value>>);
 #[async_trait]
 impl Management for FixtureManagement {
     async fn configure(&self, body: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         Ok(
             json!({"state":"accepted","configuration_revision":body["configuration_revision"],"iam_revision":body["expected_iam_revision"].as_i64().unwrap()+1,"effective_configuration":body["configuration"]}),
         )
+    }
+    async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(
+            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("fixture-plan-{}",r["request_id"].as_str().unwrap()),"gates":[]}),
+        )
+    }
+    async fn activate_publication(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        let result = json!({"state":"accepted","operation_id":o["operation_id"],"request_id":o["request_id"],"publication_request_id":o["request_id"],"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"visibility":"public","effective_configuration":o["configuration"]});
+        self.0
+            .lock()
+            .unwrap()
+            .insert(o["app_id"].as_str().unwrap().into(), result.clone());
+        Ok(result)
+    }
+    async fn application_state(&self, app: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(app)
+            .cloned()
+            .ok_or_else(Error::missing)
     }
     async fn review_decision(&self, operation: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         let mut receipt = operation.clone();
@@ -189,7 +216,7 @@ async fn main() -> anyhow::Result<()> {
     let state = State {
         db,
         identity: Arc::new(FixtureIam::default()),
-        management: Arc::new(FixtureManagement),
+        management: Arc::new(FixtureManagement::default()),
         storage: Arc::new(FixtureStorage::default()),
         app_id: "tos>honeycomb".into(),
         iam_login_url: format!("http://127.0.0.1:{port}"),

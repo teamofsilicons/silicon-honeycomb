@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+pub mod activation;
 pub mod api;
 pub mod auth;
 pub mod control;
