@@ -75,6 +75,9 @@ pub trait Management: Send + Sync {
         ))
     }
     /// IAM derives critical scope gates from its current catalog and eligibility rules.
+    async fn scope_catalog(&self, _org: &str, _provider: Option<&str>) -> Result<Value> {
+        Err(Error::unavailable("IAM scope discovery is not configured"))
+    }
     async fn publication_plan(
         &self,
         _request: &Value,

@@ -49,6 +49,10 @@ pub fn router(state: State) -> Router {
             "/api/v1/review-requests/{id}/{provider}/decisions",
             post(super::reviews::decide),
         )
+        .route(
+            "/api/v1/organizations/{org}/scope-catalog",
+            get(super::catalog::scopes),
+        )
         .route("/api/v1/apps", get(search).post(create_app))
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route("/api/v1/apps/{id}/operations", get(app_operations))

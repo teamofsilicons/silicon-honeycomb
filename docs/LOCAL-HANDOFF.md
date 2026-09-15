@@ -1,0 +1,64 @@
+# Local checkpoint — 2026-09-16
+
+This is a working local checkpoint, not a completed production rollout.
+
+## Ready to review
+
+- Rust backend, stateless client and stateful `honeycomb` CLI.
+- curl/bash installer, Cargo source installation, binary updater and scheduled checks.
+- Public/private library and authenticated console using the current Interface
+  style: paper surfaces, blue accents and serif headings.
+- Package validation, upload/install/update/uninstall, drafts, catalog/search,
+  reviews/stars, publication discussions/decisions/activation, secret recovery,
+  permission picker and testing-environment progress.
+- Durable IAM configuration/reconciliation and protected SDK integration for the
+  portions available in local IAM commit `7abd575`.
+- Production container definitions, HTTPS routing for the requested domains,
+  CI and six-platform release-candidate workflow.
+
+Local previews currently run at http://localhost:4173 (library) and
+http://localhost:4174 (console), using an explicit isolated IAM/storage fixture at
+http://127.0.0.1:18080. Sign-in uses the fixture owner. These are sample identities
+and sample applications; no production credentials or email delivery are involved.
+
+## Verification
+
+- Rust workspace tests and strict Clippy passed. Latest backend coverage: 30 API
+  cases, plus runtime IAM and management SDK wire tests.
+- 24 desktop/mobile browser cases pass: the existing 22 ran together and the two
+  new permission-picker cases passed after correcting their test locator.
+- CLI HTTP journey includes private creation, six-target archive validation,
+  releases, install/execute/update/uninstall, review/activation and anonymous install.
+- curl/bash installer checks and isolated Cargo source installation passed.
+- Production backend and both web container modes passed smoke tests.
+- Both preview websites were visually inspected; source provenance hashes pass.
+
+Cross-platform archive validation is not native execution on all six platforms.
+The native six-platform release workflow has not run on remote CI.
+
+## Remaining work before the complete product is ready
+
+1. Resolve the implemented IAM contract differences in
+   [IAM-CONTRACT-REVIEW.md](IAM-CONTRACT-REVIEW.md), then wire public review/activation,
+   shared lifecycle phases, app-owned creation/attachment and test-only app management
+   to actual protected services. The local fixture exercises these flows but does
+   not prove live cross-service behavior.
+2. Complete activity reporting, dependency-aware idle retirement, automatic retention
+   cleanup and legacy environment/application adoption. Existing explicit lifecycle
+   actions are durable and tested; the full automatic lifecycle is unfinished.
+3. Complete the remaining webhook approval/rotation UX, protected notification
+   recipient discovery and live Postmark delivery. Direct Honeycomb telemetry and
+   logo-upload workflows also remain unfinished.
+4. Provision IAM/Briefcase permissions, dedicated service and notification keys,
+   Postmark and deployment secrets; prepare the actual hosting/DNS and callback URLs.
+5. Publish the repository, CLI binaries and crates, then run live browser/CLI/installer
+   acceptance across the requested domains and supported platforms. No remote Git
+   changes, crates, releases, domains or websites have been published here.
+
+The actual IAM source now exists locally; the earlier blanket "IAM API absent"
+assessment is superseded by the current contract review. SDK 1.10 is not yet in
+crates.io, so the exact unchanged official source is pinned in `vendor` with hashes.
+The production adapter keeps unsupported operations pending and exposes their errors.
+
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for checkpoint history and
+[../deploy/README.md](../deploy/README.md) for deployment/release preparation.

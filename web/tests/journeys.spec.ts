@@ -373,3 +373,25 @@ test("console uploads and activates an approved release visible in the anonymous
     await expect(page.getByRole("link", { name: "Sign in with IAM" })).toBeVisible();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("permission picker reflects IAM eligibility and preserves scope edits", async ({ page }) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await page.getByRole("button", { name: "Create application", exact: true }).click();
+  const dialog=page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Configure scopes & OBO endpoints" }).click();
+  await expect(dialog.getByRole("checkbox", { name: "self.profile.read", exact: true })).toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: "directory.carbons.read", exact: true })).toBeDisabled();
+  await expect(dialog).toContainText("Unavailable for this organization");
+  await dialog.getByRole("checkbox", { name: "self.profile.read", exact: true }).uncheck();
+  let scopes=JSON.parse(await dialog.getByLabel("Application scopes").inputValue());
+  expect(scopes.iam).not.toContain("self.profile.read");
+  expect(scopes.iam).toContain("self.identity.read");
+  await dialog.getByRole("checkbox", { name: "self.profile.read", exact: true }).check();
+  scopes=JSON.parse(await dialog.getByLabel("Application scopes").inputValue());
+  expect(scopes.iam).toContain("self.profile.read");
+  await dialog.getByLabel("Application scopes").fill("{");
+  await expect(dialog.getByRole("checkbox", { name: "self.profile.read", exact: true })).toBeDisabled();
+  await expect(dialog).toContainText("Correct the application scopes JSON");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

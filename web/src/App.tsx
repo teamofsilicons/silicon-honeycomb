@@ -1,3 +1,4 @@
+import ScopePicker from "./ScopePicker";
 import {
   createSignal,
   createEffect,
@@ -1562,6 +1563,7 @@ export default function App() {
           </button>
           <Show when={advanced()}>
             <div class="advanced">
+              <ScopePicker org={form().org_id} value={scopeText()} change={(value)=>{setScopeText(value);scheduleSave();}} />
               <label>
                 Backend origin
                 <input

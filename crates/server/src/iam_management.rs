@@ -222,6 +222,12 @@ fn map_error(error: silicon_iam_client::Error) -> Error {
 }
 #[async_trait]
 impl Management for IamManagement {
+    async fn scope_catalog(&self, org: &str, provider: Option<&str>) -> Result<Value> {
+        self.client
+            .scope_catalog_for(org, provider)
+            .await
+            .map_err(map_error)
+    }
     async fn configure(&self, o: &Value, actor: &str, environment: Option<&str>) -> Result<Value> {
         production(environment)?;
         let id = o["operation_id"]

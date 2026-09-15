@@ -149,3 +149,14 @@ management SDK wire cases), strict Clippy, CLI/curl-bash installer journeys,
 production web build and all 22 browser journeys pass. The source provenance hash
 check passes. No live IAM credential, deployment, remote commit or publication was
 used; see the current contract review before provisioning IAM's writer cutover.
+
+The console now loads scoped IAM permission descriptions and eligibility, includes
+public-review guidance, and keeps picker changes synchronized with editable scope
+JSON/drafts. Private provider discovery requires current membership; catalog access
+requires current organization administration. Permission discovery uses the official
+1.10 catalog API. Thirty backend API cases and 24 desktop/mobile browser cases pass
+(the two new browser cases were rerun after a locator-only correction).
+
+See LOCAL-HANDOFF.md for the current local deliverable and the remaining full-product
+work. Automatic retirement/migration, app-owned test setup, live review/lifecycle
+adapters, telemetry, logo uploads and public rollout are not marked complete.

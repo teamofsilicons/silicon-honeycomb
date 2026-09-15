@@ -13,8 +13,9 @@ identity and authorization authority.
 | Console | `web` (console mode) | Authenticated application creation and release management |
 
 The human-owned `UNDERSTANDING.md` is the product specification. Integration
-requirements and unfinished work are tracked in [IAM-HANDOFF](docs/IAM-HANDOFF.md)
-and [IMPLEMENTATION](docs/IMPLEMENTATION.md). This repository is under active
+requirements and unfinished work are tracked in the [local handoff](docs/LOCAL-HANDOFF.md),
+[current IAM contract review](docs/IAM-CONTRACT-REVIEW.md), and
+[implementation history](docs/IMPLEMENTATION.md). This repository is under active
 implementation. Live IAM management and ecosystem lifecycle integration are still
 pending; production operations remain pending until those services accept them.
 

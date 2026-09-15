@@ -1247,3 +1247,12 @@ textarea {
 .review-request-row > div {flex:1;min-width:0;}
 .review-request-row h2 {font-size:1.2rem;margin:0 0 8px;}
 .review-request-row p {overflow-wrap:anywhere;}
+
+.scope-picker { display: grid; gap: 14px; }
+.scope-picker h3, .scope-picker p { margin: 0; }
+.scope-options { display: grid; border-top: 1px solid var(--line); }
+.scope-options .scope-option { display: flex; flex-direction: row; align-items: flex-start; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.scope-option input { width: 16px; min-height: 16px; margin-top: 3px; flex-shrink: 0; accent-color: var(--blue); }
+.scope-option span { display: grid; gap: 5px; min-width: 0; }
+.scope-option strong { font-size: 12px; overflow-wrap: anywhere; }
+.scope-option small { color: var(--muted); font-weight: 400; }

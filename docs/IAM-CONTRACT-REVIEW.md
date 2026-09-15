@@ -13,6 +13,7 @@ has no management API in `IAM-HANDOFF.md`.
   expected IAM revision, stable operation ID/idempotency key, and private creation.
 - App-secret rotation using `Mutation::step_up`; recovery replays the exact
   mutation within IAM's ten-minute secret window. The status GET is secret-free.
+- Organization/provider-scoped permission discovery and the console picker.
 - Accepted application reads: actual `app_name`, `app_logo`, `effective_scopes`,
   and `verified` availability are mapped to Honeycomb. Requested scopes are
   filtered through the effective scope list. Catalog-only description/docs fields

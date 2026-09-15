@@ -2,6 +2,7 @@
 pub mod activation;
 pub mod api;
 pub mod auth;
+pub mod catalog;
 pub mod control;
 pub mod error;
 pub mod iam_management;

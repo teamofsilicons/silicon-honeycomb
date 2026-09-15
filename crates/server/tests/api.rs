@@ -2740,3 +2740,61 @@ async fn iam_management_notifications_use_independent_signatures_and_durable_ded
         .unwrap();
     assert_eq!(queued, 2);
 }
+
+struct CatalogManager;
+#[async_trait]
+impl Management for CatalogManager {
+    async fn configure(&self, _: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        unreachable!()
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        unreachable!()
+    }
+    async fn scope_catalog(&self, org: &str, provider: Option<&str>) -> Result<Value> {
+        assert_eq!(org, "tos");
+        Ok(
+            json!({"items":[{"scope":provider.map(|p|format!("obo:{p}:files.read")).unwrap_or_else(||"self.profile.read".into()),"description":"Read permitted data","critical":provider.is_some(),"eligible":true},{"scope":"obo:hidden>provider:secret","description":"Must be filtered","critical":true,"eligible":true}]}),
+        )
+    }
+}
+#[tokio::test]
+async fn permission_discovery_requires_current_admin_and_does_not_reveal_private_providers() {
+    let (mut s, _) = setup(true).await;
+    import_source(&s, "other>private-provider", &[], false).await;
+    sqlx::query("UPDATE applications SET effective_config=json_set(effective_config,'$.obo_endpoints',json('[{\"endpoint_id\":\"files.read\",\"path\":\"/files\",\"critical\":true}]')) WHERE app_id='other>private-provider'").execute(&s.db).await.unwrap();
+    s.management = Arc::new(CatalogManager);
+    let path = "/api/v1/organizations/tos/scope-catalog";
+    for actor in [Some("member"), Some("outsider"), None] {
+        assert!(
+            call(&s, "GET", path, actor, Value::Null, "", None)
+                .await
+                .0
+                .is_client_error()
+        );
+    }
+    let (status, catalog) = call(&s, "GET", path, Some("admin"), Value::Null, "", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(catalog["items"].as_array().unwrap().len(), 1);
+    assert_eq!(catalog["providers"], json!([]));
+    let provider = format!("{path}?provider=other%3Eprivate-provider");
+    assert_eq!(
+        call(&s, "GET", &provider, Some("admin"), Value::Null, "", None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query(
+        "UPDATE applications SET visibility='public' WHERE app_id='other>private-provider'",
+    )
+    .execute(&s.db)
+    .await
+    .unwrap();
+    let (status, catalog) = call(&s, "GET", &provider, Some("admin"), Value::Null, "", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(catalog["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        catalog["items"][0]["scope"],
+        "obo:other>private-provider:files.read"
+    );
+    assert_eq!(catalog["providers"][0]["app_id"], "other>private-provider");
+}

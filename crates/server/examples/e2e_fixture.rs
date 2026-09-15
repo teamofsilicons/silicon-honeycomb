@@ -96,6 +96,13 @@ impl IdentityProvider for FixtureIam {
 struct FixtureManagement(Mutex<BTreeMap<String, Value>>);
 #[async_trait]
 impl Management for FixtureManagement {
+    async fn scope_catalog(&self, _: &str, provider: Option<&str>) -> Result<Value> {
+        Ok(json!({"items": if provider.is_some(){json!([])}else{json!([
+            {"scope":"self.identity.read","description":"Read the signed-in user's identity.","critical":false,"eligible":true},
+            {"scope":"self.profile.read","description":"Read the signed-in user's profile.","critical":false,"eligible":true},
+            {"scope":"directory.carbons.read","description":"Read the Carbon directory.","critical":true,"eligible":false}
+        ])}}))
+    }
     async fn configure(&self, body: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         Ok(
             json!({"state":"accepted","configuration_revision":body["configuration_revision"],"iam_revision":body["expected_iam_revision"].as_i64().unwrap()+1,"effective_configuration":body["configuration"]}),
