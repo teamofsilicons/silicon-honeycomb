@@ -153,25 +153,15 @@ pub async fn create_environment(
     sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,created_at,last_activity) VALUES(?,?,?,?,?,?,?,?,?)").bind(&id).bind(&body.org_id).bind(&actor.principal_id).bind(&body.name).bind(&body.description).bind(encrypted).bind(hex::encode(Sha256::digest(&root))).bind(now()).bind(now()).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production',?,?,'environment.prepare',?,?,1,?)").bind(&op).bind(&actor.principal_id).bind(k).bind(&id).bind(digest).bind(now()).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?, 'tos>iam',0,'{}','pending',?,1)").bind(&id).bind(&op).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,?,0,'{}','pending',?,1)").bind(&id).bind(&s.app_id).bind(&op).execute(&mut *tx).await?;
     tx.commit().await?;
-    let result=s.management.lifecycle(&json!({"operation_id":op,"action":"prepare","environment_id":id,"org_id":body.org_id,"key_version":1,"generation":1,"testing_key":root}),c.token.as_deref().unwrap()).await;
-    // A response from IAM alone never establishes readiness for every linked service.
-    let message = match result {
-        Err(e) => e.1.message,
-        Ok(_) => "Awaiting authenticated readiness receipts for every participating service".into(),
-    };
-    sqlx::query("UPDATE operations SET error=? WHERE id=?")
-        .bind(&message)
-        .bind(&op)
-        .execute(&s.db)
-        .await?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(
-            json!({"environment_id":id,"org_id":body.org_id,"name":body.name,"state":"provisioning","revision":1,"operation_id":op,"error":message}),
-        ),
-    ))
+    let mut result =
+        crate::lifecycle::coordinate(&s, &id, &op, c.token.as_deref().unwrap()).await?;
+    result["org_id"] = json!(body.org_id);
+    result["name"] = json!(body.name);
+    Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
 pub async fn environment(
     S(s): S<State>,
     h: HeaderMap,
@@ -203,14 +193,28 @@ pub async fn environment_action(
     let k = key(&h)?;
     let expected = revision(&h)?;
     let (row, actor) = manage(&s, &h, &id).await?;
+    if action == "retry" {
+        if row.get::<i64, _>("revision") != expected {
+            return Err(Error::conflict("Environment revision changed"));
+        }
+        let operation:String=sqlx::query_scalar("SELECT id FROM operations WHERE plane='production' AND resource=? AND revision=? AND kind LIKE 'environment.%' ORDER BY created_at DESC LIMIT 1").bind(&id).bind(expected).fetch_one(&s.db).await?;
+        let token = header_value(&h, "authorization")?
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .unwrap_or("");
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(crate::lifecycle::coordinate(&s, &id, &operation, token).await?),
+        ));
+    }
     let desired = match action.as_str() {
         "rotate-key" => "rotating",
         "clean" => "cleaning",
         "delete" => "deleting",
         "restore" => "restoring",
+        "purge" => "purging",
         _ => {
             return Err(Error::bad(
-                "Supported actions: rotate-key, clean, delete, restore",
+                "Supported actions: rotate-key, clean, delete, restore, retry; purge is available after retention expires",
             ));
         }
     };
@@ -230,6 +234,16 @@ pub async fn environment_action(
                 "Only a deleted environment within its recovery window can be restored",
             ));
         }
+    } else if action == "purge" {
+        if state != "deleted"
+            || row
+                .get::<Option<i64>, _>("purge_after")
+                .is_none_or(|deadline| deadline > now())
+        {
+            return Err(Error::conflict(
+                "Permanent purge requires an expired recovery window",
+            ));
+        }
     } else if state != "ready" {
         return Err(Error::conflict(
             "Wait for the current lifecycle operation to finish before starting another",
@@ -237,6 +251,21 @@ pub async fn environment_action(
     }
     let op = uuid::Uuid::new_v4().to_string();
     let mut tx = s.db.begin().await?;
+    let rotated: Option<String> = if action == "rotate-key" {
+        Some(
+            rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(32)
+                .map(char::from)
+                .collect(),
+        )
+    } else {
+        None
+    };
+    if let Some(key) = &rotated {
+        sqlx::query("UPDATE environments SET encrypted_key=?,key_hash=?,key_version=key_version+1 WHERE id=? AND revision=?")
+            .bind(s.encrypt(key)?).bind(hex::encode(Sha256::digest(key))).bind(&id).bind(expected).execute(&mut *tx).await?;
+    }
     let updated=sqlx::query("UPDATE environments SET state=?,revision=revision+1,generation=generation+? WHERE id=? AND revision=?").bind(desired).bind(if action=="clean"{1}else{0}).bind(&id).bind(expected).execute(&mut *tx).await?;
     if updated.rows_affected() != 1 {
         return Err(Error::conflict("Environment revision changed"));
@@ -250,13 +279,16 @@ pub async fn environment_action(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(
-            json!({"operation_id":op,"environment_id":id,"state":desired,"revision":expected+1,"error":"Waiting for protected lifecycle integration; test access is blocked until all services acknowledge completion"}),
-        ),
-    ))
+    let token = header_value(&h, "authorization")?
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let mut result = crate::lifecycle::coordinate(&s, &id, &op, token).await?;
+    if let Some(key) = rotated {
+        result["testing_key"] = json!(key);
+    }
+    Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
 pub async fn webhook(S(s): S<State>, h: HeaderMap, body: axum::body::Bytes) -> Result<Json<Value>> {
     use silicon_iam_client::{
         EnvironmentKey, WebhookSecret, WebhookSecretKeyring, WebhookVerifier,

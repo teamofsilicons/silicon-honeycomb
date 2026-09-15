@@ -4,6 +4,8 @@ pub mod auth;
 pub mod control;
 pub mod error;
 pub mod integration;
+pub mod lifecycle;
+pub mod notifications;
 pub mod storage;
 
 use aes_gcm::{

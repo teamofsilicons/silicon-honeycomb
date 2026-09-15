@@ -182,3 +182,65 @@ test("draft closing flushes the latest fields and scope edits", async ({
       .click();
   await expect(dialog.getByLabel("Application scopes")).toHaveValue(scopes);
 });
+
+test("testing setup shows per-service failures and supports retry", async ({
+  page,
+}) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Your applications.", exact: true }),
+  ).toBeVisible();
+  if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
+    await page.getByRole("button", { name: "Open navigation" }).click();
+  await page
+    .getByRole("button", { name: "Testing environments", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Create environment", exact: true })
+    .click();
+  const name = `Browser environment ${Date.now()}`;
+  await page.getByRole("dialog").getByLabel("Environment name").fill(name);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create environment", exact: true })
+    .click();
+  const row = page
+    .locator(".environment-row")
+    .filter({ has: page.getByRole("heading", { name, exact: true }) });
+  await expect(row).toContainText("provisioning");
+  await row.getByRole("button", { name: "Manage", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("heading", { name: "Service progress", exact: true }),
+  ).toBeVisible();
+  await expect(dialog).toContainText("tos>iam");
+  await expect(dialog).toContainText(
+    "Fixture deliberately leaves shared lifecycle provisioning pending",
+  );
+  await dialog
+    .getByRole("button", { name: "Retry setup", exact: true })
+    .click();
+  await expect(dialog).toContainText("provisioning");
+  await expect(
+    dialog.getByRole("button", { name: "Retry setup", exact: true }),
+  ).toBeEnabled();
+});
+
+
+test("concurrent browser requests share one rotating refresh and sign out cleanly", async ({ request }) => {
+  // This follows the hosted callback without executing the page's JavaScript.
+  // The fixture issues a one-second access token and single-use refresh token.
+  expect((await request.get(`${library}/auth/login`)).ok()).toBe(true);
+  const sessions = await Promise.all(Array.from({ length: 6 }, async () => {
+    const response = await request.get(`${library}/api/session`);
+    expect(response.ok()).toBe(true);
+    return response.json();
+  }));
+  for (const session of sessions) expect(session.authenticated).toBe(true);
+  const logout = await request.post(`${library}/auth/logout`, { headers: { Origin: library } });
+  expect(logout.ok()).toBe(true);
+  expect(await (await request.get(`${library}/api/session`)).json()).toEqual({ authenticated: false });
+  const catalog = await (await request.get(`${library}/api/v1/apps`)).json();
+  expect(JSON.stringify(catalog)).not.toContain("tos>internal-tools");
+});

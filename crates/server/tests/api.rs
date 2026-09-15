@@ -758,3 +758,316 @@ async fn weighted_search_prioritizes_names_over_description_and_tolerates_query_
         200
     );
 }
+
+#[derive(Default)]
+struct Mailbox(std::sync::Mutex<Vec<silicon_honeycomb_server::notifications::Email>>);
+#[async_trait]
+impl silicon_honeycomb_server::notifications::Mailer for Mailbox {
+    async fn send(
+        &self,
+        email: &silicon_honeycomb_server::notifications::Email,
+    ) -> silicon_honeycomb_server::notifications::Delivery {
+        self.0.lock().unwrap().push(email.clone());
+        silicon_honeycomb_server::notifications::Delivery::Sent("fixture-postmark-receipt".into())
+    }
+}
+#[tokio::test]
+async fn reports_queue_once_and_test_notifications_never_leave_the_environment() {
+    use silicon_honeycomb_server::notifications::dispatch_once;
+    let (s, _) = setup(true).await;
+    let body = json!({"message":"The install command fails with this reproduction.","pr":"https://github.com/teamofsilicons/silicon-honeycomb/pull/1"});
+    let (status, report) = call(
+        &s,
+        "POST",
+        "/api/v1/reports",
+        None,
+        body.clone(),
+        "report-fixture-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, 202);
+    assert_eq!(report["notification"], "pending");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/reports",
+            None,
+            body,
+            "report-fixture-0001",
+            None
+        )
+        .await
+        .1["id"],
+        report["id"]
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/reports",
+            None,
+            json!({"message":"A different report message"}),
+            "report-fixture-0001",
+            None
+        )
+        .await
+        .0,
+        409
+    );
+    let mailbox = Mailbox::default();
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    assert!(!dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    assert_eq!(mailbox.0.lock().unwrap().len(), 1);
+    assert!(mailbox.0.lock().unwrap()[0].text.contains("/pull/1"));
+    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES('test-mail','test-environment','test-mail','report.created','{}',1)").execute(&s.db).await.unwrap();
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    let state: String = sqlx::query_scalar("SELECT state FROM outbox WHERE id='test-mail'")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "captured");
+    assert_eq!(mailbox.0.lock().unwrap().len(), 1);
+}
+struct LostMail;
+#[async_trait]
+impl silicon_honeycomb_server::notifications::Mailer for LostMail {
+    async fn send(
+        &self,
+        _: &silicon_honeycomb_server::notifications::Email,
+    ) -> silicon_honeycomb_server::notifications::Delivery {
+        silicon_honeycomb_server::notifications::Delivery::Uncertain("Lost receipt".into())
+    }
+}
+#[tokio::test]
+async fn uncertain_email_receipts_are_preserved_without_blind_duplicate_delivery() {
+    use silicon_honeycomb_server::notifications::dispatch_once;
+    let (s, _) = setup(true).await;
+    let (_, report) = call(
+        &s,
+        "POST",
+        "/api/v1/reports",
+        None,
+        json!({"message":"A report with a lost mail delivery response"}),
+        "report-lost-0001",
+        None,
+    )
+    .await;
+    dispatch_once(&s, Some(&LostMail)).await.unwrap();
+    assert!(!dispatch_once(&s, Some(&LostMail)).await.unwrap());
+    let state: String = sqlx::query_scalar("SELECT state FROM outbox WHERE id=?")
+        .bind(report["id"].as_str().unwrap())
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "uncertain");
+}
+
+struct Services {
+    fail_dependency: AtomicBool,
+    iam_calls: std::sync::atomic::AtomicUsize,
+}
+#[async_trait]
+impl Management for Services {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, o: &Value, t: &str) -> Result<Value> {
+        self.service_lifecycle("tos>iam", o, t).await
+    }
+    async fn service_lifecycle(&self, app: &str, o: &Value, _: &str) -> Result<Value> {
+        if app == "tos>iam" {
+            self.iam_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        if app == "tos>dependency" && self.fail_dependency.load(Ordering::SeqCst) {
+            return Err(Error::unavailable("Dependency is temporarily offline"));
+        }
+        Ok(
+            json!({"state":"completed","operation_id":o["operation_id"],"environment_id":o["environment_id"],"app_id":app,"environment_revision":o["environment_revision"],"generation":o["generation"],"key_version":o["key_version"]}),
+        )
+    }
+}
+#[tokio::test]
+async fn lifecycle_requires_all_services_and_retries_only_incomplete_steps() {
+    let (mut s, _) = setup(true).await;
+    let services = Arc::new(Services {
+        fail_dependency: AtomicBool::new(true),
+        iam_calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    s.management = services.clone();
+    let (_, env) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        Some("member"),
+        json!({"org_id":"tos","name":"Lifecycle"}),
+        "lifecycle-create-0001",
+        None,
+    )
+    .await;
+    assert_eq!(env["state"], "ready");
+    let id = env["environment_id"].as_str().unwrap();
+    let op = env["operation_id"].as_str().unwrap();
+    sqlx::query("UPDATE operations SET state='pending' WHERE id=?")
+        .bind(op)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE environments SET state='provisioning' WHERE id=?")
+        .bind(id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,'tos>dependency',1,'{}','pending',?,1)").bind(id).bind(op).execute(&s.db).await.unwrap();
+    let pending = silicon_honeycomb_server::lifecycle::coordinate(&s, id, op, "member")
+        .await
+        .unwrap();
+    assert_eq!(pending["state"], "provisioning");
+    assert_eq!(services.iam_calls.load(Ordering::SeqCst), 1);
+    services.fail_dependency.store(false, Ordering::SeqCst);
+    let (_, ready) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/retry"),
+        Some("member"),
+        Value::Null,
+        "lifecycle-retry-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(ready["state"], "ready");
+    assert_eq!(services.iam_calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn lifecycle_clean_rotation_restore_and_retention_purge_are_isolated() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(Services {
+        fail_dependency: AtomicBool::new(false),
+        iam_calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("production-survivor"),
+        "lifecycle-prod-app-0001",
+        None,
+    )
+    .await;
+    let (_, env) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        Some("member"),
+        json!({"org_id":"tos","name":"Lifecycle"}),
+        "lifecycle-create-0002",
+        None,
+    )
+    .await;
+    let id = env["environment_id"].as_str().unwrap();
+    let key_path = format!("/api/v1/environments/{id}/key");
+    let (_, key) = call(
+        &s,
+        "POST",
+        &key_path,
+        Some("member"),
+        Value::Null,
+        "lifecycle-read-key-0001",
+        None,
+    )
+    .await;
+    let original = key["testing_key"].as_str().unwrap();
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,state,iam_revision,created_at,updated_at) SELECT ?,app_id,org_id,name,description,config,effective_config,webhook_secret,state,iam_revision,created_at,updated_at FROM applications WHERE plane='production'").bind(id).execute(&s.db).await.unwrap();
+    for (action, revision, expected_state) in [
+        ("clean", 1, "ready"),
+        ("rotate-key", 2, "ready"),
+        ("delete", 3, "deleted"),
+        ("restore", 4, "ready"),
+        ("delete", 5, "deleted"),
+    ] {
+        let (status, result) = call(
+            &s,
+            "POST",
+            &format!("/api/v1/environments/{id}/actions/{action}"),
+            Some("member"),
+            Value::Null,
+            &format!("lifecycle-{action}-{revision:04}"),
+            Some(revision),
+        )
+        .await;
+        assert_eq!(status, 202, "{result}");
+        assert_eq!(result["state"], expected_state);
+        if action == "clean" {
+            assert_eq!(result["generation"], 2);
+            let test_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM applications WHERE plane=?")
+                    .bind(id)
+                    .fetch_one(&s.db)
+                    .await
+                    .unwrap();
+            assert_eq!(test_count, 0);
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM applications WHERE plane='production'")
+                    .fetch_one(&s.db)
+                    .await
+                    .unwrap();
+            assert_eq!(count, 1);
+        }
+        if action == "rotate-key" {
+            assert_ne!(result["testing_key"], original);
+            assert_eq!(result["key_version"], 2);
+            let request = Request::builder()
+                .uri("/api/v1/apps")
+                .header("x-testing-environment-key", original)
+                .body(Body::empty())
+                .unwrap();
+            let response = silicon_honeycomb_server::api::router(s.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 400);
+        }
+    }
+    let path = format!("/api/v1/environments/{id}/actions/purge");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &path,
+            Some("member"),
+            Value::Null,
+            "lifecycle-purge-early-0001",
+            Some(6)
+        )
+        .await
+        .0,
+        409
+    );
+    sqlx::query("UPDATE environments SET purge_after=1 WHERE id=?")
+        .bind(id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &path,
+            Some("member"),
+            Value::Null,
+            "lifecycle-purge-0001",
+            Some(6)
+        )
+        .await
+        .1["state"],
+        "purged"
+    );
+    let encrypted: String = sqlx::query_scalar("SELECT encrypted_key FROM environments WHERE id=?")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert!(encrypted.is_empty());
+}

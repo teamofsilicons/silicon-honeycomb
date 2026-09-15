@@ -94,6 +94,7 @@ honeycomb install 'tos>briefcase'
 honeycomb update 'tos>briefcase'
 honeycomb uninstall 'tos>briefcase'
 honeycomb logout
+honeycomb report "What happened and how to reproduce it" --pr https://github.com/teamofsilicons/silicon-honeycomb/pull/123
 ```
 
 Set `SILICON_HOME` or `honeycomb config home /existing/directory` to choose local

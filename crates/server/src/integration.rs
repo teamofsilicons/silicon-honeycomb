@@ -5,6 +5,26 @@ use serde_json::Value;
 
 #[async_trait]
 pub trait Management: Send + Sync {
+    /// Implement with each service's protected lifecycle API, independently of test sessions.
+    async fn service_lifecycle(
+        &self,
+        app_id: &str,
+        operation: &Value,
+        actor_token: &str,
+    ) -> Result<Value> {
+        if app_id == "tos>iam" {
+            self.lifecycle(operation, actor_token).await
+        } else {
+            Err(Error::unavailable(format!(
+                "Protected lifecycle transport is not configured for {app_id}"
+            )))
+        }
+    }
+    async fn notification_recipients(&self, _org_id: &str) -> Result<Vec<String>> {
+        Err(Error::unavailable(
+            "IAM protected notification recipient discovery is not yet available",
+        ))
+    }
     async fn configure(
         &self,
         operation: &Value,

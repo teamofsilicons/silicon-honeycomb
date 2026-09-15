@@ -87,6 +87,12 @@ enum Command {
         #[arg(long)]
         review: String,
     },
+    /// Report a reproducible bug; optionally link a pull request with its fix.
+    Report {
+        message: String,
+        #[arg(long)]
+        pr: Option<String>,
+    },
     /// Star an application; repeat safely. Use --remove to remove the star.
     Star {
         app_id: String,
@@ -232,7 +238,7 @@ enum Environments {
     /// Coordinate rotation, clean, delete or restore with every participating service.
     Action {
         id: String,
-        #[arg(value_parser=["rotate-key","clean","delete","restore"])]
+        #[arg(value_parser=["rotate-key","clean","delete","restore","retry","purge"])]
         action: String,
         #[arg(long)]
         revision: i64,
@@ -526,6 +532,9 @@ async fn run() -> Result<()> {
             }
             show(&json!({"authenticated":false}))?;
         }
+        Command::Report { message, pr } => {
+            show(&client.report(message, pr.as_deref(), &operation).await?)?
+        }
         Command::Search { query, page } => show(&client.search(query, *page, false).await?)?,
         Command::Validate { path } => {
             let v = package::validate(path);
@@ -649,11 +658,17 @@ async fn run() -> Result<()> {
                 id,
                 action,
                 revision,
-            } => show(
-                &client
+            } => {
+                let result = client
                     .environment_action(id, action, &mutation(&cli, Some(*revision))?)
-                    .await?,
-            )?,
+                    .await?;
+                if let Some(key) = result["testing_key"].as_str() {
+                    let mut keys: BTreeMap<String, String> = read(&root.join("environments.json"))?;
+                    keys.insert(id.clone(), key.into());
+                    write_private(&root.join("environments.json"), &keys)?;
+                }
+                show(&result)?;
+            }
         },
         Command::Review {
             app_id,
@@ -785,10 +800,11 @@ async fn self_update(root: &Path, force: bool) -> Result<()> {
     }
     settings.last_update_check = now();
     write_private(&root.join("config.json"), &settings)?;
-    honeycomb_client::maintenance::update_cli(&root.join("system"), &std::env::current_exe()?)
-        .await?;
+    let executable = std::env::current_exe()?;
+    let updated =
+        honeycomb_client::maintenance::update_cli(&root.join("system"), &executable).await?;
     if force {
-        show(&json!({"updated":true,"executable":root.join("system/bin/honeycomb")}))?;
+        show(&json!({"updated":updated,"executable":executable}))?;
     }
     Ok(())
 }

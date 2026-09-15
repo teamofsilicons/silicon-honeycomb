@@ -107,6 +107,8 @@ def main():
             run('uninstall', app_id, role='member')
             assert not executable.exists()
             assert not run('installed', role='member')
+            report = run('report', 'The local test report reproduces a CLI issue.', role='member')
+            assert report['saved'] and report['notification'] == 'pending'
             run('logout', role='member')
             assert run('login', 'status', role='member') == {'authenticated': False}
             print('PASS: CLI IAM discovery/login, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication gate, uninstall/logout')

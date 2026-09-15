@@ -13,7 +13,7 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "HONEYCOMB_FIXTURE_PORT=19180 cargo run --manifest-path ../Cargo.toml -p silicon-honeycomb-server --example e2e_fixture",
+        "HONEYCOMB_FIXTURE_SHORT_SESSION=1 HONEYCOMB_FIXTURE_PORT=19180 cargo run --manifest-path ../Cargo.toml -p silicon-honeycomb-server --example e2e_fixture",
       url: "http://127.0.0.1:19180/health",
       timeout: 120000,
       reuseExistingServer: false,

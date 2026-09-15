@@ -160,6 +160,9 @@ export default function App() {
   const [drafts, setDrafts] = createSignal<any[]>([]);
   const [secret, setSecret] = createSignal("");
   const [envs, setEnvs] = createSignal<any[]>([]);
+  const [selectedEnv, setSelectedEnv] = createSignal<any>();
+  const [environmentAction, setEnvironmentAction] = createSignal("");
+  const [confirmationName, setConfirmationName] = createSignal("");
   const [showEnv, setShowEnv] = createSignal(false);
   const [envName, setEnvName] = createSignal("");
   const [envOrg, setEnvOrg] = createSignal("");
@@ -399,6 +402,26 @@ export default function App() {
       await load();
     }, "CLI release uploaded.");
   }
+  async function runEnvironmentAction(action: string) {
+    const env = selectedEnv();
+    if (!env) return;
+    await act(async () => {
+      const result = await request(
+        `/api/v1/environments/${env.environment_id}/actions/${action}`,
+        {
+          method: "POST",
+          headers: { "If-Match": String(env.revision) },
+        },
+      );
+      setSelectedEnv(
+        await request(`/api/v1/environments/${env.environment_id}`),
+      );
+      setEnvironmentAction("");
+      setConfirmationName("");
+      if (result.testing_key) setEnvKey(result.testing_key);
+      await load();
+    });
+  }
   async function logout() {
     await act(async () => {
       await request("/auth/logout", { method: "POST" });
@@ -410,7 +433,10 @@ export default function App() {
   }
   return (
     <div class="app-shell">
-      <aside class={`sidebar ${mobileNav() ? "open" : ""}`}>
+      <aside
+        id="honeycomb-navigation"
+        class={`sidebar ${mobileNav() ? "open" : ""}`}
+      >
         <a class="wordmark" href="/">
           <img src="/brand/honeycomb.svg" alt="" />
           <span>honeycomb</span>
@@ -474,6 +500,8 @@ export default function App() {
             <button
               class="icon-button mobile-toggle"
               aria-label="Open navigation"
+              aria-expanded={mobileNav()}
+              aria-controls="honeycomb-navigation"
               onClick={() => setMobileNav(!mobileNav())}
             >
               <Menu size={20} />
@@ -878,6 +906,23 @@ export default function App() {
                           </div>
                           <Badge>{env.state}</Badge>
                           <Show when={env.can_manage}>
+                            <button
+                              class="button outline"
+                              onClick={() =>
+                                void act(async () => {
+                                  setSelectedEnv(
+                                    await request(
+                                      `/api/v1/environments/${env.environment_id}`,
+                                    ),
+                                  );
+                                  setEnvironmentAction("");
+                                  setConfirmationName("");
+                                })
+                              }
+                            >
+                              Manage
+                            </button>
+
                             <button
                               class="button outline"
                               onClick={() =>
@@ -1487,6 +1532,145 @@ export default function App() {
         </form>
       </Dialog>
       <Dialog
+        open={!!selectedEnv()}
+        title={selectedEnv()?.name || "Testing environment"}
+        close={() => {
+          setSelectedEnv(undefined);
+          setEnvironmentAction("");
+        }}
+      >
+        <Show when={selectedEnv()}>
+          {(env) => (
+            <>
+              <Show when={error()}>
+                <p class="field-error" role="alert">
+                  {error()}
+                </p>
+              </Show>
+              <p class="app-id">{env().environment_id}</p>
+              <p>
+                <Badge>{env().state}</Badge> · Generation {env().generation} ·
+                Revision {env().revision}
+              </p>
+              <h3>Service progress</h3>
+              <div class="environment-services">
+                <For each={env().services || []}>
+                  {(service) => (
+                    <article>
+                      <strong>{service.app_id}</strong>{" "}
+                      <Badge>{service.state}</Badge>
+                      <Show when={service.error}>
+                        <p class="field-error">{service.error}</p>
+                      </Show>
+                    </article>
+                  )}
+                </For>
+              </div>
+              <Show
+                when={!["ready", "deleted", "purged"].includes(env().state)}
+              >
+                <p class="muted">
+                  This environment becomes available after every service
+                  confirms readiness. Retry continues the incomplete steps.
+                </p>
+                <button
+                  class="button primary"
+                  disabled={busy()}
+                  onClick={() => void runEnvironmentAction("retry")}
+                >
+                  Retry setup
+                </button>
+              </Show>
+              <Show when={env().state === "ready"}>
+                <div class="environment-actions">
+                  <For
+                    each={[
+                      ["rotate-key", "Rotate key"],
+                      ["clean", "Clean test data"],
+                      ["delete", "Delete environment"],
+                    ]}
+                  >
+                    {([action, label]) => (
+                      <button
+                        class="button outline"
+                        onClick={() => {
+                          setEnvironmentAction(action);
+                          setConfirmationName("");
+                        }}
+                      >
+                        {label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Show when={env().state === "deleted"}>
+                <p class="muted">
+                  Recovery deadline:{" "}
+                  {new Date(env().purge_after * 1000).toLocaleString()}
+                </p>
+                <Show
+                  when={env().purge_after > Date.now() / 1000}
+                  fallback={
+                    <button
+                      class="button outline"
+                      onClick={() => setEnvironmentAction("purge")}
+                    >
+                      Permanently purge
+                    </button>
+                  }
+                >
+                  <button
+                    class="button primary"
+                    disabled={busy()}
+                    onClick={() => void runEnvironmentAction("restore")}
+                  >
+                    Restore environment
+                  </button>
+                </Show>
+              </Show>
+              <Show when={environmentAction()}>
+                <div class="environment-confirm">
+                  <p>
+                    {environmentAction() === "clean"
+                      ? "Cleaning permanently removes this environment’s test data and sessions. The environment and current root key remain."
+                      : environmentAction() === "delete"
+                        ? "Deletion disables access and starts a 30-day recovery window."
+                        : environmentAction() === "purge"
+                          ? "Purging permanently erases the remaining test data and root key."
+                          : "Rotation invalidates the old key immediately. Save the new key shown after this request."}
+                  </p>
+                  <label>
+                    Type the environment name to confirm
+                    <input
+                      value={confirmationName()}
+                      onInput={(e) =>
+                        setConfirmationName(e.currentTarget.value)
+                      }
+                    />
+                  </label>
+                  <button
+                    class="button primary"
+                    disabled={busy() || confirmationName() !== env().name}
+                    onClick={() =>
+                      void runEnvironmentAction(environmentAction())
+                    }
+                  >
+                    Confirm {environmentAction()}
+                  </button>
+                  <button
+                    class="button quiet"
+                    onClick={() => setEnvironmentAction("")}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </Show>
+            </>
+          )}
+        </Show>
+      </Dialog>
+      <Dialog
         open={showEnv()}
         title="Create a testing environment"
         close={() => setShowEnv(false)}
@@ -1502,7 +1686,7 @@ export default function App() {
               });
               setShowEnv(false);
               setEnvs((await request("/api/v1/environments")).items);
-            }, "Environment created. Service preparation is pending.");
+            }, "Environment created. Open Manage to check service readiness.");
           }}
         >
           <Show when={error()}>

@@ -241,6 +241,20 @@ impl Client {
         .await?;
         Ok(())
     }
+    pub async fn report(
+        &self,
+        message: &str,
+        pr: Option<&str>,
+        mutation: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["reports"],
+            &json!({"message":message,"pr":pr}),
+            mutation,
+        )
+        .await
+    }
     pub async fn search(&self, q: &str, page: u32, managed: bool) -> Result<Page<App>> {
         let mut url = self.url(&["apps"])?;
         url.query_pairs_mut()

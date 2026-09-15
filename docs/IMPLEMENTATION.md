@@ -48,9 +48,25 @@ integration. No repository, crates, binaries or websites have been published.
 Still required before the full understanding is complete: provider/validator
 review decisions and IAM activation/reconciliation; protected app secret rotation;
 complete per-service testing lifecycle/import/migration/retention coordination;
-Postmark report/notification delivery; actual release publication/deployment and live cross-service E2E.
+live Postmark delivery and IAM recipient discovery; actual release publication/deployment and live cross-service E2E.
 
 Added since the frontend checkpoint: persisted public Briefcase download paths;
 weighted FTS5 plus trigram search; prebuilt binary updater; six-platform release
 candidate workflow; production container and HTTPS routing artifacts. Cargo source
 installation and both production container modes have been smoke-tested locally.
+
+Bug reports now queue durable Postmark notifications, accept optional PR links, and
+return a report receipt. Release/publication discussions queue owner/admin notices.
+Test-plane mail is captured. Uncertain delivery receipts are held for reconciliation
+instead of automatically duplicating messages. No real emails have been sent.
+
+Shared lifecycle operations now persist per-service receipts, use renewable coordinator
+leases, retry incomplete services, and gate readiness on matching revisions, generations
+and key versions. Clean, key rotation, soft delete, restore and post-retention purge are
+covered by isolated backend tests and exposed in the console and CLI. Production
+service transport remains unavailable until the protected IAM/service APIs exist.
+
+Checkpoint checks: full Rust workspace tests and strict Clippy pass; CLI and curl/bash
+installer journeys pass; web production build and all 14 desktop/mobile browser
+journeys pass, including single-use refresh-token concurrency. Postmark delivery is
+verified against a local HTTP double only.

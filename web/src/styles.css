@@ -1018,11 +1018,13 @@ textarea {
 @media (max-width: 760px) {
   .sidebar {
     transform: translateX(-100%);
+    visibility: hidden;
     z-index: 20;
     box-shadow: 8px 0 30px #2534461a;
     transition: transform 0.2s;
   }
   .sidebar.open {
+    visibility: visible;
     transform: none;
   }
   .workspace {
@@ -1210,4 +1212,33 @@ textarea {
     animation: none !important;
     transition: none !important;
   }
+}
+
+.environment-services article {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line, #e4e2dc);
+}
+.environment-services strong {
+  font-weight: 500;
+  margin-right: 12px;
+}
+.environment-services p {
+  margin: 8px 0 0;
+}
+.environment-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 24px 0;
+}
+.environment-confirm {
+  margin-top: 24px;
+  padding: 20px;
+  background: #f8f7f3;
+  border: 1px solid #e4e2dc;
+}
+.environment-confirm label {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
 }

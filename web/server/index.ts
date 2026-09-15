@@ -152,7 +152,9 @@ async function currentSession(req: express.Request) {
       const tokens = (await response.json()) as any;
       if (
         typeof tokens.access_token !== "string" ||
-        !Number.isFinite(tokens.expires_in)
+        !tokens.access_token ||
+        !Number.isFinite(tokens.expires_in) ||
+        tokens.expires_in <= 0
       )
         throw new Error("IAM returned an invalid session response.");
       tokens.refresh_token ||= active.tokens.refresh_token;
@@ -213,6 +215,8 @@ app.get("/api/session", async (req, res) => {
       headers: { Authorization: `Bearer ${active.tokens.access_token}` },
     });
     if (response.status === 401) {
+      db.prepare("DELETE FROM sessions WHERE id=?").run(active.id);
+      setCookie(res, sessionCookie, "", 0);
       res.json({ authenticated: false });
       return;
     }
@@ -277,8 +281,10 @@ app.get("/auth/callback", async (req, res) => {
         "IAM could not exchange this sign-in token. Please start sign-in again.",
       );
     const tokens = (await response.json()) as any;
-    if (typeof tokens.access_token !== "string")
-      throw new Error("IAM returned no access token");
+    if (
+      typeof tokens.access_token !== "string" || !tokens.access_token ||
+      !Number.isFinite(tokens.expires_in) || tokens.expires_in <= 0
+    ) throw new Error("IAM returned an invalid session response.");
     const id = randomBytes(32).toString("hex");
     db.prepare("INSERT INTO sessions(id,tokens,expires) VALUES(?,?,?)").run(
       createHash("sha256").update(id).digest("hex"),

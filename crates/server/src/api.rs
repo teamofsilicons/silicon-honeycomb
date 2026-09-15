@@ -27,6 +27,7 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/auth/refresh", post(refresh))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/status", get(status))
+        .route("/api/v1/reports", post(super::notifications::report))
         .route("/api/v1/apps", get(search).post(create_app))
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route(
@@ -1130,6 +1131,9 @@ async fn request_publication(
     .bind(now())
     .execute(&mut *tx)
     .await?;
+    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.status',?,?)")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("publication:{request}:requested"))
+        .bind(json!({"app_id":id,"org_id":app.org_id,"state":"awaiting_scope_review"}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -1169,15 +1173,28 @@ async fn message(
     Path(id): Path<String>,
     Json(body): Json<Message>,
 ) -> Result<Json<Value>> {
-    key(&h)?;
+    let key = key(&h)?;
     let c = context(&s, &h).await?;
-    find_app(&s, &c, &id, true).await?;
+    let app = find_app(&s, &c, &id, true).await?;
     if body.message.trim().is_empty() || body.message.len() > 10000 {
         return Err(Error::bad("message must contain 1–10000 characters"));
     }
     let request:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane=? AND app_id=? ORDER BY revision DESC LIMIT 1").bind(&c.plane).bind(&id).fetch_optional(&s.db).await?;
     let request = request.ok_or_else(Error::missing)?;
+    let digest = hash(&json!({"message":body.message,"provider":body.provider}));
+    let actor = &c.identity()?.principal_id;
+    if let Some(row) = sqlx::query("SELECT id,request_hash FROM discussions WHERE request_id=? AND actor=? AND idempotency_key=?")
+        .bind(&request).bind(actor).bind(key).fetch_optional(&s.db).await? {
+        if row.get::<String,_>("request_hash") != digest { return Err(Error::conflict("Idempotency key already used for another reply")); }
+        return Ok(Json(json!({"id":row.get::<String,_>("id")})));
+    }
     let message_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO discussions(id,request_id,actor,provider,message,created_at) VALUES(?,?,?,?,?,?)").bind(&message_id).bind(request).bind(&c.identity()?.principal_id).bind(body.provider).bind(body.message).bind(now()).execute(&s.db).await?;
+    let mut tx = s.db.begin().await?;
+    sqlx::query("INSERT INTO discussions(id,request_id,actor,provider,message,created_at,idempotency_key,request_hash) VALUES(?,?,?,?,?,?,?,?)")
+        .bind(&message_id).bind(request).bind(actor).bind(body.provider).bind(body.message).bind(now()).bind(key).bind(digest).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.message',?,?)")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message_id}"))
+        .bind(json!({"app_id":id,"org_id":app.org_id}).to_string()).bind(now()).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(Json(json!({"id":message_id})))
 }

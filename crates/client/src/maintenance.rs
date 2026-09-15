@@ -4,7 +4,7 @@ use std::{fs, path::Path, process::Command};
 
 /// Fetch the latest vendor release, verify its checksum, and atomically replace the CLI.
 /// Prebuilt installs need no Rust toolchain for their hourly updates.
-pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<()> {
+pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<bool> {
     let http = reqwest::Client::builder()
         .user_agent(concat!("honeycomb-updater/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(300))
@@ -21,27 +21,28 @@ pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<()>
         }))
         .build()?;
     let metadata = bounded(
-        http.get("https://api.github.com/repos/teamofsilicons/silicon-honeycomb/releases/latest")
+        http.get("https://crates.io/api/v1/crates/silicon-honeycomb-cli")
             .send()
             .await?,
         1024 * 1024,
     )
     .await?;
     let metadata: serde_json::Value = serde_json::from_slice(&metadata)?;
-    let tag = metadata["tag_name"]
+    let latest = metadata["crate"]["max_stable_version"]
         .as_str()
-        .context("Release has no tag")?;
-    let version = semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag))?;
+        .or_else(|| metadata["crate"]["max_version"].as_str())
+        .context("Registry returned no published version")?;
+    let version = semver::Version::parse(latest)?;
     if version <= semver::Version::parse(env!("CARGO_PKG_VERSION"))? {
-        return Ok(());
+        return Ok(false);
     }
     if !version.pre.is_empty() {
-        bail!("The latest release is a prerelease; automatic update deferred");
+        bail!("The latest registry version is a prerelease; automatic update deferred");
     }
     let target = crate::package::current_target().context("No prebuilt CLI for this platform")?;
     let asset = format!("honeycomb-{target}.tar.gz");
     let base =
-        format!("https://github.com/teamofsilicons/silicon-honeycomb/releases/download/{tag}");
+        format!("https://github.com/teamofsilicons/silicon-honeycomb/releases/download/v{version}");
     let checksum = bounded(
         http.get(format!("{base}/{asset}.sha256")).send().await?,
         1024,
@@ -62,7 +63,8 @@ pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<()>
         &format!("honeycomb {version}"),
         current_executable,
     )
-    .await
+    .await?;
+    Ok(true)
 }
 async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
     if !response.status().is_success() {

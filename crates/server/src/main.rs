@@ -76,6 +76,15 @@ async fn main() -> anyhow::Result<()> {
             ]
             .map(axum::http::HeaderName::from_static),
         );
+    let mailer = std::env::var("POSTMARK_SERVER_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(silicon_honeycomb_server::notifications::Postmark::new)
+        .transpose()?;
+    tokio::spawn(silicon_honeycomb_server::notifications::run(
+        state.clone(),
+        mailer,
+    ));
     let app = silicon_honeycomb_server::api::router(state).layer(cors);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(address=%bind,"Honeycomb listening");

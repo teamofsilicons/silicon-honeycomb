@@ -13,43 +13,74 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-struct FixtureIam;
+#[derive(Default)]
+struct FixtureIam(Mutex<BTreeMap<String, FixtureSession>>);
+struct FixtureSession {
+    role: String,
+    refresh: String,
+    expires: std::time::Instant,
+}
+impl FixtureIam {
+    fn issue(sessions: &mut BTreeMap<String, FixtureSession>, role: &str, seconds: u64) -> Value {
+        let access = format!("oat_fixture_{}", uuid::Uuid::new_v4());
+        let refresh = format!("ort_fixture_{}", uuid::Uuid::new_v4());
+        sessions.insert(
+            access.clone(),
+            FixtureSession {
+                role: role.into(),
+                refresh: refresh.clone(),
+                expires: std::time::Instant::now() + std::time::Duration::from_secs(seconds),
+            },
+        );
+        json!({"access_token":access,"refresh_token":refresh,"expires_in":seconds,"token_type":"Bearer"})
+    }
+}
 #[async_trait]
 impl IdentityProvider for FixtureIam {
     async fn login(&self, slt: &str, _: &str, _: Option<&str>) -> Result<Value> {
         let role = match slt {
-            "fixture-owner" => "owner",
-            "fixture-member" => "member",
+            "fixture-owner" => "org_owner",
+            "fixture-member" => "org_member",
             "fixture-outsider" => "outsider",
             _ => return Err(Error::unauthorized()),
         };
-        Ok(
-            json!({"access_token":format!("fixture-{role}-token"),"refresh_token":format!("fixture-{role}-refresh"),"expires_in":3600,"token_type":"Bearer"}),
-        )
+        let seconds = if std::env::var("HONEYCOMB_FIXTURE_SHORT_SESSION").as_deref() == Ok("1") {
+            1
+        } else {
+            3600
+        };
+        Ok(Self::issue(&mut self.0.lock().unwrap(), role, seconds))
     }
     async fn refresh(&self, token: &str, _: &str, _: Option<&str>) -> Result<Value> {
-        let role = token
-            .strip_prefix("fixture-")
-            .and_then(|t| t.strip_suffix("-refresh"))
+        let mut sessions = self.0.lock().unwrap();
+        let access = sessions
+            .iter()
+            .find(|(_, s)| s.refresh == token)
+            .map(|(access, _)| access.clone())
             .ok_or_else(Error::unauthorized)?;
-        self.login(&format!("fixture-{role}"), "", None).await
+        let previous = sessions.remove(&access).unwrap();
+        Ok(Self::issue(&mut sessions, &previous.role, 3600))
     }
-    async fn revoke(&self, _: &str, _: &str, _: Option<&str>) -> Result<()> {
+    async fn revoke(&self, token: &str, _: &str, _: Option<&str>) -> Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .retain(|access, session| access != token && session.refresh != token);
         Ok(())
     }
     async fn authenticate(&self, token: &str, _: Option<&str>) -> Result<Identity> {
-        let role = match token {
-            "fixture-owner-token" => "org_owner",
-            "fixture-member-token" => "org_member",
-            "fixture-outsider-token" => "outsider",
-            _ => return Err(Error::unauthorized()),
-        };
+        let sessions = self.0.lock().unwrap();
+        let session = sessions
+            .get(token)
+            .filter(|s| s.expires > std::time::Instant::now())
+            .ok_or_else(Error::unauthorized)?;
+        let role = &session.role;
         Ok(Identity {
-            principal_id: token.into(),
+            principal_id: format!("fixture-{role}"),
             actor_type: Some("carbon".into()),
             organizations: BTreeMap::from([(
                 if role == "outsider" { "other" } else { "tos" }.into(),
-                Some(role.into()),
+                Some(role.clone()),
             )]),
             testing_environment_id: None,
             validator: false,
@@ -152,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = State {
         db,
-        identity: Arc::new(FixtureIam),
+        identity: Arc::new(FixtureIam::default()),
         management: Arc::new(FixtureManagement),
         storage: Arc::new(FixtureStorage::default()),
         app_id: "tos>honeycomb".into(),
@@ -160,6 +191,14 @@ async fn main() -> anyhow::Result<()> {
         encryption_key: [7; 32],
         webhook_secret: "fixture-webhook-secret-0000000000000".into(),
     };
+    sqlx::query("UPDATE applications SET webhook_secret=?")
+        .bind(
+            state
+                .encrypt("fixture-webhook-secret-0000000000000")
+                .map_err(|e| anyhow::anyhow!(e.1.message))?,
+        )
+        .execute(&state.db)
+        .await?;
     let app = silicon_honeycomb_server::api::router(state).route("/login", get(fixture_login));
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     println!(
