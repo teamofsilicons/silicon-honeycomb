@@ -2482,6 +2482,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "silicon-honeycomb-client",
  "silicon-honeycomb-core",
  "silicon-iam-client",
  "space-station",

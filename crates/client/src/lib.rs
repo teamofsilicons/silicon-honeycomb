@@ -151,10 +151,15 @@ impl Client {
         url: Url,
         mutation: Option<&Mutation>,
     ) -> reqwest::RequestBuilder {
-        let mut request = self.http.request(method, url).header(
-            "x-honeycomb-telemetry",
-            if self.telemetry { "true" } else { "false" },
-        );
+        let mut request = self
+            .http
+            .request(method, url)
+            .header("honeycomb-api-version", "v1")
+            .header("honeycomb-client-version", env!("CARGO_PKG_VERSION"))
+            .header(
+                "x-honeycomb-telemetry",
+                if self.telemetry { "true" } else { "false" },
+            );
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
         }

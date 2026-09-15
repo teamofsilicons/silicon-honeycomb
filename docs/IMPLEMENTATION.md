@@ -32,6 +32,17 @@ production has no fabricated-login or automatic-approval switch.
 
 ## Checkpoint: 2026-09-16
 
+API governance: unversioned contract discovery, explicit client/version negotiation,
+legacy v1 compatibility and persisted deprecation/last-request timestamps now enforce
+the seven-day idle sunset rule. Active contracts remain active; only an explicit
+operator deprecation starts retirement. The real Rust client consumes the backend
+contract in an HTTP test, alongside CLI and browser journeys. Version policy and
+the consumer matrix are documented in [API-CONTRACTS.md](API-CONTRACTS.md).
+All 44 API cases, workspace tests, strict Clippy, CLI journey, web build and 36
+browser cases pass. No remote commits or release artifacts have been published.
+The user selected MIT for Honeycomb and approved publishing the vendored IAM SDK.
+The root and crates carry MIT license text; the SDK's original notice remains intact.
+
 Missed-notification recovery: the reconciliation worker durably schedules known
 production applications for an authoritative IAM read every five minutes, with
 bounded batches and preserved newer notification targets/backoff. This covers

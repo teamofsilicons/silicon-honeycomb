@@ -1,5 +1,8 @@
 # Silicon Honeycomb
 
+Licensed under [MIT](LICENSE). Vendored dependencies retain their
+[third-party notices](THIRD-PARTY-NOTICES.md).
+
 The application library, release manager and testing-environment coordinator for
 Carbons and Silicons. Honeycomb owns application workflows; IAM remains the
 identity and authorization authority.
@@ -18,6 +21,9 @@ requirements and unfinished work are tracked in the [local handoff](docs/LOCAL-H
 [implementation history](docs/IMPLEMENTATION.md). This repository is under active
 implementation. Live IAM management and ecosystem lifecycle integration are still
 pending; production operations remain pending until those services accept them.
+
+See [API contracts and compatibility](docs/API-CONTRACTS.md) for version selection,
+consumer compatibility, deprecation and the seven-day idle retirement policy.
 
 ## Build and run
 

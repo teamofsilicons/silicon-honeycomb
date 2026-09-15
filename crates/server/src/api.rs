@@ -21,7 +21,8 @@ pub fn router(state: State) -> Router {
     let archive_limit = DefaultBodyLimit::max(honeycomb_core::package::MAX_ARCHIVE_BYTES as usize);
     Router::new()
         .route("/health", get(health))
-        .route("/api/v1/contract", get(contract))
+        .route("/api/contracts", get(super::contracts::discovery))
+        .route("/api/v1/contract", get(super::contracts::discovery))
         .route("/api/v1/iam", get(iam))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh))
@@ -140,6 +141,10 @@ pub fn router(state: State) -> Router {
         )
         .route("/webhook/", post(super::control::webhook))
         .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::contracts::http,
+        ))
         .layer(axum::middleware::from_fn(response_headers))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -150,9 +155,6 @@ pub fn router(state: State) -> Router {
 async fn health() -> Json<Value> {
     Json(json!({"status":"ok"}))
 }
-async fn contract() -> Json<Value> {
-    Json(json!({"selected_version":"v1", "supported_versions":["v1"], "minimum_client":"0.1.0"}))
-}
 async fn response_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -161,10 +163,6 @@ async fn response_headers(
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("no-store"),
-    );
-    response.headers_mut().insert(
-        "honeycomb-api-version",
-        header::HeaderValue::from_static("v1"),
     );
     response.headers_mut().insert(
         "x-content-type-options",

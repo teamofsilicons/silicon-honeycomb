@@ -63,6 +63,12 @@ Cargo 1.98 builds the packages against a temporary local registry, so this verif
 their packaged contents and dependency resolution before the first publication.
 This check runs in CI. It does not publish anything or prove crates.io installation.
 
+When repeating local verification after changing an unpublished version, use a
+fresh `--target-dir` so Cargo gives its temporary registry a new identity. Otherwise
+its immutable-version cache can reuse an older local archive with that same version.
+All three distributable crates include the MIT license text. The vendored IAM SDK
+is backend-only and retains the separate notice in `THIRD-PARTY-NOTICES.md`.
+
 Crates must be published in dependency order (each with `--locked`):
 
 1. `silicon-honeycomb-core`

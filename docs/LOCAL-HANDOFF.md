@@ -19,6 +19,8 @@ This is a working local checkpoint, not a completed production rollout.
 - Space Station diagnostics, CLI/web opt-out, and isolated testing telemetry.
   The dedicated table is created and one synthetic ingestion was verified live;
   see [TELEMETRY.md](TELEMETRY.md).
+- API contract discovery/negotiation, compatibility policy and persisted retirement
+  after seven idle days for explicitly deprecated contracts; see [API-CONTRACTS.md](API-CONTRACTS.md).
 
 Local previews currently run at http://localhost:4173 (library) and
 http://localhost:4174 (console), using an explicit isolated IAM/storage fixture at
@@ -27,7 +29,7 @@ and sample applications; no production credentials or email delivery are involve
 
 ## Verification
 
-- Rust workspace tests and strict Clippy passed. Latest backend coverage: 42 API
+- Rust workspace tests and strict Clippy passed. Latest backend coverage: 44 API
   cases, plus runtime IAM, management SDK and Briefcase logo wire tests.
 - All 36 desktop/mobile browser cases pass, including telemetry opt-out, logo upload/retry, webhook changes, retention
   settings and automatic cleanup progress/retry.

@@ -95,6 +95,8 @@ async fn main() -> anyhow::Result<()> {
                 "x-testing-environment-key",
                 "x-download-receipt",
                 "x-honeycomb-telemetry",
+                "honeycomb-api-version",
+                "honeycomb-client-version",
             ]
             .map(axum::http::HeaderName::from_static),
         );
@@ -108,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
         mailer,
     ));
     tokio::spawn(silicon_honeycomb_server::reconciliation::run(state.clone()));
+    tokio::spawn(silicon_honeycomb_server::contracts::run(state.clone()));
     tokio::spawn(silicon_honeycomb_server::retention_worker::run(
         state.clone(),
     ));

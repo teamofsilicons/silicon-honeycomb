@@ -119,6 +119,142 @@ async fn setup(accept: bool) -> (State, Arc<AtomicBool>) {
     };
     (s, revoked)
 }
+
+#[tokio::test]
+async fn contracts_negotiate_and_retire_only_after_deprecation_and_seven_idle_days() {
+    use silicon_honeycomb_server::{contracts, now};
+    let (s, _) = setup(true).await;
+    let request = |version: &str, client: &str| {
+        Request::builder()
+            .uri("/api/v1/iam")
+            .header("honeycomb-api-version", version)
+            .header("honeycomb-client-version", client)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let router = silicon_honeycomb_server::api::router(s.clone());
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("v2", "0.1.0"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_ACCEPTABLE
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("v1", "invalid"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("v1", "0.0.9"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    // Active contracts never retire just because the service is quiet.
+    sqlx::query("UPDATE api_contracts SET last_request_at=1")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    contracts::retire_quiet(&s).await.unwrap();
+    let response = router
+        .clone()
+        .oneshot(request("v1", "0.1.0"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["honeycomb-contract-state"], "active");
+    let old = now() - contracts::QUIET_PERIOD_SECONDS - 60;
+    // Recent traffic postpones retirement even when deprecation is older.
+    sqlx::query("UPDATE api_contracts SET state='deprecated',deprecated_at=?")
+        .bind(old)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let response = router
+        .clone()
+        .oneshot(request("v1", "0.1.0"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["honeycomb-contract-state"], "deprecated");
+    // A newer deprecation also starts a fresh seven-day interval.
+    sqlx::query("UPDATE api_contracts SET deprecated_at=?,last_request_at=?")
+        .bind(now())
+        .bind(old)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    contracts::retire_quiet(&s).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM api_contracts")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "deprecated"
+    );
+    sqlx::query("UPDATE api_contracts SET deprecated_at=?,last_request_at=?")
+        .bind(old)
+        .bind(old)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("v1", "0.1.0"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::GONE
+    );
+    // Discovery remains available, and requests cannot silently resurrect v1.
+    let (_, discovery) = call(&s, "GET", "/api/contracts", None, Value::Null, "", None).await;
+    assert_eq!(discovery["supported_versions"], json!([]));
+    assert_eq!(discovery["versions"][0]["state"], "retired");
+    assert_eq!(
+        router
+            .oneshot(request("v1", "99.0.0"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::GONE
+    );
+}
+
+#[tokio::test]
+async fn rust_client_consumes_v1_discovery_catalog_and_auth_contracts() {
+    let (s, _) = setup(true).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, silicon_honeycomb_server::api::router(s))
+            .await
+            .unwrap();
+    });
+    let client = honeycomb_client::Client::new(&origin)
+        .unwrap()
+        .with_telemetry(false);
+    let contract: Value = client.get(&["contract"]).await.unwrap();
+    assert_eq!(contract["selected_version"], "v1");
+    assert_eq!(contract["minimum_client"], "0.1.0");
+    let iam = client.iam().await.unwrap();
+    assert_eq!(iam["app_id"], "tos>honeycomb");
+    let catalog = client.search("", 1, false).await.unwrap();
+    assert_eq!(catalog.total, 0);
+    let status = client.with_token("member").login_status().await.unwrap();
+    assert_eq!(status["authenticated"], true);
+    server.abort();
+}
 fn input(id: &str) -> Value {
     json!({"org_id":"tos","local_app_id":id,"name":"Honeycomb Test","description":"A useful application for the Silicon ecosystem. ".repeat(8),"webhook_url":"https://example.com/webhook/","webhook_secret":"secret-never-returned-in-catalog-123456","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read"],"external":[]}})
 }

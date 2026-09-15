@@ -1,5 +1,6 @@
 import express from "express";
 import { AsyncLocalStorage } from "node:async_hooks";
+import packageInfo from "../package.json" with { type: "json" };
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
@@ -120,6 +121,8 @@ function session(
 }
 async function api(path: string, options: RequestInit = {}) {
   const headers = new Headers(options.headers);
+  headers.set("honeycomb-api-version", "v1");
+  headers.set("honeycomb-client-version", packageInfo.version);
   if (telemetryContext.getStore() === false) headers.set("x-honeycomb-telemetry", "false");
   return fetch(`${backend}/api/v1/${path}`, {
     ...options,
@@ -361,7 +364,7 @@ app.use(
         body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
       });
       res.status(response.status);
-      for (const name of ["content-type", "etag", "x-checksum-sha256"]) {
+      for (const name of ["content-type", "etag", "x-checksum-sha256", "honeycomb-api-version", "honeycomb-contract-state"]) {
         const value = response.headers.get(name);
         if (value) res.setHeader(name, value);
       }
