@@ -68,7 +68,7 @@ pub async fn rotate(
                 "Secret rotation requires the current accepted application revision",
             ));
         }
-        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('secret.rotate','configure','publication.activate'))")
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','configure','publication.activate'))")
             .bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
         if pending {
             return Err(Error::conflict(

@@ -1,3 +1,4 @@
+import WebhookSettings from "./WebhookSettings";
 import ScopePicker from "./ScopePicker";
 import {
   createSignal,
@@ -153,6 +154,7 @@ export default function App() {
   const [reconciliation, setReconciliation] = createSignal<any>();
   const [appOperations, setAppOperations] = createSignal<any[]>([]);
   const [rotationConfirmation, setRotationConfirmation] = createSignal("");
+  const [rotationProof, setRotationProof] = createSignal("");
   const [publication, setPublication] = createSignal<any>();
   const [showCreate, setShowCreate] = createSignal(false);
   const [form, setForm] = createSignal<Record<string, any>>(blank());
@@ -1244,23 +1246,28 @@ export default function App() {
                 <form class="application-form" onSubmit={(e) => {
                   e.preventDefault();
                   void act(async () => {
-                    const result=await request(endpoint(app().app_id)+"/secret-rotations", {method:"POST",headers:{"If-Match":String(app().revision)},body:"{}"});
+                    const proof=rotationProof(); setRotationProof("");
+                    const result=await request(endpoint(app().app_id)+"/secret-rotations", {method:"POST",headers:{"If-Match":String(app().revision)},body:JSON.stringify({step_up_assertion:proof || null})});
                     if(result.app_secret) setSecret(result.app_secret);
                     setNotice(result.state === "accepted" ? "Secret rotated. Save the replacement." : "Rotation is pending IAM acceptance. Its operation is saved below.");
                     setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
-                    setRotationConfirmation("");
+                    setRotationConfirmation(""); setRotationProof("");
                   });
                 }}>
+                  <label>IAM application-secret step-up assertion<input type="password" autocomplete="off" value={rotationProof()} onInput={e=>setRotationProof(e.currentTarget.value)} /></label>
+                  <p class="muted">Use fresh IAM verification for application.client_secret.rotate.</p>
                   <label>Type the application ID to rotate its secret<input value={rotationConfirmation()} onInput={(e)=>setRotationConfirmation(e.currentTarget.value)} /></label>
                   <button class="button outline" disabled={busy() || rotationConfirmation()!==app().app_id || app().effective_revision!==app().revision || appOperations().some((o)=>o.state==="pending")}>Rotate application secret</button>
                 </form>
                 <h3>Your configuration operations</h3>
-                <For each={appOperations()}>{(op)=><article class="review-thread">
+                <For each={appOperations().filter(op=>!op.kind.startsWith("webhook."))}>{(op)=><article class="review-thread">
                   <strong>{op.kind==="secret.rotate"?"Secret rotation":"Application configuration"}</strong> <Badge>{op.state}</Badge>
                   <p class="app-id">{op.id}</p>
                   <Show when={op.error}><p class="muted">{op.error === "integration_unavailable" ? "Waiting for IAM’s protected management integration." : op.error === "step_up_required" ? "IAM requires fresh identity verification before accepting this rotation." : op.error}</p></Show>
                   <Show when={op.state==="pending"}><button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{
-                    const result=op.kind==="secret.rotate" ? await request(endpoint(app().app_id)+"/secret-rotations",{method:"POST",headers:{"If-Match":String(op.revision),"Idempotency-Key":op.idempotency_key},body:"{}"}) : await request(`/api/v1/operations/${op.id}/retry`,{method:"POST",body:"{}"});
+                    const proof=rotationProof(); setRotationProof("");
+                    const result=op.kind==="secret.rotate" ? await request(endpoint(app().app_id)+"/secret-rotations",{method:"POST",headers:{"If-Match":String(op.revision),"Idempotency-Key":op.idempotency_key},body:JSON.stringify({step_up_assertion:proof || null})}) : await request(`/api/v1/operations/${op.id}/retry`,{method:"POST",body:"{}"});
+                    setRotationProof("");
                     if(result.app_secret) setSecret(result.app_secret);
                     setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
                     setSelected(await request(endpoint(app().app_id)));
@@ -1271,6 +1278,10 @@ export default function App() {
                     setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
                   })}>Recover one-time secret</button>
                 </article>}</For>
+                <WebhookSettings app={app()} refresh={async()=>{
+                  setSelected(await request(endpoint(app().app_id)));
+                  setAppOperations((await request(endpoint(app().app_id)+"/operations")).items);
+                }} />
               </Show>
               <Show when={detailsTab() === "release"}>
                 <Show when={app().iam_revision === 0}>

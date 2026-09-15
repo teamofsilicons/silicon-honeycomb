@@ -57,6 +57,14 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route("/api/v1/apps/{id}/operations", get(app_operations))
         .route(
+            "/api/v1/apps/{id}/webhook",
+            get(super::webhook_management::status).post(super::webhook_management::mutate),
+        )
+        .route(
+            "/api/v1/operations/{id}/webhook-retry",
+            post(super::webhook_management::retry),
+        )
+        .route(
             "/api/v1/apps/{id}/reconciliation",
             get(super::reconciliation::status).post(super::reconciliation::refresh),
         )
@@ -711,10 +719,10 @@ async fn save_app(
     let config = input.public_config();
     let secret = s.encrypt(&input.webhook_secret)?;
     let mut tx = s.db.begin().await?;
-    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
     if rotating {
         return Err(Error::conflict(
-            "Finish or retry the pending secret rotation or publication before changing application configuration",
+            "Finish or retry the pending credential, webhook or publication operation before changing application configuration",
         ));
     }
     if let Some(expected) = expected {
@@ -1330,7 +1338,7 @@ async fn app_operations(
 ) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
     find_app(&s, &c, &id, true).await?;
-    let rows=sqlx::query("SELECT * FROM operations WHERE plane=? AND resource=? AND actor=? AND kind IN ('configure','secret.rotate') ORDER BY created_at DESC,id DESC LIMIT 100")
+    let rows=sqlx::query("SELECT * FROM operations WHERE plane=? AND resource=? AND actor=? AND kind IN ('configure','secret.rotate','webhook.approve','webhook.rotate') ORDER BY created_at DESC,id DESC LIMIT 100")
         .bind(&c.plane).bind(&id).bind(&c.identity()?.principal_id).fetch_all(&s.db).await?;
     let items: Vec<Value> = rows
         .iter()

@@ -149,7 +149,43 @@ enum Command {
     },
 }
 #[derive(Subcommand)]
+enum Webhook {
+    /// Read the current pending endpoint ID and IAM revision before making a change.
+    Status { app_id: String },
+    /// Approve the exact pending destination. Obtain application.webhook.approve step-up from IAM.
+    Approve {
+        app_id: String,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        revision: i64,
+        #[arg(long)]
+        step_up_file: Option<PathBuf>,
+    },
+    /// Install a signing secret from a protected file. Update your receiver to verify it.
+    RotateSecret {
+        app_id: String,
+        #[arg(long)]
+        secret_file: PathBuf,
+        #[arg(long)]
+        revision: i64,
+        #[arg(long)]
+        step_up_file: Option<PathBuf>,
+    },
+    /// Retry a saved change by operation ID; omit the secret and original endpoint.
+    Retry {
+        operation_id: String,
+        #[arg(long)]
+        step_up_file: Option<PathBuf>,
+    },
+}
+#[derive(Subcommand)]
 enum Apps {
+    /// Manage pending webhook destinations and signing credentials through IAM.
+    Webhook {
+        #[command(subcommand)]
+        command: Webhook,
+    },
     /// Refresh accepted IAM state and retry notification reconciliation.
     Reconcile {
         app_id: String,
@@ -619,6 +655,61 @@ async fn run() -> Result<()> {
             show(&json!({"archive":archive,"sha256":package::sha256(&archive)?}))?;
         }
         Command::Apps { command } => match command {
+            Apps::Webhook { command } => match command {
+                Webhook::Status { app_id } => show(&client.webhook_state(app_id).await?)?,
+                Webhook::Approve {
+                    app_id,
+                    endpoint,
+                    revision,
+                    step_up_file,
+                } => {
+                    let proof = step_up_file.as_ref().map(fs::read_to_string).transpose()?;
+                    show(
+                        &client
+                            .approve_webhook(
+                                app_id,
+                                endpoint,
+                                proof.as_deref().map(str::trim),
+                                &mutation(&cli, Some(*revision))?,
+                            )
+                            .await?,
+                    )?;
+                }
+                Webhook::RotateSecret {
+                    app_id,
+                    secret_file,
+                    revision,
+                    step_up_file,
+                } => {
+                    let secret = fs::read_to_string(secret_file)?;
+                    let proof = step_up_file.as_ref().map(fs::read_to_string).transpose()?;
+                    show(
+                        &client
+                            .rotate_webhook_secret(
+                                app_id,
+                                secret.trim(),
+                                proof.as_deref().map(str::trim),
+                                &mutation(&cli, Some(*revision))?,
+                            )
+                            .await?,
+                    )?;
+                }
+                Webhook::Retry {
+                    operation_id,
+                    step_up_file,
+                } => {
+                    let proof = step_up_file.as_ref().map(fs::read_to_string).transpose()?;
+                    show(
+                        &client
+                            .retry_webhook_operation(
+                                operation_id,
+                                proof.as_deref().map(str::trim),
+                                &mutation(&cli, None)?,
+                            )
+                            .await?,
+                    )?;
+                }
+            },
             Apps::RotateSecret {
                 app_id,
                 revision,

@@ -2798,3 +2798,277 @@ async fn permission_discovery_requires_current_admin_and_does_not_reveal_private
     );
     assert_eq!(catalog["providers"][0]["app_id"], "other>private-provider");
 }
+
+struct WebhookManager {
+    records: std::sync::Mutex<BTreeMap<String, Value>>,
+    lose_response: AtomicBool,
+}
+#[async_trait]
+impl Management for WebhookManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        let response = Manager { accept: true }.configure(o, t, e).await?;
+        self.records.lock().unwrap().insert(o["app_id"].as_str().unwrap().into(), json!({"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"iam_revision":response["iam_revision"],"pending_endpoint_id":"11111111-1111-4111-8111-111111111111"}));
+        Ok(response)
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("pending"))
+    }
+    async fn webhook_state(&self, app: &str, _: Option<&str>) -> Result<Value> {
+        self.records
+            .lock()
+            .unwrap()
+            .get(app)
+            .cloned()
+            .ok_or_else(Error::missing)
+    }
+    async fn webhook_mutation(
+        &self,
+        o: &Value,
+        _: &str,
+        proof: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<Value> {
+        let mut records = self.records.lock().unwrap();
+        let id = o["operation_id"].as_str().unwrap();
+        if let Some(receipt) = records.get(id) {
+            return Ok(receipt.clone());
+        }
+        if proof != Some("verified-channel-proof") {
+            return Err(Error::new(
+                StatusCode::FORBIDDEN,
+                "step_up_required",
+                "Verify identity",
+            ));
+        }
+        let mut receipt = json!({"operation_id":id,"app_id":o["app_id"],"state":"accepted","iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1});
+        if o["kind"] == "webhook.approve" {
+            receipt["webhook_endpoint_id"] = o["pending_endpoint_id"].clone();
+        } else {
+            receipt["webhook_secret_version"] = json!(2);
+        }
+        let state = records.get_mut(o["app_id"].as_str().unwrap()).unwrap();
+        state["iam_revision"] = receipt["iam_revision"].clone();
+        state["pending_endpoint_id"] = Value::Null;
+        records.insert(id.into(), receipt.clone());
+        if self.lose_response.swap(false, Ordering::SeqCst) {
+            return Err(Error::unavailable("Lost response"));
+        }
+        Ok(receipt)
+    }
+}
+#[tokio::test]
+async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_without_plaintext() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(WebhookManager {
+        records: Default::default(),
+        lose_response: AtomicBool::new(false),
+    });
+    s.management = manager.clone();
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("webhooks"),
+        "webhook-create-0001",
+        None,
+    )
+    .await;
+    let path = "/api/v1/apps/tos%3Ewebhooks/webhook";
+    for (token, status) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some("member"), StatusCode::FORBIDDEN),
+        (Some("outsider"), StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            call(&s, "GET", path, token, json!({}), "webhook-read-0001", None)
+                .await
+                .0,
+            status
+        );
+    }
+    let approval =
+        json!({"action":"approve","pending_endpoint_id":"11111111-1111-4111-8111-111111111111"});
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("member"),
+            approval.clone(),
+            "webhook-member-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            approval.clone(),
+            "webhook-stale-0001",
+            Some(0)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({"action":"approve","pending_endpoint_id":uuid::Uuid::new_v4()}),
+            "webhook-wrong-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, pending) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        approval.clone(),
+        "webhook-approve-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["error_code"], "step_up_required");
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            "/api/v1/apps/tos%3Ewebhooks",
+            Some("admin"),
+            input("webhooks"),
+            "webhook-edit-blocked-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/apps/tos%3Ewebhooks/secret-rotations",
+            Some("admin"),
+            json!({}),
+            "webhook-secret-blocked-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let retry = format!(
+        "/api/v1/operations/{}/webhook-retry",
+        pending["id"].as_str().unwrap()
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &retry,
+            Some("member"),
+            json!({}),
+            "webhook-retry-member-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, accepted) = call(
+        &s,
+        "POST",
+        &retry,
+        Some("admin"),
+        json!({"step_up_assertion":"verified-channel-proof"}),
+        "webhook-retry-0001",
+        None,
+    )
+    .await;
+    assert_eq!(accepted["state"], "accepted");
+    let (_, replay) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        approval,
+        "webhook-approve-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(replay, accepted);
+    let secret = "new-webhook-signing-secret-never-plaintext";
+    manager.lose_response.store(true, Ordering::SeqCst);
+    let (_, lost) = call(&s,"POST",path,Some("admin"),json!({"action":"rotate","webhook_secret":secret,"step_up_assertion":"verified-channel-proof"}),"webhook-rotate-0001",Some(1)).await;
+    assert_eq!(lost["state"], "pending");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({"action":"rotate","webhook_secret":"different-secret-that-is-long-enough"}),
+            "webhook-rotate-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, result) = call(
+        &s,
+        "POST",
+        &format!(
+            "/api/v1/operations/{}/webhook-retry",
+            lost["id"].as_str().unwrap()
+        ),
+        Some("admin"),
+        json!({}),
+        "webhook-recover-0001",
+        None,
+    )
+    .await;
+    assert_eq!(result["state"], "accepted");
+    assert_eq!(result["webhook_secret_version"], 2);
+    let encrypted: String =
+        sqlx::query_scalar("SELECT webhook_secret FROM applications WHERE app_id='tos>webhooks'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(s.decrypt(&encrypted).unwrap(), secret);
+    let requests: Vec<String> =
+        sqlx::query_scalar("SELECT request_json FROM operations WHERE kind LIKE 'webhook.%'")
+            .fetch_all(&s.db)
+            .await
+            .unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|r| !r.contains(secret) && !r.contains("verified-channel-proof"))
+    );
+    let (_, operations) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ewebhooks/operations",
+        Some("admin"),
+        json!({}),
+        "webhook-list-0001",
+        None,
+    )
+    .await;
+    assert!(!operations.to_string().contains(secret));
+    assert!(!operations.to_string().contains("encrypted_webhook_secret"));
+}

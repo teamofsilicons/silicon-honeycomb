@@ -141,3 +141,91 @@ async fn snapshot_reads_effective_scopes_and_maps_iam_availability() {
         json!(["self.identity.read"])
     );
 }
+
+#[tokio::test]
+async fn webhook_uses_official_routes_actor_step_up_and_exact_replay_without_leaking_secrets() {
+    let server = MockServer::start().await;
+    let (adapter, db, _, _) = setup(&server).await;
+    let pending = uuid::Uuid::new_v4();
+    let mut current = record();
+    current["pending_webhook_endpoint_id"] = json!(pending);
+    current["unrelated_secret"] = json!("must-not-return");
+    Mock::given(method("GET"))
+        .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(current))
+        .mount(&server)
+        .await;
+    let status = adapter.webhook_state("tos>sdk-test", None).await.unwrap();
+    assert_eq!(status["pending_endpoint_id"], json!(pending));
+    assert!(!status.to_string().contains("must-not-return"));
+    for (kind, suffix, extra) in [
+        (
+            "webhook.approve",
+            "webhook-approvals",
+            json!({"webhook_endpoint_id":pending}),
+        ),
+        (
+            "webhook.rotate",
+            "webhook-secret-rotations",
+            json!({"webhook_secret_version":3}),
+        ),
+    ] {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,?,'tos>sdk-test','test',1,1)").bind(&id).bind(&id).bind(kind).execute(&db).await.unwrap();
+        let mut receipt =
+            json!({"operation_id":id,"state":"accepted","iam_revision":3,"app_id":"tos>sdk-test"});
+        receipt
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/api/v1/honeycomb/applications/tos%3Esdk-test/{suffix}"
+            )))
+            .and(header(
+                "authorization",
+                format!("Bearer hck_{}", "a".repeat(43)),
+            ))
+            .and(header("x-honeycomb-actor-token", "oat_actor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(receipt))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let mut operation = json!({"operation_id":id,"kind":kind,"app_id":"tos>sdk-test","expected_iam_revision":2,"pending_endpoint_id":pending,"webhook_secret":"new-signing-material-that-must-be-encrypted"});
+        adapter
+            .webhook_mutation(&operation, "oat_actor", Some("transient-proof"), None)
+            .await
+            .unwrap();
+        operation["expected_iam_revision"] = json!(999);
+        adapter
+            .webhook_mutation(&operation, "oat_actor", Some("fresh-proof"), None)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let calls: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with(suffix))
+            .collect();
+        assert_eq!(calls[0].body, calls[1].body);
+        assert_eq!(calls[0].headers["x-step-up-token"], "transient-proof");
+        assert_eq!(calls[1].headers["x-step-up-token"], "fresh-proof");
+        let raw: Value = serde_json::from_slice(&calls[0].body).unwrap();
+        assert_eq!(raw["expected_iam_revision"], 2);
+        assert!(raw.get("step_up_assertion").is_none());
+        let stored: String = sqlx::query_scalar(
+            "SELECT encrypted_body FROM management_requests WHERE operation_id=?",
+        )
+        .bind(&id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(!stored.contains("new-signing-material"));
+        assert!(!stored.contains("transient-proof"));
+        assert!(
+            adapter
+                .webhook_mutation(&operation, "oat_actor", None, Some("test-key"))
+                .await
+                .is_err()
+        );
+    }
+}

@@ -169,3 +169,36 @@ IAM's explicit authority; Honeycomb validators act only after provider approvals
 are accepted. Denials require a reason. The console's Review requests page provides
 the same discussions and decisions. Publication remains pending until IAM accepts
 activation and archive access is reconciled.
+
+## Approve webhooks and rotate signing material
+
+Use the console's **Access & secrets → Webhook management**, or the same workflow
+from the CLI. You must be a current owner/admin of the application's organization.
+
+```sh
+honeycomb apps webhook status 'tos>example'
+honeycomb apps webhook approve 'tos>example' --endpoint PENDING_ENDPOINT_UUID --revision 1 --step-up-file /secure/path/assertion
+honeycomb apps webhook rotate-secret 'tos>example' --revision 1 --secret-file /secure/path/new-signing-secret --step-up-file /secure/path/assertion
+honeycomb apps webhook retry OPERATION_ID --step-up-file /secure/path/fresh-assertion
+```
+
+Read the current application revision with `honeycomb apps get`. The status command
+returns IAM's exact pending endpoint ID and internal resource ID. Obtain an IAM
+verified-channel step-up assertion bound to that resource and the appropriate action:
+`application.webhook.approve` or `application.webhook_secret.rotate`. A normal login
+token is not a step-up assertion. Keep assertion and signing-secret files private.
+The signing secret must contain 32–4096 bytes without control characters.
+
+A pending change returns an operation ID. Retry that ID with fresh verification;
+you do not need to resubmit the signing secret. Honeycomb preserves the exact IAM
+request, encrypts stored signing material and does not persist verification proofs.
+After rotation, update the receiving application's secret configuration. Honeycomb
+keeps its encrypted copy current so a later configuration save cannot reinstate the
+old secret. IAM controls the signing-key overlap policy.
+
+The stateless Rust client exposes `webhook_state`, `approve_webhook`,
+`rotate_webhook_secret` and `retry_webhook_operation`. These use the same durable
+backend operations as the CLI and console. IAM 1.10's management routes currently
+support production applications; isolated test-app administration remains a contract
+gap. IAM's accepted record omits the active destination URL, so the console labels
+its URL as requested and never presents it as verified active state.

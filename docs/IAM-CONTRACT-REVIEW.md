@@ -14,6 +14,10 @@ has no management API in `IAM-HANDOFF.md`.
 - App-secret rotation using `Mutation::step_up`; recovery replays the exact
   mutation within IAM's ten-minute secret window. The status GET is secret-free.
 - Organization/provider-scoped permission discovery and the console picker.
+- Exact pending-webhook approval and signing-secret rotation through the official
+  SDK, Rust client/CLI and console, with fresh IAM step-up, actor-bound durable
+  retries and encrypted signing material. Accepted rotation updates the locally
+  retained secret used by later configuration changes.
 - Accepted application reads: actual `app_name`, `app_logo`, `effective_scopes`,
   and `verified` availability are mapped to Honeycomb. Requested scopes are
   filtered through the effective scope list. Catalog-only description/docs fields
@@ -47,7 +51,7 @@ registry dependency once available. No IAM source was edited or published here.
 | Test application administration | Production configuration rejects environment_id; generic management reads address production | Add isolated test configuration/secret/read operations and new test-only app registration |
 | Scope review | Scope catalog and decisions exist; no immutable plan receipt or explicit current reviewer-capability query | Bind decisions to reviewed configuration/scopes, provide current IAM/Honeycomb validator eligibility, and map durable review plans without assuming membership grants validator authority |
 | Public activation | Configuration uses publication_approved and current IAM revision; no separate request/plan activation receipt | Map Honeycomb's completed review to this write only after reviewer authority is wired; preserve exact request identity and verify current state before archive/catalog activation |
-| Webhook approval | Separate SDK approval and signing-key rotation methods exist | Add Honeycomb step-up UX and these operations; current accepted-state record omits active destination URL |
+| Webhook accepted-state display | Approval and signing-key rotation are now wired through backend, CLI and console; the accepted record omits active destination URL | Return the authoritative active/pending URLs for display; current UI labels the local URL as requested |
 | Recipient discovery | No scoped owner/admin/reviewer notification-recipient endpoint | Provide least-privilege recipients for queued Postmark notices |
 | Lifecycle completion | IAM-local prepare/import/activate phases differ from Honeycomb's participant receipts | Add explicit IAM phase mapping, durable IAM revision/key/generation bookkeeping and cross-service activation; never turn IAM-only completion into shared readiness |
 | Legacy adoption | Inventory and legacy prepare/adoption exist | Preserve current IDs, keys, owners, links and accepted revisions; stage the writer cutover after migration verification |

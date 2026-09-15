@@ -85,6 +85,26 @@ impl IamManagement {
                     )
                     .await
             }
+            "webhook.approve" => {
+                self.client
+                    .approve_webhook(
+                        app,
+                        &actor,
+                        &decode::<models::HoneycombWebhookApproval>(body)?,
+                        &mutation,
+                    )
+                    .await
+            }
+            "webhook.rotate" => {
+                self.client
+                    .rotate_webhook_secret(
+                        app,
+                        &actor,
+                        &decode::<models::HoneycombWebhookSecretRotation>(body)?,
+                        &mutation,
+                    )
+                    .await
+            }
             _ => {
                 return Err(Error::unavailable(
                     "Management operation is not supported by this adapter",
@@ -265,6 +285,43 @@ impl Management for IamManagement {
             .await?;
         self.execute(id, "secret.rotate", app, body, actor, step_up)
             .await
+    }
+    async fn webhook_state(&self, app: &str, environment: Option<&str>) -> Result<Value> {
+        production(environment)?;
+        let record = self.client.application(app).await.map_err(map_error)?;
+        if record["app_id"] != app {
+            return Err(Error::unavailable("IAM returned another application"));
+        }
+        Ok(
+            json!({"app_id":app,"application_id":record["application_id"],"iam_revision":record["iam_revision"],"configuration_revision":record["configuration_revision"],"pending_endpoint_id":record["pending_webhook_endpoint_id"]}),
+        )
+    }
+    async fn webhook_mutation(
+        &self,
+        o: &Value,
+        actor: &str,
+        step_up: Option<&str>,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        production(environment)?;
+        let id = o["operation_id"]
+            .as_str()
+            .ok_or_else(|| Error::bad("Missing operation ID"))?;
+        let app = o["app_id"]
+            .as_str()
+            .ok_or_else(|| Error::bad("Missing app ID"))?;
+        let kind = o["kind"]
+            .as_str()
+            .ok_or_else(|| Error::bad("Missing webhook action"))?;
+        let mut body =
+            json!({"operation_id":id,"expected_iam_revision":o["expected_iam_revision"]});
+        match kind {
+            "webhook.approve" => body["pending_endpoint_id"] = o["pending_endpoint_id"].clone(),
+            "webhook.rotate" => body["webhook_secret"] = o["webhook_secret"].clone(),
+            _ => return Err(Error::bad("Unknown webhook action")),
+        }
+        let body = self.saved(id, kind, app, body).await?;
+        self.execute(id, kind, app, body, actor, step_up).await
     }
     async fn operation_result(
         &self,

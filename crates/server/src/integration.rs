@@ -32,6 +32,22 @@ pub trait Management: Send + Sync {
             "IAM protected application secret rotation is not yet available",
         ))
     }
+    /// Secret-free authoritative webhook state, visible only to current application managers.
+    async fn webhook_state(&self, _app: &str, _environment: Option<&str>) -> Result<Value> {
+        Err(Error::unavailable("IAM webhook state is not configured"))
+    }
+    /// Approve a pending destination or rotate signing material with transient step-up.
+    async fn webhook_mutation(
+        &self,
+        _operation: &Value,
+        _actor: &str,
+        _step_up: Option<&str>,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM webhook management is not configured",
+        ))
+    }
     /// Read a protected operation's result within IAM's short secret replay window.
     async fn operation_result(
         &self,

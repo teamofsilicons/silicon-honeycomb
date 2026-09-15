@@ -53,6 +53,16 @@ def main():
                     assert run('login', 'fixture-' + role, role=role)['authenticated']
             assert run('login', 'status', role='anonymous') == {'authenticated': False}
             assert run('iam')['app_id'] == 'tos>honeycomb'
+            webhook = run('apps', 'webhook', 'status', 'tos>briefcase')
+            proof = root / 'webhook-proof'; proof.write_text('fixture-webhook-proof')
+            secret_file = root / 'webhook-secret'; secret_file.write_text('replacement-fixture-webhook-signing-secret')
+            pending_webhook = run('apps', 'webhook', 'approve', 'tos>briefcase', '--endpoint', webhook['pending_endpoint_id'], '--revision', '1')
+            assert pending_webhook['error_code'] == 'step_up_required'
+            accepted_webhook = run('apps', 'webhook', 'retry', pending_webhook['id'], '--step-up-file', str(proof))
+            assert accepted_webhook['state'] == 'accepted'
+            rotated_webhook = run('apps', 'webhook', 'rotate-secret', 'tos>briefcase', '--revision', '1', '--secret-file', str(secret_file), '--step-up-file', str(proof))
+            assert rotated_webhook['state'] == 'accepted'
+            assert 'replacement-fixture-webhook' not in json.dumps(rotated_webhook)
             app_id = 'tos>cli-e2e'
             app = {'org_id': 'tos', 'local_app_id': 'cli-e2e', 'name': 'CLI integration',
                    'description': 'This application exercises the complete local Honeycomb release installation workflow. ' * 7,
@@ -131,7 +141,7 @@ def main():
             assert report['saved'] and report['notification'] == 'pending'
             run('logout', role='member')
             assert run('login', 'status', role='member') == {'authenticated': False}
-            print('PASS: CLI IAM discovery/login, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
+            print('PASS: CLI IAM discovery/login, webhook approval/step-up retry/signing rotation, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
         finally:
             fixture.terminate()
             fixture.wait(timeout=10)

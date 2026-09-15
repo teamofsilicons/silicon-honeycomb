@@ -14,6 +14,7 @@ pub mod reconciliation;
 pub mod reviews;
 pub mod secrets;
 pub mod storage;
+pub mod webhook_management;
 
 use aes_gcm::{
     Aes256Gcm, KeyInit,

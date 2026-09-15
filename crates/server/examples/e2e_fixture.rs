@@ -96,6 +96,43 @@ impl IdentityProvider for FixtureIam {
 struct FixtureManagement(Mutex<BTreeMap<String, Value>>);
 #[async_trait]
 impl Management for FixtureManagement {
+    async fn webhook_state(&self, app: &str, _: Option<&str>) -> Result<Value> {
+        let mut records = self.0.lock().unwrap();
+        Ok(records.entry(format!("webhook:{app}")).or_insert_with(||json!({"app_id":app,"application_id":"22222222-2222-4222-8222-222222222222","configuration_revision":1,"iam_revision":1,"pending_endpoint_id":"11111111-1111-4111-8111-111111111111"})).clone())
+    }
+    async fn webhook_mutation(
+        &self,
+        o: &Value,
+        _: &str,
+        proof: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<Value> {
+        let mut records = self.0.lock().unwrap();
+        let id = o["operation_id"].as_str().unwrap();
+        if let Some(receipt) = records.get(id) {
+            return Ok(receipt.clone());
+        }
+        if proof != Some("fixture-webhook-proof") {
+            return Err(Error::new(
+                axum::http::StatusCode::FORBIDDEN,
+                "step_up_required",
+                "Fresh verification is required",
+            ));
+        }
+        let mut receipt = json!({"operation_id":id,"app_id":o["app_id"],"state":"accepted","iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1});
+        if o["kind"] == "webhook.approve" {
+            receipt["webhook_endpoint_id"] = o["pending_endpoint_id"].clone();
+        } else {
+            receipt["webhook_secret_version"] = json!(2);
+        }
+        let state = records
+            .get_mut(&format!("webhook:{}", o["app_id"].as_str().unwrap()))
+            .unwrap();
+        state["iam_revision"] = receipt["iam_revision"].clone();
+        state["pending_endpoint_id"] = Value::Null;
+        records.insert(id.into(), receipt.clone());
+        Ok(receipt)
+    }
     async fn scope_catalog(&self, _: &str, provider: Option<&str>) -> Result<Value> {
         Ok(json!({"items": if provider.is_some(){json!([])}else{json!([
             {"scope":"self.identity.read","description":"Read the signed-in user's identity.","critical":false,"eligible":true},
@@ -104,6 +141,7 @@ impl Management for FixtureManagement {
         ])}}))
     }
     async fn configure(&self, body: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        self.0.lock().unwrap().insert(format!("webhook:{}",body["app_id"].as_str().unwrap()),json!({"app_id":body["app_id"],"application_id":"22222222-2222-4222-8222-222222222222","configuration_revision":body["configuration_revision"],"iam_revision":body["expected_iam_revision"].as_i64().unwrap()+1,"pending_endpoint_id":"11111111-1111-4111-8111-111111111111"}));
         Ok(
             json!({"state":"accepted","configuration_revision":body["configuration_revision"],"iam_revision":body["expected_iam_revision"].as_i64().unwrap()+1,"effective_configuration":body["configuration"]}),
         )

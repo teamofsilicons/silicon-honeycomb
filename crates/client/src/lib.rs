@@ -375,6 +375,57 @@ impl Client {
         )
         .await
     }
+    /// Read IAM's current pending webhook identity (application managers only).
+    pub async fn webhook_state(&self, id: &str) -> Result<Value> {
+        self.get(&["apps", id, "webhook"]).await
+    }
+    /// Activate the exact pending destination after IAM step-up verification.
+    pub async fn approve_webhook(
+        &self,
+        id: &str,
+        endpoint: &str,
+        step_up: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["apps", id, "webhook"],
+            &json!({"action":"approve","pending_endpoint_id":endpoint,"step_up_assertion":step_up}),
+            m,
+        )
+        .await
+    }
+    /// Replace webhook signing material. The new secret is never returned in a response.
+    pub async fn rotate_webhook_secret(
+        &self,
+        id: &str,
+        secret: &str,
+        step_up: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["apps", id, "webhook"],
+            &json!({"action":"rotate","webhook_secret":secret,"step_up_assertion":step_up}),
+            m,
+        )
+        .await
+    }
+    /// Retry the exact durable webhook change, optionally with fresh step-up evidence.
+    pub async fn retry_webhook_operation(
+        &self,
+        id: &str,
+        step_up: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["operations", id, "webhook-retry"],
+            &json!({"step_up_assertion":step_up}),
+            m,
+        )
+        .await
+    }
     pub async fn recover_operation_secret(&self, id: &str, m: &Mutation) -> Result<Value> {
         self.mutate(Method::POST, &["operations", id, "result"], &json!({}), m)
             .await

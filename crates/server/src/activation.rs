@@ -66,7 +66,7 @@ pub async fn activate(
                 "All provider and Honeycomb approvals must be accepted",
             ));
         }
-        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('secret.rotate','release','publication.activate'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','release','publication.activate'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
         if busy {
             return Err(Error::conflict(
                 "Finish the application's pending release or secret operation first",

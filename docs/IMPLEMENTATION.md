@@ -160,3 +160,31 @@ requires current organization administration. Permission discovery uses the offi
 See LOCAL-HANDOFF.md for the current local deliverable and the remaining full-product
 work. Automatic retirement/migration, app-owned test setup, live review/lifecycle
 adapters, telemetry, logo uploads and public rollout are not marked complete.
+
+
+### Webhook management continuation
+
+Connected IAM's pending endpoint read, exact destination approval and signing-key
+rotation to durable Honeycomb operations, stateless Rust client, CLI and console.
+Every mutation requires current organization administration, the current accepted
+configuration, IAM revision and verified-channel step-up where enforced by IAM.
+The adapter uses the pinned official SDK. Retry keeps the original endpoint/secret,
+operation ID and wire body while permitting fresh transient verification evidence.
+Only encrypted signing material is retained; operations and audit expose no secret.
+An accepted rotation updates Honeycomb's retained signing secret for future config
+writes. Competing configuration, application-secret and publication operations are
+blocked while the webhook change is pending. The console also accepts step-up
+assertions for its existing application-secret rotation/retry flow.
+
+Checks cover exact SDK service/actor headers and bodies, stale endpoint/revision
+rejection, non-admin denial, lost-response replay, encrypted persistence and real
+CLI/browser paths using explicit fixtures. Live IAM acceptance still requires the
+provisioned service integration and is not claimed by local tests.
+
+Verification completed: workspace Rust tests (31 backend API cases and four official
+management SDK wire cases), strict Clippy, CLI HTTP journey, web production build
+and all 26 browser cases pass. The new browser test now creates its own application
+to avoid changing fixtures shared with secret-rotation tests. The application-secret
+step-up fields also passed a subsequent desktop/mobile check proving that fresh
+proofs preserve the original retry key and clear from the form after submission.
+The webhook screen was visually checked at the mobile viewport.
