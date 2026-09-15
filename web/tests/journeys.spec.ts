@@ -289,3 +289,21 @@ test("secret rotation is explicit and browser retries preserve the same operatio
   await expect(operations.getByRole("button", { name: "Retry operation", exact: true })).toBeEnabled();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
+
+
+test("provider administrators can discuss and approve their review gate", async ({ page }, info) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Review requests", exact: true }).click();
+  await page.getByRole("heading", { name: `Review candidate ${info.project.name}`, exact: true }).click();
+  const dialog=page.getByRole("dialog");
+  await dialog.getByLabel("Reply to this review").fill("The selected file access is appropriate for this application.");
+  await dialog.getByRole("button", { name: "Send reply", exact: true }).click();
+  await expect(dialog.locator(".review-thread")).toContainText("selected file access is appropriate");
+  await dialog.getByLabel("Reason", { exact: true }).fill("Reviewed the declared file access.");
+  await dialog.getByRole("button", { name: "Submit decision", exact: true }).click();
+  await expect(dialog).toContainText("approved");
+  await expect(dialog.getByRole("button", { name: "Submit decision", exact: true })).toBeDisabled();
+});

@@ -183,6 +183,7 @@ async fn coordinate_inner(
     }
     if action == "clean" {
         sqlx::query("DELETE FROM environment_services WHERE environment_id=? AND app_id NOT IN ('tos>iam',?)").bind(id).bind(&s.app_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE environment_services SET snapshot='{}',source_revision=0,receipt=NULL,error=NULL WHERE environment_id=?").bind(id).execute(&mut *tx).await?;
     }
     if action == "purge" {
         sqlx::query("UPDATE environments SET encrypted_key='',key_hash=?,name='Purged environment',description='' WHERE id=?").bind(format!("purged:{id}")).bind(id).execute(&mut *tx).await?;
@@ -224,6 +225,7 @@ async fn apply_local(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM review_gates WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=?)").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM decisions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=?)").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM discussions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=?)").bind(id).execute(&mut *tx).await?;
     // Fixed SQL literals keep destructive work explicitly limited to one test plane.

@@ -107,6 +107,11 @@ def main():
             run('uninstall', app_id, role='member')
             assert not executable.exists()
             assert not run('installed', role='member')
+            inbox = run('publication', 'inbox')
+            assert any(r['id'] == 'fixture-review-desktop' for r in inbox['items'])
+            run('publication', 'review-reply', 'fixture-review-desktop', 'tos>briefcase', '--message', 'The requested scopes have been reviewed.')
+            decision = run('publication', 'decide', 'fixture-review-desktop', 'tos>briefcase', 'approve', '--reason', 'Appropriate declared file access.', '--revision', '1')
+            assert decision['publication_state'] == 'awaiting_validator'
             rotation = run('apps', 'rotate-secret', 'tos>briefcase', '--revision', '1')
             assert rotation['state'] == 'pending' and rotation['error_code'] == 'integration_unavailable'
             imported = run('environments', 'import', 'fixture-import-desktop', 'tos>briefcase', '--revision', '1')

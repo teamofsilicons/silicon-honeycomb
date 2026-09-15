@@ -393,6 +393,52 @@ impl Client {
         )
         .await
     }
+    pub async fn review_inbox(&self) -> Result<Value> {
+        self.get(&["review-requests"]).await
+    }
+    pub async fn review_request(&self, id: &str, provider: &str) -> Result<Value> {
+        self.get(&["review-requests", id, provider]).await
+    }
+    pub async fn retry_review_plan(&self, id: &str, m: &Mutation) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["review-requests", id, "plan"],
+            &json!({}),
+            m,
+        )
+        .await
+    }
+    pub async fn decide_review(
+        &self,
+        id: &str,
+        provider: &str,
+        decision: &str,
+        reason: &str,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["review-requests", id, provider, "decisions"],
+            &json!({"decision":decision,"reason":reason}),
+            m,
+        )
+        .await
+    }
+    pub async fn reply_review(
+        &self,
+        id: &str,
+        provider: &str,
+        message: &str,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["review-requests", id, provider, "messages"],
+            &json!({"message":message}),
+            m,
+        )
+        .await
+    }
     pub async fn publication(&self, id: &str) -> Result<Value> {
         self.get(&["apps", id, "publication"]).await
     }

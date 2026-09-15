@@ -1683,3 +1683,375 @@ async fn lost_rotation_response_recovers_original_result_and_unblocks_configurat
         StatusCode::ACCEPTED
     );
 }
+
+struct ReviewIdentity;
+#[async_trait]
+impl IdentityProvider for ReviewIdentity {
+    async fn login(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unauthorized())
+    }
+    async fn refresh(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unauthorized())
+    }
+    async fn revoke(&self, _: &str, _: &str, _: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+    async fn authenticate(&self, token: &str, env: Option<&str>) -> Result<Identity> {
+        if ["validator", "iam-reviewer"].contains(&token) {
+            return Ok(Identity {
+                principal_id: token.into(),
+                actor_type: Some("silicon".into()),
+                organizations: BTreeMap::new(),
+                testing_environment_id: None,
+                validator: token == "validator",
+            });
+        }
+        Idp {
+            revoked: Arc::new(AtomicBool::new(false)),
+        }
+        .authenticate(token, env)
+        .await
+    }
+}
+#[derive(Default)]
+struct ReviewManager {
+    accept: AtomicBool,
+}
+#[async_trait]
+impl Management for ReviewManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("pending"))
+    }
+    async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(
+            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"iam","scopes":["directory.carbons.read"]},{"provider":"other>provider","scopes":["files.read"]}]}),
+        )
+    }
+    async fn iam_scope_reviewer(&self, token: &str, _: Option<&str>) -> Result<bool> {
+        Ok(token == "iam-reviewer")
+    }
+    async fn review_decision(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        if !self.accept.load(Ordering::SeqCst) {
+            return Err(Error::unavailable("Decision pending"));
+        }
+        let mut response = o.clone();
+        response["state"] = json!("accepted");
+        Ok(response)
+    }
+}
+async fn review_application(s: &State) -> String {
+    import_source(s, "other>provider", &[], true).await;
+    let mut config = input("review-app");
+    config["app_scope"] = json!({"iam":["self.identity.read","directory.carbons.read"],"external":[{"app_id":"other>provider","endpoint_id":"files.read"}]});
+    call(
+        s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        config,
+        "review-app-create-0001",
+        None,
+    )
+    .await;
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','1.0.0','fixture-only',1,'fixture-release',1)").execute(&s.db).await.unwrap();
+    let (status, result) = call(
+        s,
+        "POST",
+        "/api/v1/apps/tos%3Ereview-app/publication",
+        Some("admin"),
+        json!({"message":"Please review these requested public scopes."}),
+        "review-request-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{result}");
+    result["id"].as_str().unwrap().into()
+}
+#[tokio::test]
+async fn review_authority_discussions_and_provider_before_validator_order_are_enforced() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(ReviewManager::default());
+    s.management = manager.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    let provider_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions");
+    let validator_path = format!("/api/v1/review-requests/{id}/honeycomb/decisions");
+    let (_, inbox) = call(
+        &s,
+        "GET",
+        "/api/v1/review-requests",
+        Some("outsider"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(inbox["items"][0]["app_id"], "tos>review-app");
+    let (_, inbox) = call(
+        &s,
+        "GET",
+        "/api/v1/review-requests",
+        Some("validator"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(inbox["items"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &provider_path,
+            Some("admin"),
+            json!({"decision":"approve"}),
+            "review-owner-cannot-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &validator_path,
+            Some("validator"),
+            json!({"decision":"approve"}),
+            "review-validator-early-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let message_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/messages");
+    let (_, reply) = call(
+        &s,
+        "POST",
+        &message_path,
+        Some("outsider"),
+        json!({"message":"Explain how files are selected."}),
+        "review-provider-reply-0001",
+        None,
+    )
+    .await;
+    let (_, again) = call(
+        &s,
+        "POST",
+        &message_path,
+        Some("outsider"),
+        json!({"message":"Explain how files are selected."}),
+        "review-provider-reply-0001",
+        None,
+    )
+    .await;
+    assert_eq!(reply["id"], again["id"]);
+    let (_, detail) = call(
+        &s,
+        "GET",
+        &format!("/api/v1/review-requests/{id}/other%3Eprovider"),
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert!(detail.to_string().contains("Explain how files"));
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &provider_path,
+            Some("outsider"),
+            json!({"decision":"deny"}),
+            "review-denial-reason-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, pending) = call(
+        &s,
+        "POST",
+        &provider_path,
+        Some("outsider"),
+        json!({"decision":"approve"}),
+        "review-provider-approve-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(pending["state"], "pending");
+    manager.accept.store(true, Ordering::SeqCst);
+    let (_, accepted) = call(
+        &s,
+        "POST",
+        &provider_path,
+        Some("outsider"),
+        json!({"decision":"approve"}),
+        "review-provider-approve-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(accepted["publication_state"], "awaiting_scope_review");
+    let (_, accepted) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/iam/decisions"),
+        Some("iam-reviewer"),
+        json!({"decision":"approve"}),
+        "review-iam-approve-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(accepted["publication_state"], "awaiting_validator");
+    let (_, inbox) = call(
+        &s,
+        "GET",
+        "/api/v1/review-requests",
+        Some("validator"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(inbox["items"][0]["provider"], "honeycomb");
+    let (_, accepted) = call(
+        &s,
+        "POST",
+        &validator_path,
+        Some("validator"),
+        json!({"decision":"approve"}),
+        "review-validator-approve-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(accepted["publication_state"], "awaiting_activation");
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(app["visibility"], "private");
+    let (_, replay) = call(
+        &s,
+        "POST",
+        "/api/v1/apps/tos%3Ereview-app/publication",
+        Some("admin"),
+        json!({"message":"Please review these requested public scopes."}),
+        "review-request-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(replay["id"], id);
+    assert_eq!(replay["state"], "awaiting_activation");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/apps/tos%3Ereview-app/publication",
+            Some("admin"),
+            json!({"message":"Different request"}),
+            "review-request-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+}
+#[tokio::test]
+async fn review_denials_preserve_private_visibility_and_stale_decisions_cannot_apply() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager {
+        accept: AtomicBool::new(true),
+    });
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    let (_, denied) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions"),
+        Some("outsider"),
+        json!({"decision":"deny","reason":"Narrow the requested file access."}),
+        "review-provider-deny-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(denied["publication_state"], "denied");
+    sqlx::query(
+        "UPDATE applications SET revision=2 WHERE plane='production' AND app_id='tos>review-app'",
+    )
+    .execute(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &format!("/api/v1/review-requests/{id}/iam/decisions"),
+            Some("iam-reviewer"),
+            json!({"decision":"approve"}),
+            "review-stale-approve-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(app["visibility"], "private");
+}
+
+#[tokio::test]
+async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effective() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    s.identity = Arc::new(ReviewIdentity);
+    review_application(&s).await;
+    sqlx::query("UPDATE applications SET visibility='public',revision=2 WHERE plane='production' AND app_id='tos>review-app'").execute(&s.db).await.unwrap();
+    let (status, result) = call(
+        &s,
+        "POST",
+        "/api/v1/apps/tos%3Ereview-app/publication",
+        Some("admin"),
+        json!({"message":"Review this public app's additional requested scopes."}),
+        "review-public-addition-0001",
+        Some(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{result}");
+    assert_eq!(result["state"], "awaiting_scope_review");
+    assert_eq!(result["visibility"], "public");
+    let (_, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(app["effective_revision"], 1);
+    assert_eq!(app["revision"], 2);
+}

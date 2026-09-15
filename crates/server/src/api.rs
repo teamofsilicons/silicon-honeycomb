@@ -28,6 +28,23 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/status", get(status))
         .route("/api/v1/reports", post(super::notifications::report))
+        .route("/api/v1/review-requests", get(super::reviews::inbox))
+        .route(
+            "/api/v1/review-requests/{id}/{provider}",
+            get(super::reviews::detail),
+        )
+        .route(
+            "/api/v1/review-requests/{id}/{provider}/messages",
+            post(super::reviews::message),
+        )
+        .route(
+            "/api/v1/review-requests/{id}/plan",
+            post(super::reviews::retry_plan),
+        )
+        .route(
+            "/api/v1/review-requests/{id}/{provider}/decisions",
+            post(super::reviews::decide),
+        )
         .route("/api/v1/apps", get(search).post(create_app))
         .route("/api/v1/apps/{id}", get(get_app).put(update_app))
         .route("/api/v1/apps/{id}/operations", get(app_operations))
@@ -1138,10 +1155,21 @@ async fn request_publication(
     Path(id): Path<String>,
     Json(body): Json<Message>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    key(&h)?;
+    let k = key(&h)?;
     let c = context(&s, &h).await?;
     let app = find_app(&s, &c, &id, true).await?;
-    if revision(&h)? != app.revision {
+    let expected = revision(&h)?;
+    let digest = hash(
+        &json!({"kind":"publication.request","app_id":id,"revision":expected,"message":body.message,"provider":body.provider}),
+    );
+    if let Some(op) = existing_operation(&s, &c, k, &digest).await? {
+        let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+            .bind(op["id"].as_str().unwrap())
+            .fetch_one(&s.db)
+            .await?;
+        return Ok((StatusCode::OK, Json(json!({"id":op["id"],"state":state}))));
+    }
+    if expected != app.revision {
         return Err(Error::conflict("Application revision changed"));
     }
     if body.message.trim().is_empty() || body.message.len() > 10000 {
@@ -1151,29 +1179,24 @@ async fn request_publication(
     }
     if app.latest_version.is_none()
         || app.iam_revision == 0
-        || app.effective_revision != app.revision
+        || (app.visibility != "public" && app.effective_revision != app.revision)
     {
         return Err(Error::conflict(
             "Upload a valid CLI release and wait for IAM private activation before requesting publication",
         ));
     }
-    let existing = sqlx::query(
-        "SELECT id,state FROM publication_requests WHERE plane=? AND app_id=? AND revision=?",
-    )
-    .bind(&c.plane)
-    .bind(&id)
-    .bind(app.revision)
-    .fetch_optional(&s.db)
-    .await?;
-    if let Some(r) = existing {
-        return Ok((
-            StatusCode::OK,
-            Json(json!({"id":r.get::<String,_>("id"),"state":r.get::<String,_>("state")})),
+    let existing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM publication_requests WHERE plane=? AND app_id=? AND revision=?)").bind(&c.plane).bind(&id).bind(app.revision).fetch_one(&s.db).await?;
+    if existing {
+        return Err(Error::conflict(
+            "This revision already has a publication request; open its discussion or retry the original operation",
         ));
     }
     let request = uuid::Uuid::new_v4().to_string();
     let mut tx = s.db.begin().await?;
-    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at) VALUES(?,?,?,?,'awaiting_scope_review',?,?)").bind(&request).bind(&c.plane).bind(&id).bind(app.revision).bind(&c.identity()?.principal_id).bind(now()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot) VALUES(?,?,?,?,'awaiting_review_plan',?,?,?)")
+        .bind(&request).bind(&c.plane).bind(&id).bind(app.revision).bind(&c.identity()?.principal_id).bind(now()).bind(app.config.to_string()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,created_at) VALUES(?,?,?,?,'publication.request',?,?,?,'accepted',?)")
+        .bind(&request).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind(&id).bind(digest).bind(app.revision).bind(now()).execute(&mut *tx).await?;
     sqlx::query(
         "INSERT INTO discussions(id,request_id,actor,message,created_at) VALUES(?,?,?,?,?)",
     )
@@ -1186,12 +1209,11 @@ async fn request_publication(
     .await?;
     sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.status',?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("publication:{request}:requested"))
-        .bind(json!({"app_id":id,"org_id":app.org_id,"state":"awaiting_scope_review"}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(json!({"app_id":id,"org_id":app.org_id,"state":"awaiting_review_plan"}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(json!({"id":request,"state":"awaiting_scope_review","visibility":"private"})),
-    ))
+    let mut result = crate::reviews::plan(&s, &c, &request).await?;
+    result["visibility"] = json!(app.visibility);
+    Ok((StatusCode::ACCEPTED, Json(result)))
 }
 async fn publication(
     ExtractState(s): ExtractState<State>,
@@ -1216,7 +1238,14 @@ async fn publication(
                 .fetch_all(&s.db)
                 .await?;
         let messages:Vec<Value>=rows.iter().map(|r|json!({"id":r.get::<String,_>("id"),"actor":r.get::<String,_>("actor"),"message":r.get::<String,_>("message"),"provider":r.get::<Option<String>,_>("provider")})).collect();
-        items.push(json!({"id":request_id,"revision":r.get::<i64,_>("revision"),"state":r.get::<String,_>("state"),"messages":messages}));
+        let gates = sqlx::query(
+            "SELECT provider,scopes,state FROM review_gates WHERE request_id=? ORDER BY provider",
+        )
+        .bind(&request_id)
+        .fetch_all(&s.db)
+        .await?;
+        let gates:Vec<Value>=gates.iter().map(|g|json!({"provider":g.get::<String,_>("provider"),"scopes":serde_json::from_str::<Value>(&g.get::<String,_>("scopes")).unwrap_or(Value::Null),"state":g.get::<String,_>("state")})).collect();
+        items.push(json!({"id":request_id,"revision":r.get::<i64,_>("revision"),"state":r.get::<String,_>("state"),"messages":messages,"gates":gates,"error":r.get::<Option<String>,_>("error")}));
     }
     Ok(Json(json!({"items":items})))
 }

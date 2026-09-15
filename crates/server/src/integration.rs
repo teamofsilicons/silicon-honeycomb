@@ -43,6 +43,39 @@ pub trait Management: Send + Sync {
             "IAM protected operation recovery is not yet available",
         ))
     }
+    /// IAM derives critical scope gates from its current catalog and eligibility rules.
+    async fn publication_plan(
+        &self,
+        _request: &Value,
+        _actor_token: &str,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM publication review planning is not yet available",
+        ))
+    }
+    async fn iam_scope_reviewer(
+        &self,
+        _actor_token: &str,
+        _environment: Option<&str>,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+    async fn review_decision(
+        &self,
+        _operation: &Value,
+        _actor_token: &str,
+        _environment: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM protected scope decisions are not yet available",
+        ))
+    }
+    async fn review_notification_recipients(&self, _provider: &str) -> Result<Vec<String>> {
+        Err(Error::unavailable(
+            "IAM scoped reviewer notification recipients are not yet available",
+        ))
+    }
     async fn notification_recipients(&self, _org_id: &str) -> Result<Vec<String>> {
         Err(Error::unavailable(
             "IAM protected notification recipient discovery is not yet available",

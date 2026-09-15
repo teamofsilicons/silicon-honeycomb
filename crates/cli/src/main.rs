@@ -192,6 +192,33 @@ enum Releases {
 }
 #[derive(Subcommand)]
 enum Publication {
+    /// Requests you can review as a provider administrator or authorized validator.
+    Inbox,
+    Review {
+        request_id: String,
+        provider: String,
+    },
+    RetryPlan {
+        request_id: String,
+        #[arg(long)]
+        revision: i64,
+    },
+    Decide {
+        request_id: String,
+        provider: String,
+        #[arg(value_parser=["approve","deny"])]
+        decision: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+        #[arg(long)]
+        revision: i64,
+    },
+    ReviewReply {
+        request_id: String,
+        provider: String,
+        #[arg(long)]
+        message: String,
+    },
     Get {
         app_id: String,
     },
@@ -632,6 +659,45 @@ async fn run() -> Result<()> {
             )?,
         },
         Command::Publication { command } => match command {
+            Publication::Inbox => show(&client.review_inbox().await?)?,
+            Publication::Review {
+                request_id,
+                provider,
+            } => show(&client.review_request(request_id, provider).await?)?,
+            Publication::RetryPlan {
+                request_id,
+                revision,
+            } => show(
+                &client
+                    .retry_review_plan(request_id, &mutation(&cli, Some(*revision))?)
+                    .await?,
+            )?,
+            Publication::Decide {
+                request_id,
+                provider,
+                decision,
+                reason,
+                revision,
+            } => show(
+                &client
+                    .decide_review(
+                        request_id,
+                        provider,
+                        decision,
+                        reason,
+                        &mutation(&cli, Some(*revision))?,
+                    )
+                    .await?,
+            )?,
+            Publication::ReviewReply {
+                request_id,
+                provider,
+                message,
+            } => show(
+                &client
+                    .reply_review(request_id, provider, message, &operation)
+                    .await?,
+            )?,
             Publication::Get { app_id } => show(&client.publication(app_id).await?)?,
             Publication::Request {
                 app_id,

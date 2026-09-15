@@ -45,8 +45,7 @@ against the isolated backend fixture, curl/bash installer checks, and desktop an
 mobile browser journeys. These fixtures are not evidence of live IAM or Briefcase
 integration. No repository, crates, binaries or websites have been published.
 
-Still required before the full understanding is complete: provider/validator
-review decisions and IAM activation/reconciliation; live protected app secret rotation;
+Still required before the full understanding is complete: IAM activation/reconciliation and live provider/validator integration; live protected app secret rotation;
 complete per-service testing lifecycle/import/migration/retention coordination;
 live Postmark delivery and IAM recipient discovery; actual release publication/deployment and live cross-service E2E.
 
@@ -96,3 +95,16 @@ Secret checkpoint verification: full Rust workspace tests (21 backend API cases)
 strict Clippy, CLI rotation/pending checks, production web build, and all 18
 desktop/mobile browser journeys pass. Browser retries preserve the original
 idempotency key. Existing public distribution and live IAM limitations still apply.
+
+Provider review workflow now includes IAM-derived review plans, provider/admin and
+explicit validator authority, scoped discussions, denial reasons, durable decisions,
+recipient-role notification queues, stale-revision rejection and provider-before-
+validator sequencing. Public apps can request review of new scopes while retaining
+older effective access. CLI and console expose the same inbox and decision flow.
+All approvals stop at awaiting_activation; final IAM public activation and archive
+sharing reconciliation are the next implementation step.
+
+Review checkpoint verification: 24 backend API tests, full Rust workspace tests,
+strict Clippy, CLI review/decision journeys, production web build and all 20
+browser journeys pass. Review authority and receipt tests use explicit local doubles;
+they do not claim that IAM's protected management API exists yet.

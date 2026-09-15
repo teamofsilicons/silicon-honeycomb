@@ -153,3 +153,18 @@ IAM controls the replay window and revokes the previous credential according to
 its version policy. Honeycomb prints a returned secret once and never saves it.
 The console's Access & secrets tab shows requested/effective scopes and your
 configuration operations, with retry and recovery controls.
+
+## Review application access
+
+```sh
+honeycomb publication inbox
+honeycomb publication review REQUEST_ID 'tos>provider'
+honeycomb publication review-reply REQUEST_ID 'tos>provider' --message 'Please explain this scope.'
+honeycomb publication decide REQUEST_ID 'tos>provider' approve --revision 1 --reason 'Access reviewed.'
+```
+
+Provider administrators review their own critical scopes. IAM reviewers require
+IAM's explicit authority; Honeycomb validators act only after provider approvals
+are accepted. Denials require a reason. The console's Review requests page provides
+the same discussions and decisions. Publication remains pending until IAM accepts
+activation and archive access is reconciled.

@@ -95,6 +95,11 @@ impl Management for FixtureManagement {
             json!({"state":"accepted","configuration_revision":body["configuration_revision"],"iam_revision":body["expected_iam_revision"].as_i64().unwrap()+1,"effective_configuration":body["configuration"]}),
         )
     }
+    async fn review_decision(&self, operation: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        let mut receipt = operation.clone();
+        receipt["state"] = json!("accepted");
+        Ok(receipt)
+    }
     async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
         Err(Error::unavailable(
             "Fixture deliberately leaves shared lifecycle provisioning pending",
@@ -200,6 +205,25 @@ async fn main() -> anyhow::Result<()> {
         .execute(&state.db)
         .await?;
     for project in ["desktop", "mobile"] {
+        let app_id = format!("fixture>review-{project}");
+        let request_id = format!("fixture-review-{project}");
+        let config = json!({"org_id":"fixture","local_app_id":format!("review-{project}"),"name":format!("Review candidate {project}"),"description":"An isolated application requesting access to Briefcase files.","app_scope":{"iam":[],"external":[{"app_id":"tos>briefcase","endpoint_id":"files.read"}]}});
+        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production',?,'fixture',?,'Isolated review candidate','active',1,1,1,?,?,'',1,1)")
+            .bind(&app_id).bind(format!("Review candidate {project}")).bind(config.to_string()).bind(config.to_string()).execute(&state.db).await?;
+        sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot,plan_id) VALUES(?,'production',?,1,'awaiting_scope_review','fixture-requester',1,?,'fixture-plan')")
+            .bind(&request_id).bind(&app_id).bind(config.to_string()).execute(&state.db).await?;
+        for (provider, scopes) in [
+            ("tos>briefcase", json!(["files.read"])),
+            ("honeycomb", json!([])),
+        ] {
+            sqlx::query("INSERT INTO review_gates(request_id,provider,scopes) VALUES(?,?,?)")
+                .bind(&request_id)
+                .bind(provider)
+                .bind(scopes.to_string())
+                .execute(&state.db)
+                .await?;
+        }
+
         sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated import journey',?,?,'ready',1,1)")
             .bind(format!("fixture-import-{project}")).bind(format!("Import sandbox {project}"))
             .bind(state.encrypt("fixture-import-root-key-0000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("fixture-import-unused-hash-{project}")).execute(&state.db).await?;

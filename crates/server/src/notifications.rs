@@ -183,10 +183,16 @@ async fn render(s: &State, id: &str, kind: &str, payload: &Value) -> Result<Emai
             ),
         )
     } else {
-        let org = payload["org_id"]
-            .as_str()
-            .ok_or_else(|| Error::bad("Notification has no organization"))?;
-        let recipients = s.management.notification_recipients(org).await?;
+        let recipients = if let Some(provider) = payload["review_provider"].as_str() {
+            s.management
+                .review_notification_recipients(provider)
+                .await?
+        } else {
+            let org = payload["org_id"]
+                .as_str()
+                .ok_or_else(|| Error::bad("Notification has no organization"))?;
+            s.management.notification_recipients(org).await?
+        };
         let app = payload["app_id"].as_str().unwrap_or("application");
         let (subject, text) = match kind {
             "release.created" => (
@@ -195,6 +201,10 @@ async fn render(s: &State, id: &str, kind: &str, payload: &Value) -> Result<Emai
                     "Congratulations on releasing {app} {}.\n\nManage your application at https://console.honeycomb.teamofsilicons.com",
                     payload["version"].as_str().unwrap_or("")
                 ),
+            ),
+            "publication.review" => (
+                format!("{app}: application review requested"),
+                "An application is awaiting your review. Sign in to inspect its requested access and discussion.\n\nhttps://console.honeycomb.teamofsilicons.com".into(),
             ),
             "publication.message" => (
                 format!("{app}: review discussion updated"),

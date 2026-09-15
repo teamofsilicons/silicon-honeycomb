@@ -252,3 +252,25 @@ and can recover the same secret within IAM's replay window. After expiry, return
 the accepted metadata without the secret; recovery must never perform a new rotation.
 Honeycomb uses this result to reconcile a lost rotation response. Please provide
 the hosted step-up initiation/callback contract for the console in the new SDK.
+
+### Review plan and decision contract implemented in Honeycomb
+
+The protected publication-plan request carries request_id, app_id,
+configuration_revision, requested configuration and visibility=public. IAM responds
+with those identifiers, state=accepted, a stable plan_id and gates containing
+provider (`iam` or an external app_id) plus its exact critical scope names. The plan
+must use current criticality, eligibility and already accepted decisions. Honeycomb
+adds its separate `honeycomb` validator gate. It rejects undeclared scopes.
+
+Decision operations carry operation_id, request_id, plan_id, app_id,
+configuration_revision, provider, exact scopes, approve/deny and reason. IAM must
+validate live acting-user authority, then echo those fields with state=accepted.
+Honeycomb does not count a pending response as approval. Publish acceptance must
+recheck every gate against current eligibility and revocations. Public apps can
+plan reviews for a pending desired revision while the old effective scope set
+continues working.
+
+Provide explicit live IAM scope-reviewer eligibility and scoped notification
+recipients for external provider admins, IAM reviewers and Honeycomb validators.
+An ordinary platform-org admin is not automatically a validator. Honeycomb queues
+notifications until protected recipient discovery and Postmark are configured.

@@ -1242,3 +1242,8 @@ textarea {
   gap: 8px;
   margin: 20px 0;
 }
+
+.review-request-row {display:flex;align-items:center;gap:20px;width:100%;text-align:left;border-bottom:1px solid var(--line);padding:24px 0;}
+.review-request-row > div {flex:1;min-width:0;}
+.review-request-row h2 {font-size:1.2rem;margin:0 0 8px;}
+.review-request-row p {overflow-wrap:anywhere;}
