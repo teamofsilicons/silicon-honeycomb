@@ -1,0 +1,277 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dedicated Honeycomb backend and web session host. SolidJS assets are deployed on Vercel.",
+  "Parameters": {
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "SubnetId": {
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "ImageId": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+    }
+  },
+  "Resources": {
+    "BackendRepository": {
+      "Type": "AWS::ECR::Repository",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "RepositoryName": "silicon-honeycomb-backend",
+        "ImageTagMutability": "IMMUTABLE",
+        "ImageScanningConfiguration": {
+          "ScanOnPush": true
+        },
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        }
+      }
+    },
+    "WebRepository": {
+      "Type": "AWS::ECR::Repository",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "RepositoryName": "silicon-honeycomb-web",
+        "ImageTagMutability": "IMMUTABLE",
+        "ImageScanningConfiguration": {
+          "ScanOnPush": true
+        },
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        }
+      }
+    },
+    "RuntimeSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": "silicon-honeycomb/production/runtime",
+        "Description": "Protected backend and web session environment; populated by the deployment operator",
+        "SecretString": "{}"
+      }
+    },
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "HoneycombRuntime",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": {
+                    "Ref": "RuntimeSecret"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ecr:GetAuthorizationToken"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "BackendRepository",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "WebRepository",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      }
+    },
+    "SecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Honeycomb HTTPS and ACME; management uses SSM, no SSH",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "silicon-honeycomb-production"
+          }
+        ]
+      }
+    },
+    "Server": {
+      "Type": "AWS::EC2::Instance",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "ImageId": {
+          "Ref": "ImageId"
+        },
+        "InstanceType": "t4g.small",
+        "SubnetId": {
+          "Ref": "SubnetId"
+        },
+        "SecurityGroupIds": [
+          {
+            "Ref": "SecurityGroup"
+          }
+        ],
+        "IamInstanceProfile": {
+          "Ref": "InstanceProfile"
+        },
+        "DisableApiTermination": true,
+        "MetadataOptions": {
+          "HttpTokens": "required",
+          "HttpPutResponseHopLimit": 1
+        },
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/xvda",
+            "Ebs": {
+              "VolumeSize": 30,
+              "VolumeType": "gp3",
+              "Encrypted": true,
+              "DeleteOnTermination": false
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "silicon-honeycomb-production"
+          },
+          {
+            "Key": "Service",
+            "Value": "silicon-honeycomb"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": "#!/bin/bash\nset -euo pipefail\ndnf install -y docker\nsystemctl enable --now docker\ninstall -d -m 700 /etc/silicon-honeycomb\ninstall -d /var/lib/silicon-honeycomb\n"
+        }
+      }
+    },
+    "Address": {
+      "Type": "AWS::EC2::EIP",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "silicon-honeycomb-production"
+          }
+        ]
+      }
+    },
+    "AddressAssociation": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "Address",
+            "AllocationId"
+          ]
+        },
+        "InstanceId": {
+          "Ref": "Server"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "InstanceId": {
+      "Value": {
+        "Ref": "Server"
+      }
+    },
+    "PublicIp": {
+      "Value": {
+        "Ref": "Address"
+      }
+    },
+    "BackendRepository": {
+      "Value": {
+        "Fn::GetAtt": [
+          "BackendRepository",
+          "RepositoryUri"
+        ]
+      }
+    },
+    "WebRepository": {
+      "Value": {
+        "Fn::GetAtt": [
+          "WebRepository",
+          "RepositoryUri"
+        ]
+      }
+    },
+    "RuntimeSecretArn": {
+      "Value": {
+        "Ref": "RuntimeSecret"
+      }
+    }
+  }
+}

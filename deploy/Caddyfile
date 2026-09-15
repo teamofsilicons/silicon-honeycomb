@@ -1,9 +1,11 @@
-honeycomb.teamofsilicons.com {
-  reverse_proxy library:4173
-}
-console.honeycomb.teamofsilicons.com {
-  reverse_proxy console:4173
-}
 backend.honeycomb.teamofsilicons.com {
-  reverse_proxy backend:8080
+  handle_path /web/library/* {
+    reverse_proxy library:4173
+  }
+  handle_path /web/console/* {
+    reverse_proxy console:4173
+  }
+  handle {
+    reverse_proxy backend:8080
+  }
 }

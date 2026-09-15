@@ -44,7 +44,8 @@ and sample applications; no production credentials or email delivery are involve
 - Both preview websites were visually inspected; source provenance hashes pass.
 
 Cross-platform archive validation is not native execution on all six platforms.
-The native six-platform release workflow has not run on remote CI.
+All six native release jobs now pass. GitHub `v0.1.0` and the core/client/CLI
+crates are published; both public installation methods passed on macOS ARM64.
 
 ## Remaining work before the complete product is ready
 
@@ -61,10 +62,11 @@ The native six-platform release workflow has not run on remote CI.
    Postmark and deployment secrets; prepare the actual hosting/DNS and callback URLs.
 5. Publish the CLI binaries and crates, then run live browser/CLI/installer
    acceptance across the requested domains and supported platforms. The repository
-   is now public on GitHub; hosted CI/native candidate builds are pending. Crates,
-   releases, domains and websites have not been published here.
+   is now public on GitHub; hosted CI and all native candidate builds passed. CLI
+   releases and frontend assets are now published. AWS deployment and live acceptance
+   are tracked in `deploy/aws/README.md`.
 
-The actual IAM source now exists locally; the earlier blanket "IAM API absent"
+The actual IAM management API is deployed and its service reads pass; the earlier blanket "IAM API absent"
 assessment is superseded by the current contract review. SDK 1.10 is not yet in
 crates.io, so the exact unchanged official source is pinned in `vendor` with hashes.
 The production adapter keeps unsupported operations pending and exposes their errors.

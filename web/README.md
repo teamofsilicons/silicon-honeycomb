@@ -25,6 +25,20 @@ and persistent SQLite session files for each host. Terminate HTTPS at the revers
 proxy and preserve the configured host. Callback URLs are `/auth/callback` on each
 host; register both with IAM. Access and refresh tokens stay encrypted server-side.
 
+## Vercel production assets
+
+Set `HONEYCOMB_SITE=library` or `console`, then run `npm run build:vercel`.
+The build creates static Build Output API artifacts in `.vercel/output`, ready
+for `vercel deploy --prebuilt --prod` in the matching project. The two Vercel
+projects are `silicon-honeycomb-library` and `silicon-honeycomb-console`.
+
+Vercel proxies `/api/*` and `/auth/*` to `/web/<site>/*` on the backend hostname.
+The persistent Node session services run beside the Rust backend on AWS, retaining
+encrypted SQLite sessions and distinct keys for each website. No credentials,
+session databases or server functions are uploaded to Vercel. `deploy/Caddyfile`
+routes these two prefixes to the correct service. IAM callbacks remain on each
+frontend's `/auth/callback`; cookies are host-only, HttpOnly, Secure and SameSite=Lax.
+
 ## Repeatable browser tests
 
 ```sh

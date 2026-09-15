@@ -39,7 +39,8 @@ operator deprecation starts retirement. The real Rust client consumes the backen
 contract in an HTTP test, alongside CLI and browser journeys. Version policy and
 the consumer matrix are documented in [API-CONTRACTS.md](API-CONTRACTS.md).
 All 44 API cases, workspace tests, strict Clippy, CLI journey, web build and 36
-browser cases pass. No remote commits or release artifacts have been published.
+browser cases pass. Source and GitHub `v0.1.0` are now public; all three crates are published. All six
+native release jobs and both public installer paths passed.
 The user selected MIT for Honeycomb and approved publishing the vendored IAM SDK.
 The root and crates carry MIT license text; the SDK's original notice remains intact.
 

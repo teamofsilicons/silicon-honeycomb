@@ -1,20 +1,22 @@
 # Deployment and release preparation
 
-These are reviewable local deployment artifacts. They have not been deployed.
-The user-provided GitHub repository is configured as `origin` and source has been
-published to `main` under MIT. No domains or public CLI releases were provisioned.
-The dedicated Space Station table/key is provisioned locally. Hosted CI and the
-six-platform candidate workflow have started; success is not yet established.
+Source is public under MIT, and GitHub release `v0.1.0` plus all three crates are
+published. All six native release jobs passed. Public curl/bash and crates.io
+installation were verified in isolated homes.
 
-IAM's management API and the `tos>honeycomb` authentication app are now deployed.
-The protected IAM handoff supplies the five existing backend environment settings
-at `/Users/codanium/.config/silicon/honeycomb/iam-production.env`; keep it outside
-Git and merge it into the host's protected backend configuration. The handoff
-does not supply Honeycomb's database encryption key, ordinary application webhook
-key, web session keys, Briefcase grants or hosting. See
-`docs/IAM-CONTRACT-REVIEW.md` for live read verification and remaining contracts.
-Leave IAM's legacy-writer cutover and scheduled-testing switches disabled until
-the corresponding Honeycomb flows are verified.
+The user selected AWS for the backend, Vercel for both SolidJS frontends, and
+Namecheap DNS. The dedicated AWS host is in `us-east-2` using the
+`silicon-production` profile; see [aws/README.md](aws/README.md). Vercel projects
+are `silicon-honeycomb-library` and `silicon-honeycomb-console`. The requested
+three DNS records are configured. Deployment alone does not prove live IAM or
+Briefcase acceptance; Briefcase setup is deferred until the base is ready.
+
+IAM's management API and `tos>honeycomb` authentication app are deployed.
+Protected service reads pass. The IAM handoff is outside Git at
+`/Users/codanium/.config/silicon/honeycomb/iam-production.env`; complete runtime
+settings are in the AWS Secrets Manager runtime secret. Keep IAM's legacy-writer
+cutover and scheduled-testing switches disabled until replacement flows are verified.
+See `docs/IAM-CONTRACT-REVIEW.md` for required scopes and outstanding contracts.
 
 ## Containers and requested domains
 
@@ -30,13 +32,14 @@ backend requires a different database/deployment design. Back up the databases
 consistently, along with the encryption keys stored separately in your secret
 manager. Losing an encryption key makes stored credentials unrecoverable.
 
-`compose.yaml` and `Caddyfile` route:
+The production layout routes:
 
-- `honeycomb.teamofsilicons.com` → library
-- `console.honeycomb.teamofsilicons.com` → console
-- `backend.honeycomb.teamofsilicons.com` → Rust backend
+- `honeycomb.teamofsilicons.com` → Vercel library assets
+- `console.honeycomb.teamofsilicons.com` → Vercel console assets
+- `backend.honeycomb.teamofsilicons.com` → Rust backend plus `/web/library/*` and
+  `/web/console/*` persistent session services, selected by Caddy
 
-Before starting on an approved host, point all three DNS records at it. Provide
+For an alternative self-managed container deployment, provide
 `backend.env` from the root example plus separate `library.env` and `console.env`
 with distinct `WEB_SESSION_KEY` values (64 hex characters). These files are ignored
 by Git. Caddy obtains HTTPS certificates; website backend calls use the HTTPS
@@ -94,6 +97,6 @@ marked `publish = false`.
 
 The native release matrix also checks isolated Cargo source installation on each
 platform and the MIT notice embedded in each binary (`honeycomb license`). Source
-publication and dispatch are complete; native hosted-runner verification is pending.
+publication and all six native hosted-runner verifications are complete.
 Local verification covers native macOS arm64 CLI execution, Linux arm64 container
 build/startup, all six archive mappings, and desktop/mobile Chromium journeys.
