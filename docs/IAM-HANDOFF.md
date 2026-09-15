@@ -1,6 +1,11 @@
 # IAM changes required by Honeycomb
 
-Status: proposed integration contract, not an assertion that these endpoints exist.
+Current update: local IAM commit `7abd575` now implements part of this integration.
+Read [IAM-CONTRACT-REVIEW.md](IAM-CONTRACT-REVIEW.md) first for the implemented
+contract, adapter coverage, unpublished SDK pin and remaining gaps.
+
+The sections below retain the original proposed contract, not a claim that every
+named endpoint exists.
 Based on the Honeycomb understanding and IAM client 1.9.0 inspected on 2026-09-15.
 Route names below can be adjusted together before implementation; authority,
 replay, isolation and activation semantics are required.

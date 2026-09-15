@@ -1,4 +1,4 @@
-//! Contract checks through the published IAM SDK, using a local HTTP service.
+//! Contract checks through the pinned official IAM SDK, using a local HTTP service.
 use serde_json::{Value, json};
 use silicon_honeycomb_server::auth::{Iam, IdentityProvider};
 use silicon_iam_client::{Client, Credential};

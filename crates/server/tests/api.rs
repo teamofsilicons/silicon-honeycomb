@@ -2671,3 +2671,72 @@ async fn management_notifications_remain_in_their_signed_testing_generation() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn iam_management_notifications_use_independent_signatures_and_durable_deduplication() {
+    use hmac::{Hmac, Mac};
+    let (s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("reconcile"),
+        "management-signature-create",
+        None,
+    )
+    .await;
+    let body=json!({"event_id":uuid::Uuid::new_v4(),"operation_id":uuid::Uuid::new_v4(),"resource_id":"tos>reconcile","environment_id":null,"revision":2,"event_type":"application.scope.decided","data":{"app_secret":"must-never-persist"}}).to_string();
+    let timestamp = silicon_honeycomb_server::now();
+    let key = "independent-management-signing-key";
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(body.as_bytes());
+    let signature = format!(
+        "t={timestamp},v1={}",
+        hex::encode(mac.finalize().into_bytes())
+    );
+    let router =
+        silicon_honeycomb_server::iam_management::notification_router(s.clone(), key.into());
+    for duplicate in [false, true] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/management/webhook/")
+                    .header("x-iam-management-signature", &signature)
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(receipt["duplicate"], duplicate);
+    }
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/management/webhook/")
+                .header("x-iam-management-signature", signature)
+                .body(Body::from(body + " "))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let resource: String = sqlx::query_scalar("SELECT resource FROM webhook_events")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(resource, "tos>reconcile");
+    let queued: i64 = sqlx::query_scalar("SELECT target_revision FROM application_reconciliation")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(queued, 2);
+}

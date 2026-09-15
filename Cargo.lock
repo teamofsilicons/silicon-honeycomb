@@ -2383,6 +2383,7 @@ dependencies = [
  "http-body-util",
  "rand 0.8.8",
  "reqwest",
+ "secrecy",
  "semver",
  "serde",
  "serde_json",
@@ -2403,11 +2404,10 @@ dependencies = [
 
 [[package]]
 name = "silicon-iam-client"
-version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47564ad2d347474897c4069583674c354b19050a089a2859ce3c5ac8324a2971"
+version = "1.10.0"
 dependencies = [
  "base64 0.22.1",
+ "hex",
  "hmac 0.12.1",
  "http",
  "reqwest",

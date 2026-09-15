@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         app_id: app_id.clone(),
         audience: "tos>briefcase".into(),
     };
-    let state = State {
+    let mut state = State {
         db: silicon_honeycomb_server::database(
             &std::env::var("HONEYCOMB_DATABASE").unwrap_or_else(|_| "data/honeycomb.db".into()),
         )
@@ -48,6 +48,26 @@ async fn main() -> anyhow::Result<()> {
         encryption_key,
         webhook_secret: required("HONEYCOMB_WEBHOOK_SECRET")?,
     };
+    if let Some(credential) = std::env::var("IAM_HONEYCOMB_SERVICE_CREDENTIAL")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        state.management = Arc::new(
+            silicon_honeycomb_server::iam_management::IamManagement::new(
+                &iam_url,
+                credential,
+                state.db.clone(),
+                encryption_key,
+            )?,
+        );
+    }
+    let notifications = std::env::var("IAM_HONEYCOMB_NOTIFICATION_SIGNING_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|key| {
+            silicon_honeycomb_server::iam_management::notification_router(state.clone(), key.into())
+        })
+        .unwrap_or_default();
     let bind = std::env::var("HONEYCOMB_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let origins = std::env::var("HONEYCOMB_WEB_ORIGINS")
         .unwrap_or_else(|_| {
@@ -86,7 +106,9 @@ async fn main() -> anyhow::Result<()> {
         mailer,
     ));
     tokio::spawn(silicon_honeycomb_server::reconciliation::run(state.clone()));
-    let app = silicon_honeycomb_server::api::router(state).layer(cors);
+    let app = silicon_honeycomb_server::api::router(state)
+        .merge(notifications)
+        .layer(cors);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(address=%bind,"Honeycomb listening");
     axum::serve(listener, app)

@@ -14,12 +14,13 @@ Source of requirements: human-owned `../UNDERSTANDING.md` (never edited by agent
 
 ## Integration findings
 
-- Latest published `silicon-iam-client` verified with `cargo info`: 1.9.0.
+- Registry SDK: 1.9.0. Local official IAM commit `7abd575` adds SDK 1.10.0;
+  its unchanged source is pinned in vendor until publication. See IAM-CONTRACT-REVIEW.md.
 - IAM supports application SLT exchange and live authorization snapshots.
-- Current IAM source has no Honeycomb management service integration. Application
-  administration there requires a direct IAM principal credential, which must not
-  be substituted for Honeycomb's application token. The new integration requires
-  service identity AND live acting-user authority, revisions and idempotency.
+- IAM now has a dedicated Honeycomb service integration with service identity
+  AND live acting-user authority, revisions and idempotency. Supported production
+  configuration/rotation/reads are wired; review, lifecycle and adoption contract
+  differences remain explicit in IAM-CONTRACT-REVIEW.md.
 - Briefcase OBO supports recoverable uploads, reads, and critical
   `briefcase.link_access.update` for anyone-with-link sharing.
 - Ecosystem testing lifecycle migration requires coordination with IAM and each
@@ -135,3 +136,16 @@ generation rejection. Full workspace tests, strict Clippy, CLI journey, web buil
 and 22 browser journeys passed; the four affected browser cases were rerun after
 adding synchronization UI and isolated CLI homes. Live management reads still
 require the future IAM service API.
+
+A subsequent local IAM commit was discovered during contract verification. The
+backend now pins its official 1.10 SDK source and supports real production
+configuration, secret rotation/replay, accepted-state reads and separately signed
+management notifications when provisioned. Encrypted immutable wire requests keep
+SDK mutation retries exact. Test configuration, publication review/activation and
+shared lifecycle adapters remain incomplete rather than fabricating receipts.
+
+SDK checkpoint verification: all workspace tests (29 API cases plus three new
+management SDK wire cases), strict Clippy, CLI/curl-bash installer journeys,
+production web build and all 22 browser journeys pass. The source provenance hash
+check passes. No live IAM credential, deployment, remote commit or publication was
+used; see the current contract review before provisioning IAM's writer cutover.

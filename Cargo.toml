@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/core", "crates/server", "crates/client", "crates/cli"]
+exclude = ["vendor/silicon-iam-client"]
 resolver = "3"
 
 [workspace.package]
