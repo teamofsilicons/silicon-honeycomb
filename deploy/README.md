@@ -1,8 +1,10 @@
 # Deployment and release preparation
 
 These are reviewable local deployment artifacts. They have not been deployed.
-The user-provided GitHub repository is configured as `origin`; no commits have
-been pushed, and no domains, credentials or public releases were provisioned.
+The user-provided GitHub repository is configured as `origin` and source has been
+published to `main` under MIT. No domains or public CLI releases were provisioned.
+The dedicated Space Station table/key is provisioned locally. Hosted CI and the
+six-platform candidate workflow have started; success is not yet established.
 
 ## Containers and requested domains
 
@@ -81,7 +83,7 @@ crates.io. Local Cargo source installation is tested independently. The server i
 marked `publish = false`.
 
 The native release matrix also checks isolated Cargo source installation on each
-platform. No cross-platform release job has run yet; the repository has not been
-pushed and the candidate workflow has not been dispatched.
+platform and the MIT notice embedded in each binary (`honeycomb license`). Source
+publication and dispatch are complete; native hosted-runner verification is pending.
 Local verification covers native macOS arm64 CLI execution, Linux arm64 container
 build/startup, all six archive mappings, and desktop/mobile Chromium journeys.

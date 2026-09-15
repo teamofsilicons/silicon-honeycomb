@@ -2,6 +2,7 @@
 
 Licensed under [MIT](LICENSE). Vendored dependencies retain their
 [third-party notices](THIRD-PARTY-NOTICES.md).
+Run `honeycomb license` to read the notice embedded in a native CLI binary.
 
 The application library, release manager and testing-environment coordinator for
 Carbons and Silicons. Honeycomb owns application workflows; IAM remains the

@@ -59,9 +59,10 @@ The native six-platform release workflow has not run on remote CI.
 3. Complete protected notification recipient discovery and live Postmark delivery.
 4. Provision IAM/Briefcase permissions, dedicated service and notification keys,
    Postmark and deployment secrets; prepare the actual hosting/DNS and callback URLs.
-5. Publish the repository, CLI binaries and crates, then run live browser/CLI/installer
-   acceptance across the requested domains and supported platforms. No remote Git
-   changes, crates, releases, domains or websites have been published here.
+5. Publish the CLI binaries and crates, then run live browser/CLI/installer
+   acceptance across the requested domains and supported platforms. The repository
+   is now public on GitHub; hosted CI/native candidate builds are pending. Crates,
+   releases, domains and websites have not been published here.
 
 The actual IAM source now exists locally; the earlier blanket "IAM API absent"
 assessment is superseded by the current contract review. SDK 1.10 is not yet in

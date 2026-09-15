@@ -11,6 +11,8 @@
 pub use honeycomb_core::*;
 pub mod installer;
 pub mod maintenance;
+/// Honeycomb's license notice, embedded so native CLI distributions carry it.
+pub const LICENSE_TEXT: &str = include_str!("../LICENSE");
 /// Stable local context name without exposing tokens or environment root keys.
 pub fn context_fingerprint(origin: &str, environment: Option<&str>) -> String {
     hex::encode(sha2::Sha256::digest(format!(

@@ -40,6 +40,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Print Honeycomb's MIT license notice without contacting a service.
+    License,
     /// Discover the configured IAM app identity and login URL.
     Iam,
     /// Exchange an IAM short-lived token, or use `login status` to check live authentication.
@@ -514,6 +516,14 @@ async fn main() {
 }
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    if matches!(cli.command, Command::License) {
+        if cli.json {
+            show(&json!({"license":"MIT","text":honeycomb_client::LICENSE_TEXT}))?;
+        } else {
+            print!("{}", honeycomb_client::LICENSE_TEXT);
+        }
+        return Ok(());
+    }
     let started = std::time::Instant::now();
     let result = execute(&cli).await;
     record_command(
@@ -1031,7 +1041,8 @@ async fn execute(cli: &Cli) -> Result<()> {
                 &json!({"uninstalled":app_id,"review_command":format!("honeycomb review '{app_id}' --rating 4.7 --review 'Your review'")}),
             )?;
         }
-        Command::Config { .. }
+        Command::License
+        | Command::Config { .. }
         | Command::Daemon { .. }
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
@@ -1156,6 +1167,7 @@ async fn record_command(cli: &Cli, source: &str, event: &str, duration: u64, suc
             return Ok(());
         };
         let action = match &cli.command {
+            Command::License => return Ok(()),
             Command::Iam => "iam",
             Command::Search { .. } => "search",
             Command::Login { .. } => "login",
