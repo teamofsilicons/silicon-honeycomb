@@ -1,3 +1,4 @@
+import EnvironmentRetention from "./EnvironmentRetention";
 import WebhookSettings from "./WebhookSettings";
 import ScopePicker from "./ScopePicker";
 import {
@@ -121,6 +122,7 @@ const blank = () => ({
   website_url: "",
   docs_url: "",
   logo_url: "",
+  testing_idle_days: 30,
   app_scope: {
     iam: ["self.identity.read", "self.profile.read", "self.membership.read"],
     external: [],
@@ -1520,6 +1522,7 @@ export default function App() {
               </small>
             </label>
           </div>
+          <label>Test application idle days<input type="number" min="1" max="36500" required value={form().testing_idle_days ?? 30} onInput={e=>edit("testing_idle_days", Number(e.currentTarget.value))} /><small>Default: 30 days. Active applications keep their dependencies available.</small></label>
           <fieldset>
             <legend>Webhook updates</legend>
             <div class="checkboxes">
@@ -1684,6 +1687,7 @@ export default function App() {
                   Retry setup
                 </button>
               </Show>
+              <EnvironmentRetention environment={env()} refresh={async()=>setSelectedEnv(await request(`/api/v1/environments/${env().environment_id}`))} />
               <Show when={env().imports?.length}>
                 <h3>Pinned applications</h3>
                 <For each={env().imports}>{(item) => <p><strong>{item.app_id}</strong><br /><small>Source revision {item.source_revision}{item.selected_release ? ` · Release ${item.selected_release}` : ""}</small></p>}</For>

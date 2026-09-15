@@ -122,6 +122,14 @@ pub fn router(state: State) -> Router {
             "/api/v1/environments/{id}/imports",
             post(super::imports::import),
         )
+        .route(
+            "/api/v1/environments/{id}/retention",
+            get(super::retention::status).put(super::retention::update),
+        )
+        .route(
+            "/api/v1/environments/{id}/apps/{app}/activity",
+            post(super::retention::report),
+        )
         .route("/webhook/", post(super::control::webhook))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(axum::middleware::from_fn(response_headers))

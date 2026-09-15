@@ -562,6 +562,41 @@ impl Client {
     pub async fn environment(&self, id: &str) -> Result<Value> {
         self.get(&["environments", id]).await
     }
+    /// Inspect per-app activity, protected dependencies and retention deadlines.
+    pub async fn environment_retention(&self, id: &str) -> Result<Value> {
+        self.get(&["environments", id, "retention"]).await
+    }
+    pub async fn set_environment_retention(
+        &self,
+        id: &str,
+        days: i64,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::PUT,
+            &["environments", id, "retention"],
+            &json!({"idle_days":days}),
+            m,
+        )
+        .await
+    }
+    /// Report actual test use. IAM environment generation/key version must be current.
+    pub async fn report_environment_activity(
+        &self,
+        id: &str,
+        app: &str,
+        generation: i64,
+        key_version: i64,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["environments", id, "apps", app, "activity"],
+            &json!({"generation":generation,"key_version":key_version}),
+            m,
+        )
+        .await
+    }
     /// Import the complete external-scope dependency graph with explicit configuration pins.
     pub async fn import_application(
         &self,

@@ -38,3 +38,25 @@ test("webhook approval and signing-secret rotation use transient verification an
   await page.screenshot({ path: `/tmp/honeycomb-webhook-${info.project.name}.png` });
   expect(await page.evaluate(() => JSON.stringify({ local: localStorage, session: sessionStorage }))).not.toContain("browser-webhook-signing-secret");
 });
+
+test("environment retention persists and reports per-application activity", async ({ page }, info) => {
+  await page.goto(consoleSite);
+  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Testing environments", exact: true }).click();
+  const row = page.locator(".environment-row").filter({ has: page.getByRole("heading", { name: `Retention sandbox ${info.project.name}`, exact: true }) });
+  await row.getByRole("button", { name: "Manage", exact: true }).click();
+  const section=page.getByRole("region", { name:"Environment retention" });
+  await expect(section.getByLabel("Environment idle days")).toHaveValue("30");
+  await expect(section).toContainText("tos>briefcase");
+  await section.getByLabel("Environment idle days").fill("60");
+  await section.getByRole("button", { name:"Save retention", exact:true }).click();
+  await expect(section.getByRole("button", { name:"Save retention", exact:true })).toBeEnabled();
+  await expect(section.getByLabel("Environment idle days")).toHaveValue("60");
+  const saved = await (await page.context().request.get(`${consoleSite}/api/v1/environments/fixture-retention-${info.project.name}/retention`)).json();
+  expect(saved.idle_days).toBe(60);
+  expect(saved.revision).toBe(2);
+  await section.scrollIntoViewIfNeeded();
+  await page.screenshot({path:`/tmp/honeycomb-retention-${info.project.name}.png`});
+});

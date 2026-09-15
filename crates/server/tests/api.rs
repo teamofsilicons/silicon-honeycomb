@@ -3072,3 +3072,277 @@ async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_witho
     assert!(!operations.to_string().contains(secret));
     assert!(!operations.to_string().contains("encrypted_webhook_secret"));
 }
+
+async fn retention_fixture(s: &State) -> i64 {
+    use sha2::{Digest, Sha256};
+    let at = silicon_honeycomb_server::now();
+    let root = "RetentionRootKey00000000000000000";
+    sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES('retention-env','tos','admin','Retention','',?,?,'ready',?,?)")
+        .bind(s.encrypt(root).unwrap()).bind(hex::encode(Sha256::digest(root))).bind(at-40*86400).bind(at-40*86400).execute(&s.db).await.unwrap();
+    for (app, days, dependencies) in [
+        ("a", 1, vec!["tos>b"]),
+        ("b", 1, vec!["tos>c"]),
+        ("c", 1, vec!["tos>b"]),
+        ("d", 1, vec![]),
+        ("long", 1, vec![]),
+    ] {
+        let config=json!({"testing_idle_days":days,"app_scope":{"external":dependencies.into_iter().map(|d|json!({"app_id":d,"endpoint_id":"use"})).collect::<Vec<_>>()}}).to_string();
+        let id = format!("tos>{app}");
+        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('retention-env',?,'tos',?,'','active',1,1,?,?,'',?,?)")
+            .bind(&id).bind(app).bind(&config).bind(&config).bind(at-40*86400).bind(at).execute(&s.db).await.unwrap();
+        sqlx::query("INSERT INTO environment_app_activity(environment_id,app_id,last_activity) VALUES('retention-env',?,?)").bind(&id).bind(if app=="a" {at} else {at-40*86400}).execute(&s.db).await.unwrap();
+    }
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production','tos>long','tos','Long','','active',1,1,'{}','{\"testing_idle_days\":90}','',?,?)").bind(at).bind(at).execute(&s.db).await.unwrap();
+    at
+}
+#[tokio::test]
+async fn retention_protects_transitive_dependencies_cycles_and_longer_production_policies() {
+    let (s, _) = setup(true).await;
+    let at = retention_fixture(&s).await;
+    let mut connection = s.db.acquire().await.unwrap();
+    let plan = silicon_honeycomb_server::retention::plan(&mut connection, "retention-env", at)
+        .await
+        .unwrap();
+    let apps = plan["applications"].as_array().unwrap();
+    for id in ["tos>b", "tos>c"] {
+        let app = apps.iter().find(|a| a["app_id"] == id).unwrap();
+        assert_eq!(app["required_by_active_app"], true);
+        assert_eq!(app["eligible_for_retirement"], false);
+    }
+    assert_eq!(
+        apps.iter().find(|a| a["app_id"] == "tos>d").unwrap()["eligible_for_retirement"],
+        true
+    );
+    assert_eq!(
+        apps.iter().find(|a| a["app_id"] == "tos>long").unwrap()["idle_days"],
+        90
+    );
+    assert_eq!(plan["delete_after"], at + 50 * 86400);
+    assert_eq!(plan["eligible_for_deletion"], false);
+    let later = silicon_honeycomb_server::retention::plan(
+        &mut connection,
+        "retention-env",
+        at + 91 * 86400,
+    )
+    .await
+    .unwrap();
+    assert_eq!(later["eligible_for_deletion"], true);
+    assert!(
+        later["applications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["eligible_for_retirement"] == true)
+    );
+}
+#[tokio::test]
+async fn activity_is_generation_bound_server_timed_and_replay_does_not_keep_environment_alive() {
+    let (s, _) = setup(true).await;
+    let at = retention_fixture(&s).await;
+    let path = "/api/v1/environments/retention-env/apps/tos%3Ed/activity";
+    let payload = json!({"generation":1,"key_version":1});
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("outsider"),
+            payload.clone(),
+            "activity-outsider-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, first) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        payload.clone(),
+        "activity-report-0001",
+        None,
+    )
+    .await;
+    assert!(first["last_activity"].as_i64().unwrap() >= at);
+    assert_eq!(first["replayed"], false);
+    sqlx::query("UPDATE environments SET last_activity=1 WHERE id='retention-env'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (_, replayed) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        payload.clone(),
+        "activity-report-0001",
+        None,
+    )
+    .await;
+    assert_eq!(replayed["last_activity"], first["last_activity"]);
+    assert_eq!(replayed["replayed"], true);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT last_activity FROM environments WHERE id='retention-env'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/environments/retention-env/apps/tos%3Eb/activity",
+            Some("admin"),
+            payload,
+            "activity-report-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    // Test apps can report with root authority; no user session is required.
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("idempotency-key", "activity-root-report-0001")
+        .header(
+            "x-testing-environment-key",
+            "RetentionRootKey00000000000000000",
+        )
+        .body(Body::from(
+            json!({"generation":1,"key_version":1}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(
+        silicon_honeycomb_server::api::router(s.clone())
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE environments SET generation=2 WHERE id='retention-env'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({"generation":1,"key_version":1}),
+            "activity-old-generation-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({"generation":2,"key_version":1,"timestamp":9999999999_i64}),
+            "activity-future-time-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+#[tokio::test]
+async fn retention_changes_are_authorized_revisioned_and_idempotent() {
+    let (s, _) = setup(true).await;
+    retention_fixture(&s).await;
+    let path = "/api/v1/environments/retention-env/retention";
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            path,
+            Some("member"),
+            json!({"idle_days":90}),
+            "retention-member-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            path,
+            Some("admin"),
+            json!({"idle_days":0}),
+            "retention-invalid-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            path,
+            Some("admin"),
+            json!({"idle_days":90}),
+            "retention-stale-0001",
+            Some(2)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, result) = call(
+        &s,
+        "PUT",
+        path,
+        Some("admin"),
+        json!({"idle_days":90}),
+        "retention-update-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["revision"], 2);
+    let (_, replay) = call(
+        &s,
+        "PUT",
+        path,
+        Some("admin"),
+        json!({"idle_days":90}),
+        "retention-update-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(replay, result);
+    assert_eq!(
+        call(
+            &s,
+            "PUT",
+            path,
+            Some("admin"),
+            json!({"idle_days":91}),
+            "retention-update-0001",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+}

@@ -188,3 +188,31 @@ to avoid changing fixtures shared with secret-rotation tests. The application-se
 step-up fields also passed a subsequent desktop/mobile check proving that fresh
 proofs preserve the original retry key and clear from the form after submission.
 The webhook screen was visually checked at the mobile viewport.
+
+
+### Activity and retention controls
+
+Added generation/key-version-bound activity reports using server timestamps,
+actor-scoped idempotency and current environment authority. A replay does not
+refresh the idle timer. Reports only affect an existing active app in that ready
+environment; clean/purge remove activity and dedupe data. Import completion starts
+the imported application's activity timer.
+
+Added revisioned environment idle-day controls and read-only retention plans.
+Plans use accepted production app retention, preserve transitive dependencies of
+active applications, handle cycles and extend the shared deadline for longer app
+retention. Backend, stateless client, CLI and console expose these controls. The
+application input now actually includes testing_idle_days (30 by default), fixing
+a missing field in ordinary IAM configuration requests; old saved configurations
+also get the 30-day fallback in the SDK adapter.
+
+Automatic per-app retirement and environment cleanup are still unfinished; this
+checkpoint provides tracking, controls and the dependency-aware eligibility plan.
+It does not claim to have enabled the automatic lifecycle worker.
+
+
+Validation: all workspace Rust tests (34 backend API cases), strict Clippy, the real
+CLI HTTP journey with retention/activity commands and the production web build pass.
+The browser suite passed 27 of 28 cases; the new retention test was checking mobile
+navigation before authenticated rendering. After waiting for the dashboard, both
+its desktop and mobile variants passed. The retention screen was visually inspected.

@@ -63,6 +63,12 @@ def main():
             rotated_webhook = run('apps', 'webhook', 'rotate-secret', 'tos>briefcase', '--revision', '1', '--secret-file', str(secret_file), '--step-up-file', str(proof))
             assert rotated_webhook['state'] == 'accepted'
             assert 'replacement-fixture-webhook' not in json.dumps(rotated_webhook)
+            retention_id = 'fixture-retention-desktop'
+            assert run('environments', 'retention', retention_id)['idle_days'] == 30
+            assert run('environments', 'set-retention', retention_id, '--days', '60', '--revision', '1')['revision'] == 2
+            activity = run('environments', 'activity', retention_id, 'tos>briefcase', '--generation', '1', '--key-version', '1')
+            assert activity['replayed'] is False
+            assert run('environments', 'retention', retention_id)['idle_days'] == 60
             app_id = 'tos>cli-e2e'
             app = {'org_id': 'tos', 'local_app_id': 'cli-e2e', 'name': 'CLI integration',
                    'description': 'This application exercises the complete local Honeycomb release installation workflow. ' * 7,
@@ -141,7 +147,7 @@ def main():
             assert report['saved'] and report['notification'] == 'pending'
             run('logout', role='member')
             assert run('login', 'status', role='member') == {'authenticated': False}
-            print('PASS: CLI IAM discovery/login, webhook approval/step-up retry/signing rotation, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
+            print('PASS: CLI IAM discovery/login, webhook approval/step-up retry/signing rotation, retention/activity, role gates, idempotency, private visibility, six-target validation/pack, immutable uploads, install/execute/update/aliases, metrics/review/star, publication review/activation/anonymous install, dependency import progress, reports, uninstall/logout')
         finally:
             fixture.terminate()
             fixture.wait(timeout=10)

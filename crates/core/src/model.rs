@@ -42,6 +42,8 @@ pub struct AppInput {
     pub local_app_id: String,
     pub name: String,
     pub description: String,
+    #[serde(default = "default_idle_days")]
+    pub testing_idle_days: u32,
     #[serde(default)]
     pub logo_url: Option<String>,
     #[serde(default)]
@@ -63,12 +65,18 @@ pub struct AppInput {
     #[serde(default)]
     pub obo_review_message: Option<String>,
 }
+fn default_idle_days() -> u32 {
+    30
+}
 impl AppInput {
     pub fn app_id(&self) -> String {
         format!("{}>{}", self.org_id, self.local_app_id)
     }
     pub fn validate(&self) -> Vec<String> {
         let mut errors = vec![];
+        if !(1..=36500).contains(&self.testing_idle_days) {
+            errors.push("testing_idle_days: must be between 1 and 36500".into());
+        }
         for (field, value) in [
             ("org_id", &self.org_id),
             ("local_app_id", &self.local_app_id),

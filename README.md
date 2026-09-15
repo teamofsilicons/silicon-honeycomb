@@ -202,3 +202,32 @@ backend operations as the CLI and console. IAM 1.10's management routes currentl
 support production applications; isolated test-app administration remains a contract
 gap. IAM's accepted record omits the active destination URL, so the console labels
 its URL as requested and never presents it as verified active state.
+
+## Track test activity and retention
+
+```sh
+honeycomb environments retention ENVIRONMENT_ID
+honeycomb environments set-retention ENVIRONMENT_ID --days 60 --revision 1
+honeycomb environments activity ENVIRONMENT_ID 'tos>example' --generation 1 --key-version 1
+```
+
+Application integrations can report with the current environment root key through
+`Client::with_environment`, or the CLI's existing `--test` environment context.
+A current environment manager can also report with their authenticated session.
+Report actual use, not a periodic idle heartbeat. Reports use server time and must
+include the current generation and key version. Reuse the mutation's idempotency key
+for a retry: replay returns the original timestamp without extending inactivity.
+A report cannot create an application link or reach a different environment.
+
+Set `testing_idle_days` in application configuration (default 30, range 1–36500).
+The console exposes this beside the other application settings. Imported apps use
+their production organization's accepted retention policy. The environment's own
+idle period is configurable in **Testing environments → Manage → Activity & retention**.
+Changes require the current environment revision and no pending lifecycle operation.
+
+The retention view includes per-app activity, deadlines and transitive dependency
+protection, including dependency cycles. An idle provider remains protected while
+an active app requires it; longer app retention extends the shared environment's
+deadline. These calculations and controls are implemented. Automatic retirement,
+soft deletion and expiry-driven purge are still pending scheduler integration;
+the existing explicit lifecycle commands remain available.

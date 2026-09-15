@@ -311,6 +311,27 @@ enum Operations {
 }
 #[derive(Subcommand)]
 enum Environments {
+    /// Inspect activity and retention deadlines without extending the idle timer.
+    Retention {
+        id: String,
+    },
+    /// Set the shared environment idle period. App-specific longer retention still applies.
+    SetRetention {
+        id: String,
+        #[arg(long)]
+        days: i64,
+        #[arg(long)]
+        revision: i64,
+    },
+    /// Report actual use of an application in a ready environment; supports --test root authority.
+    Activity {
+        id: String,
+        app_id: String,
+        #[arg(long)]
+        generation: i64,
+        #[arg(long)]
+        key_version: i64,
+    },
     List,
     Get {
         id: String,
@@ -856,6 +877,22 @@ async fn run() -> Result<()> {
             Operations::Retry { id } => show(&client.retry_operation(id, &operation).await?)?,
         },
         Command::Environments { command } => match command {
+            Environments::Retention { id } => show(&client.environment_retention(id).await?)?,
+            Environments::SetRetention { id, days, revision } => show(
+                &client
+                    .set_environment_retention(id, *days, &mutation(&cli, Some(*revision))?)
+                    .await?,
+            )?,
+            Environments::Activity {
+                id,
+                app_id,
+                generation,
+                key_version,
+            } => show(
+                &client
+                    .report_environment_activity(id, app_id, *generation, *key_version, &operation)
+                    .await?,
+            )?,
             Environments::List => show(&client.environments().await?)?,
             Environments::Get { id } => show(&client.environment(id).await?)?,
             Environments::Create {

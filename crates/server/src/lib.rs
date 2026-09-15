@@ -11,6 +11,7 @@ pub mod integration;
 pub mod lifecycle;
 pub mod notifications;
 pub mod reconciliation;
+pub mod retention;
 pub mod reviews;
 pub mod secrets;
 pub mod storage;

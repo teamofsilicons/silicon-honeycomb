@@ -177,6 +177,7 @@ async fn coordinate_inner(
                     "Test application changed while import was coordinating; reconcile before refreshing",
                 ));
             }
+            sqlx::query("INSERT INTO environment_app_activity(environment_id,app_id,last_activity) VALUES(?,?,?) ON CONFLICT(environment_id,app_id) DO UPDATE SET last_activity=excluded.last_activity").bind(id).bind(app).bind(now()).execute(&mut *tx).await?;
             sqlx::query("INSERT INTO environment_imports(environment_id,app_id,source_revision,snapshot,last_activity) VALUES(?,?,?,?,?) ON CONFLICT(environment_id,app_id) DO UPDATE SET source_revision=excluded.source_revision,snapshot=excluded.snapshot,last_activity=excluded.last_activity")
                 .bind(id).bind(app).bind(source["source_revision"].as_i64().unwrap()).bind(source.to_string()).bind(now()).execute(&mut *tx).await?;
         }
@@ -221,6 +222,14 @@ async fn apply_local(
         return Err(Error::conflict("Lifecycle coordinator lease changed"));
     }
 
+    sqlx::query("DELETE FROM environment_app_activity WHERE environment_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM environment_activity_events WHERE environment_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM environment_imports WHERE environment_id=?")
         .bind(id)
         .execute(&mut *tx)

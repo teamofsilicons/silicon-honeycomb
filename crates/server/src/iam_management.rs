@@ -257,7 +257,7 @@ impl Management for IamManagement {
             .as_str()
             .ok_or_else(|| Error::bad("Missing app ID"))?;
         let c = &o["configuration"];
-        let body = json!({"operation_id":id,"configuration_revision":o["configuration_revision"],"expected_iam_revision":o["expected_iam_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":o["visibility"],"availability":"active","publication_approved":false,"webhook":{"url":c["webhook_url"],"secret":o["webhook_secret"],"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"]});
+        let body = json!({"operation_id":id,"configuration_revision":o["configuration_revision"],"expected_iam_revision":o["expected_iam_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":o["visibility"],"availability":"active","publication_approved":false,"webhook":{"url":c["webhook_url"],"secret":o["webhook_secret"],"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_u64().unwrap_or(30)});
         let body = self.saved(id, "configure", app, body).await?;
         self.execute(id, "configure", app, body, actor, None).await
     }
