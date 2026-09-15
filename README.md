@@ -71,6 +71,11 @@ a Rust toolchain. `honeycomb daemon --once` runs one scheduled check. The statel
 client exposes update functions; a library cannot replace a running application's
 compiled dependency, so dependency version changes remain a host build decision.
 
+Diagnostics are enabled by default when the backend's Space Station key is
+configured. Use `honeycomb config set telemetry false` to opt out, or turn off
+**Share usage and diagnostics** in either website's **Telemetry settings**.
+See [telemetry setup and event details](docs/TELEMETRY.md).
+
 ## A typical application workflow
 
 The console accepts either a logo URL or a PNG, JPEG or WebP file. Files may be up

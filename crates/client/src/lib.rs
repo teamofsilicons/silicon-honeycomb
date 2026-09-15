@@ -33,6 +33,7 @@ pub struct Client {
     base: Url,
     token: Option<String>,
     environment: Option<String>,
+    telemetry: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Mutation {
@@ -86,7 +87,35 @@ impl Client {
             base,
             token: None,
             environment: None,
+            telemetry: true,
         })
+    }
+    /// Disable server diagnostics for this client, including anonymous requests.
+    pub fn with_telemetry(&self, enabled: bool) -> Self {
+        Self {
+            telemetry: enabled,
+            ..self.clone()
+        }
+    }
+    /// Best-effort diagnostics use the authenticated backend; no ingest key is held here.
+    pub async fn diagnostic(
+        &self,
+        source: &str,
+        event: &str,
+        action: &str,
+        duration_ms: u64,
+        success: bool,
+    ) {
+        if !self.telemetry || self.token.is_none() {
+            return;
+        }
+        let Ok(url) = self.url(&["telemetry"]) else {
+            return;
+        };
+        let _=self.request(Method::POST,url,None)
+            .timeout(Duration::from_millis(300))
+            .json(&json!({"source":source,"event":event,"action":action,"duration_ms":duration_ms.min(86_400_000),"success":success}))
+            .send().await;
     }
     pub fn with_token(&self, token: impl Into<String>) -> Self {
         Self {
@@ -122,7 +151,10 @@ impl Client {
         url: Url,
         mutation: Option<&Mutation>,
     ) -> reqwest::RequestBuilder {
-        let mut request = self.http.request(method, url);
+        let mut request = self.http.request(method, url).header(
+            "x-honeycomb-telemetry",
+            if self.telemetry { "true" } else { "false" },
+        );
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
         }

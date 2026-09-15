@@ -36,3 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 wiremock = "0.6"
+
+[target.'cfg(unix)'.dependencies]
+space-station = "=0.1.1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

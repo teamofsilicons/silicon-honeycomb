@@ -301,6 +301,7 @@ async fn apply_local(
         "DELETE FROM reports WHERE plane=?",
         "DELETE FROM outbox WHERE plane=?",
         "DELETE FROM audit WHERE plane=?",
+        "DELETE FROM telemetry_events WHERE plane=?",
     ] {
         sqlx::query(query).bind(id).execute(&mut *tx).await?;
     }

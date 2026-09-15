@@ -103,6 +103,7 @@ impl ArchiveStorage for Store {
 async fn setup(accept: bool) -> (State, Arc<AtomicBool>) {
     let revoked = Arc::new(AtomicBool::new(false));
     let s = State {
+        telemetry: Default::default(),
         db: silicon_honeycomb_server::database("sqlite::memory:")
             .await
             .unwrap(),
@@ -979,6 +980,13 @@ async fn lifecycle_clean_rotation_restore_and_retention_purge_are_isolated() {
     )
     .await;
     let original = key["testing_key"].as_str().unwrap();
+    sqlx::query(
+        "INSERT INTO telemetry_events(plane,generation,event,created_at) VALUES(?,1,'{}',1)",
+    )
+    .bind(id)
+    .execute(&s.db)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,state,iam_revision,created_at,updated_at) SELECT ?,app_id,org_id,name,description,config,effective_config,webhook_secret,state,iam_revision,created_at,updated_at FROM applications WHERE plane='production'").bind(id).execute(&s.db).await.unwrap();
     for (action, revision, expected_state) in [
         ("clean", 1, "ready"),
@@ -1000,6 +1008,14 @@ async fn lifecycle_clean_rotation_restore_and_retention_purge_are_isolated() {
         assert_eq!(status, 202, "{result}");
         assert_eq!(result["state"], expected_state);
         if action == "clean" {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telemetry_events WHERE plane=?")
+                    .bind(id)
+                    .fetch_one(&s.db)
+                    .await
+                    .unwrap(),
+                0
+            );
             assert_eq!(result["generation"], 2);
             let test_count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM applications WHERE plane=?")
@@ -3808,4 +3824,171 @@ async fn logo_retry_preserves_storage_operation_after_failure() {
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].0, calls[1].0);
     assert_eq!(result["id"], calls[0].0);
+}
+
+#[derive(Default)]
+struct Diagnostics(std::sync::Mutex<Vec<Value>>);
+impl silicon_honeycomb_server::telemetry::EventSink for Diagnostics {
+    fn record(&self, value: Value) {
+        self.0.lock().unwrap().push(value);
+    }
+}
+#[tokio::test]
+async fn telemetry_opt_out_and_schema_prevent_exporting_user_content() {
+    let (mut s, _) = setup(true).await;
+    let sink = Arc::new(Diagnostics::default());
+    s.telemetry = silicon_honeycomb_server::telemetry::Recorder::with_sink(sink.clone());
+    let (_, _) = call(
+        &s,
+        "GET",
+        "/api/v1/apps?q=secret-search-text",
+        Some("admin"),
+        Value::Null,
+        "telemetry-search-0001",
+        None,
+    )
+    .await;
+    let events = sink.0.lock().unwrap().clone();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["context"]["route"], "/api/v1/apps");
+    assert!(!events[0].to_string().contains("secret-search-text"));
+    sink.0.lock().unwrap().clear();
+    let body = json!({"source":"cli","event":"command_completed","action":"apps","duration_ms":12,"success":false});
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/telemetry",
+        Some("admin"),
+        body.clone(),
+        "telemetry-command-001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    let mut untrusted = body.clone();
+    untrusted["token"] = json!("do-not-export-this-token");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/telemetry",
+            Some("admin"),
+            untrusted,
+            "telemetry-unknown-001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut untrusted = body.clone();
+    untrusted["action"] = json!("secret-app-name");
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/telemetry",
+            Some("admin"),
+            untrusted,
+            "telemetry-action-001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            "/api/v1/telemetry",
+            None,
+            body.clone(),
+            "telemetry-anonymous-01",
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for (path, method, payload) in [
+        ("/api/v1/apps", "GET", String::new()),
+        ("/api/v1/telemetry", "POST", body.to_string()),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("x-honeycomb-telemetry", "false")
+            .body(Body::from(payload))
+            .unwrap();
+        let response = silicon_honeycomb_server::api::router(s.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    assert!(!sink.0.lock().unwrap()[0].to_string().contains("token"));
+}
+#[tokio::test]
+async fn telemetry_test_events_are_local_bounded_and_generation_fenced() {
+    let (mut s, _) = setup(true).await;
+    let sink = Arc::new(Diagnostics::default());
+    s.telemetry = silicon_honeycomb_server::telemetry::Recorder::with_sink(sink.clone());
+    sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES('telemetry-env','tos','admin','Test','','unused','unused','ready',1,1)").execute(&s.db).await.unwrap();
+    let record = |generation| {
+        silicon_honeycomb_server::telemetry::record(
+            &s,
+            "telemetry-env",
+            Some(generation),
+            "cli",
+            "command_completed",
+            json!({"action":"apps"}),
+        )
+    };
+    record(1).await;
+    assert!(sink.0.lock().unwrap().is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telemetry_events")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        1
+    );
+    sqlx::query("UPDATE environments SET generation=2 WHERE id='telemetry-env'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    record(1).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telemetry_events")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        1
+    );
+    // Fill without exercising the external SDK; the next event enforces the per-plane cap.
+    sqlx::query("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1002) INSERT INTO telemetry_events(plane,generation,event,created_at) SELECT 'telemetry-env',2,'{}',1 FROM n").execute(&s.db).await.unwrap();
+    record(2).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telemetry_events")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        1000
+    );
+    sqlx::query("UPDATE environments SET state='cleaning' WHERE id='telemetry-env'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    record(2).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telemetry_events")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        1000
+    );
 }

@@ -28,6 +28,10 @@ pub fn router(state: State) -> Router {
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/status", get(status))
         .route("/api/v1/reports", post(super::notifications::report))
+        .route(
+            "/api/v1/telemetry",
+            post(super::telemetry::ingest).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/api/v1/review-requests", get(super::reviews::inbox))
         .route(
             "/api/v1/review-requests/{id}/activate",
@@ -137,6 +141,10 @@ pub fn router(state: State) -> Router {
         .route("/webhook/", post(super::control::webhook))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(axum::middleware::from_fn(response_headers))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::telemetry::http,
+        ))
         .with_state(state)
 }
 async fn health() -> Json<Value> {
@@ -201,6 +209,7 @@ pub(crate) fn revision(headers: &HeaderMap) -> Result<i64> {
 }
 pub(crate) struct Context {
     pub(crate) plane: String,
+    pub(crate) generation: Option<i64>,
     pub(crate) environment: Option<String>,
     pub(crate) identity: Option<Identity>,
     pub(crate) token: Option<String>,
@@ -222,9 +231,9 @@ impl Context {
 }
 pub(crate) async fn context(s: &State, h: &HeaderMap) -> Result<Context> {
     let environment = header_value(h, "x-testing-environment-key")?.map(str::to_owned);
-    let plane = if let Some(env) = &environment {
+    let (plane, generation) = if let Some(env) = &environment {
         let hash = hex::encode(Sha256::digest(env));
-        let row = sqlx::query("SELECT id,state FROM environments WHERE key_hash=?")
+        let row = sqlx::query("SELECT id,state,generation FROM environments WHERE key_hash=?")
             .bind(hash)
             .fetch_optional(&s.db)
             .await?
@@ -234,9 +243,9 @@ pub(crate) async fn context(s: &State, h: &HeaderMap) -> Result<Context> {
         if row.get::<String, _>("state") != "ready" {
             return Err(Error::conflict("Testing environment is not ready"));
         }
-        row.get("id")
+        (row.get("id"), Some(row.get("generation")))
     } else {
-        "production".to_owned()
+        ("production".to_owned(), None)
     };
     let token = bearer(h)?.map(str::to_owned);
     let identity = match &token {
@@ -252,6 +261,7 @@ pub(crate) async fn context(s: &State, h: &HeaderMap) -> Result<Context> {
     }
     Ok(Context {
         plane,
+        generation,
         environment,
         identity,
         token,

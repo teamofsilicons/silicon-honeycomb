@@ -10,6 +10,6 @@ WORKDIR /app
 COPY --from=build /build/target/release/silicon-honeycomb-server /usr/local/bin/
 RUN mkdir /data && chown honeycomb:honeycomb /data
 USER honeycomb
-ENV HONEYCOMB_BIND=0.0.0.0:8080 HONEYCOMB_DATABASE=/data/honeycomb.db
+ENV HONEYCOMB_BIND=0.0.0.0:8080 HONEYCOMB_DATABASE=/data/honeycomb.db HONEYCOMB_TELEMETRY_HOME=/data/telemetry
 EXPOSE 8080
 ENTRYPOINT ["silicon-honeycomb-server"]

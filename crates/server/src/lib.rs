@@ -17,6 +17,7 @@ pub mod retention_worker;
 pub mod reviews;
 pub mod secrets;
 pub mod storage;
+pub mod telemetry;
 pub mod webhook_management;
 
 use aes_gcm::{
@@ -31,6 +32,7 @@ use std::{path::Path, str::FromStr, sync::Arc};
 
 #[derive(Clone)]
 pub struct State {
+    pub telemetry: telemetry::Recorder,
     pub db: SqlitePool,
     pub identity: Arc<dyn IdentityProvider>,
     pub management: Arc<dyn Management>,

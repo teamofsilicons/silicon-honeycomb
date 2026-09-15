@@ -32,6 +32,15 @@ production has no fabricated-login or automatic-approval switch.
 
 ## Checkpoint: 2026-09-16
 
+Latest telemetry checkpoint: official Space Station SDK export on the backend,
+authenticated CLI/daemon/web diagnostics, persisted opt-out propagated through API
+and IAM session requests, and generation-fenced local testing records. The dedicated
+`tos/siliconhoneycomb` table is created and a synthetic record was acknowledged and
+verified in its browser UI. No key is committed or shipped to clients. Full Rust
+tests, strict Clippy, CLI HTTP journey, production web build and all 36 desktop/mobile
+browser cases pass. See [TELEMETRY.md](TELEMETRY.md). Deployment secrets still need
+provisioning; the live synthetic check does not imply the product is deployed.
+
 Implemented locally: core six-target package validation and safe extraction;
 SQLite backend with official IAM runtime SDK authentication and current roles;
 durable desired/accepted configuration; immutable Briefcase archive upload adapter;

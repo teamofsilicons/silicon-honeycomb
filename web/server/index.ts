@@ -1,4 +1,5 @@
 import express from "express";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
@@ -45,6 +46,8 @@ db.exec(
   "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, tokens TEXT NOT NULL, expires INTEGER NOT NULL)",
 );
 const app = express();
+const telemetryContext = new AsyncLocalStorage<boolean>();
+app.use((req, _res, next) => telemetryContext.run(req.get("x-honeycomb-telemetry") !== "false" && cookie(req, "honeycomb_telemetry") !== "false", next));
 app.disable("x-powered-by");
 app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
@@ -116,8 +119,11 @@ function session(
   }
 }
 async function api(path: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers);
+  if (telemetryContext.getStore() === false) headers.set("x-honeycomb-telemetry", "false");
   return fetch(`${backend}/api/v1/${path}`, {
     ...options,
+    headers,
     redirect: "error",
     signal: AbortSignal.timeout(300000),
   });

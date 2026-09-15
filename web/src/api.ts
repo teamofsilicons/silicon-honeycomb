@@ -1,3 +1,4 @@
+import { diagnostic, requestAction, telemetryEnabled } from "./telemetry";
 export type AppRecord = {
   app_id: string;
   org_id: string;
@@ -34,15 +35,18 @@ export async function request<T = any>(
   options: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(options.headers);
+  headers.set("X-Honeycomb-Telemetry", String(telemetryEnabled()));
   if (options.body && !(options.body instanceof File))
     headers.set("Content-Type", "application/json");
   if (options.method && !["GET", "HEAD"].includes(options.method) && !headers.has("Idempotency-Key"))
     headers.set("Idempotency-Key", crypto.randomUUID());
+  const started = performance.now();
   const response = await fetch(path, {
     ...options,
     headers,
     credentials: "same-origin",
-  });
+  }).catch(error => { diagnostic("http_completed", requestAction(path), performance.now()-started, false); throw error; });
+  diagnostic("http_completed", requestAction(path), performance.now()-started, response.ok);
   const text = await response.text();
   let value: any;
   try {

@@ -38,7 +38,10 @@ pub struct Iam {
 impl Iam {
     pub fn new(base: &str, app_id: &str, secret: &str) -> anyhow::Result<Self> {
         Ok(Self {
-            client: Client::new(base)?.with_credential(Credential::application(app_id, secret)),
+            client: Client::builder(base)?
+                .credential(Credential::application(app_id, secret))
+                .telemetry(false)
+                .build()?,
             app_id: app_id.into(),
         })
     }

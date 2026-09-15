@@ -514,6 +514,19 @@ async fn main() {
 }
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    let started = std::time::Instant::now();
+    let result = execute(&cli).await;
+    record_command(
+        &cli,
+        "cli",
+        "command_completed",
+        started.elapsed().as_millis() as u64,
+        result.is_ok(),
+    )
+    .await;
+    result
+}
+async fn execute(cli: &Cli) -> Result<()> {
     let root = root()?;
     fs::create_dir_all(&root)?;
     let mut settings: Settings = read(&root.join("config.json"))?;
@@ -576,10 +589,20 @@ async fn run() -> Result<()> {
     if let Command::Daemon { once } = cli.command {
         loop {
             let config: Settings = read(&root.join("config.json"))?;
-            if config.auto_update
-                && let Err(e) = self_update(&root, false).await
-            {
-                eprintln!("Honeycomb update check: {e}");
+            if config.auto_update {
+                let started = std::time::Instant::now();
+                let result = self_update(&root, false).await;
+                record_command(
+                    cli,
+                    "daemon",
+                    "update_completed",
+                    started.elapsed().as_millis() as u64,
+                    result.is_ok(),
+                )
+                .await;
+                if let Err(e) = result {
+                    eprintln!("Honeycomb update check: {e}");
+                }
             }
             if once {
                 return Ok(());
@@ -587,7 +610,8 @@ async fn run() -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     }
-    let mut client = Client::new(cli.api.as_deref().unwrap_or(&settings.api))?;
+    let mut client = Client::new(cli.api.as_deref().unwrap_or(&settings.api))?
+        .with_telemetry(telemetry_enabled(settings.telemetry));
     let origin = cli.api.as_deref().unwrap_or(&settings.api);
     let selected_key = if let Some(test) = &cli.test {
         let keys: BTreeMap<String, String> = read(&root.join("environments.json"))?;
@@ -615,7 +639,7 @@ async fn run() -> Result<()> {
         && session.expires_at <= now() + 30
         && let Some(refresh) = &session.refresh_token
     {
-        let tokens = client.refresh(refresh, &mutation(&cli, None)?).await?;
+        let tokens = client.refresh(refresh, &mutation(cli, None)?).await?;
         session = Session {
             access_token: tokens["access_token"].as_str().map(str::to_owned),
             refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
@@ -626,7 +650,7 @@ async fn run() -> Result<()> {
     if let Some(token) = &session.access_token {
         client = client.with_token(token);
     }
-    let operation = mutation(&cli, None)?;
+    let operation = mutation(cli, None)?;
     match &cli.command {
         Command::Iam => show(&client.iam().await?)?,
         Command::Login { slt_or_status } if slt_or_status == "status" => {
@@ -696,7 +720,7 @@ async fn run() -> Result<()> {
                                 app_id,
                                 endpoint,
                                 proof.as_deref().map(str::trim),
-                                &mutation(&cli, Some(*revision))?,
+                                &mutation(cli, Some(*revision))?,
                             )
                             .await?,
                     )?;
@@ -715,7 +739,7 @@ async fn run() -> Result<()> {
                                 app_id,
                                 secret.trim(),
                                 proof.as_deref().map(str::trim),
-                                &mutation(&cli, Some(*revision))?,
+                                &mutation(cli, Some(*revision))?,
                             )
                             .await?,
                     )?;
@@ -730,7 +754,7 @@ async fn run() -> Result<()> {
                             .retry_webhook_operation(
                                 operation_id,
                                 proof.as_deref().map(str::trim),
-                                &mutation(&cli, None)?,
+                                &mutation(cli, None)?,
                             )
                             .await?,
                     )?;
@@ -747,17 +771,17 @@ async fn run() -> Result<()> {
                         .rotate_app_secret(
                             app_id,
                             step_up.as_deref().map(str::trim),
-                            &mutation(&cli, Some(*revision))?,
+                            &mutation(cli, Some(*revision))?,
                         )
                         .await?,
                 )?;
             }
             Apps::Reconcile { app_id } => {
-                show(&client.reconcile_app(app_id, &mutation(&cli, None)?).await?)?
+                show(&client.reconcile_app(app_id, &mutation(cli, None)?).await?)?
             }
             Apps::UploadLogo { org_id, file } => show(
                 &client
-                    .upload_logo(org_id, file, &mutation(&cli, None)?)
+                    .upload_logo(org_id, file, &mutation(cli, None)?)
                     .await?,
             )?,
             Apps::List { page } => show(&client.search("", *page, true).await?)?,
@@ -776,7 +800,7 @@ async fn run() -> Result<()> {
                     .update_app(
                         app_id,
                         &input::<AppInput>(file)?,
-                        &mutation(&cli, Some(*revision))?,
+                        &mutation(cli, Some(*revision))?,
                     )
                     .await?,
             )?,
@@ -789,7 +813,7 @@ async fn run() -> Result<()> {
                 revision,
             } => show(
                 &client
-                    .upload_release(app_id, archive, &mutation(&cli, Some(*revision))?)
+                    .upload_release(app_id, archive, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
         },
@@ -799,7 +823,7 @@ async fn run() -> Result<()> {
                 revision,
             } => show(
                 &client
-                    .activate_publication(request_id, &mutation(&cli, Some(*revision))?)
+                    .activate_publication(request_id, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
             Publication::Inbox => show(&client.review_inbox().await?)?,
@@ -812,7 +836,7 @@ async fn run() -> Result<()> {
                 revision,
             } => show(
                 &client
-                    .retry_review_plan(request_id, &mutation(&cli, Some(*revision))?)
+                    .retry_review_plan(request_id, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
             Publication::Decide {
@@ -828,7 +852,7 @@ async fn run() -> Result<()> {
                         provider,
                         decision,
                         reason,
-                        &mutation(&cli, Some(*revision))?,
+                        &mutation(cli, Some(*revision))?,
                     )
                     .await?,
             )?,
@@ -848,7 +872,7 @@ async fn run() -> Result<()> {
                 revision,
             } => show(
                 &client
-                    .request_publication(app_id, message, &mutation(&cli, Some(*revision))?)
+                    .request_publication(app_id, message, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
             Publication::Reply {
@@ -874,7 +898,7 @@ async fn run() -> Result<()> {
                         org_id,
                         id,
                         &input::<Value>(file)?,
-                        &mutation(&cli, Some(*revision))?,
+                        &mutation(cli, Some(*revision))?,
                     )
                     .await?,
             )?,
@@ -890,7 +914,7 @@ async fn run() -> Result<()> {
             Environments::Retention { id } => show(&client.environment_retention(id).await?)?,
             Environments::SetRetention { id, days, revision } => show(
                 &client
-                    .set_environment_retention(id, *days, &mutation(&cli, Some(*revision))?)
+                    .set_environment_retention(id, *days, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
             Environments::Activity {
@@ -927,7 +951,7 @@ async fn run() -> Result<()> {
                         app_id,
                         release.as_deref(),
                         *refresh,
-                        &mutation(&cli, Some(*revision))?,
+                        &mutation(cli, Some(*revision))?,
                     )
                     .await?,
             )?,
@@ -950,7 +974,7 @@ async fn run() -> Result<()> {
                 revision,
             } => {
                 let result = client
-                    .environment_action(id, action, &mutation(&cli, Some(*revision))?)
+                    .environment_action(id, action, &mutation(cli, Some(*revision))?)
                     .await?;
                 if let Some(key) = result["testing_key"].as_str() {
                     let mut keys: BTreeMap<String, String> = read(&root.join("environments.json"))?;
@@ -1097,4 +1121,70 @@ async fn self_update(root: &Path, force: bool) -> Result<()> {
         show(&json!({"updated":updated,"executable":executable}))?;
     }
     Ok(())
+}
+
+fn telemetry_enabled(preference: bool) -> bool {
+    preference
+        && !std::env::var("HONEYCOMB_TELEMETRY").is_ok_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
+}
+async fn record_command(cli: &Cli, source: &str, event: &str, duration: u64, success: bool) {
+    let _ = async {
+        let root = root()?;
+        let settings: Settings = read(&root.join("config.json"))?;
+        if !telemetry_enabled(settings.telemetry) {
+            return Ok::<(), anyhow::Error>(());
+        }
+        let origin = cli.api.as_deref().unwrap_or(&settings.api);
+        let mut client = Client::new(origin)?;
+        let selected = if let Some(test) = &cli.test {
+            let keys: BTreeMap<String, String> = read(&root.join("environments.json"))?;
+            Some(keys.get(test).cloned().unwrap_or_else(|| test.clone()))
+        } else {
+            None
+        };
+        if let Some(key) = &selected {
+            client = client.with_environment(key)?;
+        }
+        let context = honeycomb_client::context_fingerprint(origin, selected.as_deref());
+        let session: Session = read(&root.join("contexts").join(context).join("session.json"))?;
+        let Some(token) = session.access_token else {
+            return Ok(());
+        };
+        let action = match &cli.command {
+            Command::Iam => "iam",
+            Command::Search { .. } => "search",
+            Command::Login { .. } => "login",
+            Command::Logout => "logout",
+            Command::Apps { .. } => "apps",
+            Command::Releases { .. } => "releases",
+            Command::Publication { .. } => "publication",
+            Command::Drafts { .. } => "drafts",
+            Command::Environments { .. } => "environments",
+            Command::Operations { .. } => "operations",
+            Command::Validate { .. } => "validate",
+            Command::Pack { .. } => "pack",
+            Command::Install { .. } => "install",
+            Command::Update { .. } => "update",
+            Command::Uninstall { .. } => "uninstall",
+            Command::Installed => "installed",
+            Command::Review { .. } => "review",
+            Command::Report { .. } => "report",
+            Command::Star { .. } => "star",
+            Command::Config { .. } => "config",
+            Command::SelfUpdate => "self_update",
+            Command::Daemon { .. } => "daemon",
+            Command::Service { .. } => "service",
+        };
+        client
+            .with_token(token)
+            .diagnostic(source, event, action, duration, success)
+            .await;
+        Ok(())
+    }
+    .await;
 }

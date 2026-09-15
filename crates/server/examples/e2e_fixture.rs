@@ -274,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
         sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production',?,'tos',?,?,?,'active',1,1,?,?,?,1,1)").bind(app_id).bind(name).bind(description).bind(visibility).bind(config.to_string()).bind(config.to_string()).bind("fixture-no-secret").execute(&db).await?;
     }
     let state = State {
+        telemetry: Default::default(),
         db,
         identity: Arc::new(FixtureIam::default()),
         management: Arc::new(FixtureManagement::default()),

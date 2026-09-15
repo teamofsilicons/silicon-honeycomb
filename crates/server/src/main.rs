@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
         audience: "tos>briefcase".into(),
     };
     let mut state = State {
+        telemetry: silicon_honeycomb_server::telemetry::Recorder::from_env(),
         db: silicon_honeycomb_server::database(
             &std::env::var("HONEYCOMB_DATABASE").unwrap_or_else(|_| "data/honeycomb.db".into()),
         )
@@ -93,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 "if-match",
                 "x-testing-environment-key",
                 "x-download-receipt",
+                "x-honeycomb-telemetry",
             ]
             .map(axum::http::HeaderName::from_static),
         );

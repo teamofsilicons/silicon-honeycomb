@@ -1,4 +1,5 @@
 import { LogoField } from "./LogoField";
+import { telemetryEnabled, setTelemetry, setTelemetrySource, setTelemetryAuthenticated, diagnostic } from "./telemetry";
 import EnvironmentRetention from "./EnvironmentRetention";
 import WebhookSettings from "./WebhookSettings";
 import ScopePicker from "./ScopePicker";
@@ -13,6 +14,7 @@ import {
 } from "solid-js";
 import {
   Search,
+  Settings2,
   ArrowUpRight,
   ArrowRight,
   Plus,
@@ -147,6 +149,8 @@ export default function App() {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [notice, setNotice] = createSignal("");
+  const [showSettings, setShowSettings] = createSignal(false);
+  const [telemetry, setTelemetryPreference] = createSignal(telemetryEnabled());
   const [selected, setSelected] = createSignal<AppRecord>();
   const [detailsTab, setDetailsTab] = createSignal("overview");
   const [reviewInbox, setReviewInbox] = createSignal<any[]>([]);
@@ -191,6 +195,11 @@ export default function App() {
   let saving: Promise<void> = Promise.resolve();
   let fetchRevision = 0;
   const isConsole = () => config().site === "console";
+  createEffect(() => {
+    setTelemetrySource(config().site);
+    setTelemetryAuthenticated(session().authenticated);
+    if (sessionReady()) diagnostic("page_view", selected() ? "application" : isConsole() ? view() : "catalog", 0, true);
+  });
   const memberships = () =>
     Object.entries(session().identity?.organizations || {});
   const admins = () =>
@@ -546,6 +555,7 @@ export default function App() {
             <span>{isConsole() ? "Console" : "Library"}</span>
           </div>
           <div class="topbar-actions">
+            <button class="icon-button" aria-label="Telemetry settings" onClick={() => setShowSettings(true)}><Settings2 size={18} /></button>
             <Show
               when={session().authenticated}
               fallback={
@@ -1641,6 +1651,11 @@ export default function App() {
             </button>
           </div>
         </form>
+      </Dialog>
+      <Dialog open={showSettings()} title="Telemetry settings" close={() => setShowSettings(false)}>
+        <p>Share usage and diagnostics to help improve Honeycomb. This setting applies to this website in this browser.</p>
+        <label class="checkboxes"><input type="checkbox" checked={telemetry()} onChange={e => { const enabled=e.currentTarget.checked; setTelemetryPreference(enabled); setTelemetry(enabled); }} />Share usage and diagnostics</label>
+        <p class="muted">Events include screen names, operation outcomes and timings. Form contents, tokens, secrets and search text are excluded.</p>
       </Dialog>
       <Dialog
         open={!!selectedEnv()}

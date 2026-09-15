@@ -16,6 +16,9 @@ This is a working local checkpoint, not a completed production rollout.
   portions available in local IAM commit `7abd575`.
 - Production container definitions, HTTPS routing for the requested domains,
   CI and six-platform release-candidate workflow.
+- Space Station diagnostics, CLI/web opt-out, and isolated testing telemetry.
+  The dedicated table is created and one synthetic ingestion was verified live;
+  see [TELEMETRY.md](TELEMETRY.md).
 
 Local previews currently run at http://localhost:4173 (library) and
 http://localhost:4174 (console), using an explicit isolated IAM/storage fixture at
@@ -24,9 +27,9 @@ and sample applications; no production credentials or email delivery are involve
 
 ## Verification
 
-- Rust workspace tests and strict Clippy passed. Latest backend coverage: 39 API
+- Rust workspace tests and strict Clippy passed. Latest backend coverage: 41 API
   cases, plus runtime IAM, management SDK and Briefcase logo wire tests.
-- All 32 desktop/mobile browser cases pass, including logo upload/retry, webhook changes, retention
+- All 36 desktop/mobile browser cases pass, including telemetry opt-out, logo upload/retry, webhook changes, retention
   settings and automatic cleanup progress/retry.
 - CLI HTTP journey includes private creation, six-target archive validation,
   releases, install/execute/update/uninstall, review/activation and anonymous install.
@@ -50,7 +53,6 @@ The native six-platform release workflow has not run on remote CI.
    Honeycomb now schedules durable app retirement, environment soft deletion and
    expiry purge; missing protected service acknowledgments keep these jobs pending.
 3. Complete protected notification recipient discovery and live Postmark delivery.
-   Direct Honeycomb telemetry remains unfinished.
 4. Provision IAM/Briefcase permissions, dedicated service and notification keys,
    Postmark and deployment secrets; prepare the actual hosting/DNS and callback URLs.
 5. Publish the repository, CLI binaries and crates, then run live browser/CLI/installer
