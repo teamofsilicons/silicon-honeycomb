@@ -43,7 +43,11 @@ fn install_update_execute_and_uninstall() {
         let result = std::process::Command::new(&installed.commands["honeycomb-test-hello"])
             .output()
             .unwrap();
-        assert!(result.status.success());
+        assert!(
+            result.status.success(),
+            "launcher failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).replace("\r\n", "\n"),
             "hello-1.0.0\n"
@@ -58,7 +62,11 @@ fn install_update_execute_and_uninstall() {
         let result = std::process::Command::new(&updated.commands["honeycomb-test-hello"])
             .output()
             .unwrap();
-        assert!(result.status.success());
+        assert!(
+            result.status.success(),
+            "updated launcher failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).replace("\r\n", "\n"),
             "hello-1.1.0\n"

@@ -118,7 +118,13 @@ pub fn install_archive(
             {
                 use std::io::Write;
                 let mut f = fs::File::create(&temp)?;
-                writeln!(f, "@echo off\r\n\"{}\" %*", source.display())?;
+                // canonicalize() returns verbatim paths on Windows. cmd.exe
+                // cannot launch batch files through the \\?\ namespace.
+                let source = batch_path(&source.to_string_lossy());
+                writeln!(
+                    f,
+                    "@echo off\r\nsetlocal DisableDelayedExpansion\r\n\"{source}\" %*"
+                )?;
             }
             if destination.symlink_metadata().is_ok() {
                 let backup = bin.join(format!(".honeycomb-backup-{}", uuid::Uuid::new_v4()));
@@ -173,9 +179,21 @@ fn owns_command(record: &Installed, path: &Path) -> bool {
     #[cfg(windows)]
     {
         fs::read_to_string(path)
-            .is_ok_and(|s| s.contains(&record.directory.to_string_lossy().to_string()))
+            .is_ok_and(|s| s.contains(&batch_path(&record.directory.to_string_lossy())))
     }
 }
+
+#[cfg(any(windows, test))]
+fn batch_path(path: &str) -> String {
+    let ordinary = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    };
+    // Percent expansion still runs inside double quotes in a batch file.
+    ordinary.replace('%', "%%")
+}
+
 /// Remove only launchers still pointing to this package; preserve commands replaced by the user.
 pub fn uninstall(record: &Installed, state_dir: &Path) -> Result<()> {
     let root = state_dir.canonicalize()?;
@@ -194,4 +212,23 @@ pub fn uninstall(record: &Installed, state_dir: &Path) -> Result<()> {
         fs::remove_dir_all(&record.directory)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn batch_paths_support_canonical_drive_unc_and_literal_percent() {
+        assert_eq!(
+            super::batch_path(r"\\?\C:\my packages\100%\hello.cmd"),
+            r"C:\my packages\100%%\hello.cmd"
+        );
+        assert_eq!(
+            super::batch_path(r"\\?\UNC\server\share\hello.cmd"),
+            r"\\server\share\hello.cmd"
+        );
+        assert_eq!(
+            super::batch_path(r"C:\packages\hello.exe"),
+            r"C:\packages\hello.exe"
+        );
+    }
 }
