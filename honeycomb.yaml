@@ -1,0 +1,38 @@
+# Maps app-wide commands to the six required 64-bit targets in one release .tar.gz.
+# Optional targets: linux-i686, linux-armv7hf, windows-i686; add only with complete payload mappings.
+format_version: 1
+
+app_id: "your-org>your-app"
+
+version: "1.0.0"
+
+bin:
+  your-app: "app"
+  your-app-alias: "app"
+
+targets:
+  linux-x86_64:
+    root: "targets/linux-x86_64"
+    executables: &unix_executables
+      app: "bin/your-app"
+
+  linux-aarch64:
+    root: "targets/linux-aarch64"
+    executables: *unix_executables
+
+  windows-x86_64:
+    root: "targets/windows-x86_64"
+    executables: &windows_executables
+      app: "bin/your-app.exe"
+
+  windows-aarch64:
+    root: "targets/windows-aarch64"
+    executables: *windows_executables
+
+  macos-x86_64:
+    root: "targets/macos-x86_64"
+    executables: *unix_executables
+
+  macos-aarch64:
+    root: "targets/macos-aarch64"
+    executables: *unix_executables

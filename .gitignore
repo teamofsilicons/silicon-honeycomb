@@ -1,0 +1,11 @@
+/target/
+/data/
+.env
+*.db
+*.db-shm
+*.db-wal
+node_modules/
+dist/
+test-results/
+playwright-report/
+.DS_Store
