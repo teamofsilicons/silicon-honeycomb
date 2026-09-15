@@ -113,7 +113,15 @@ async fn rotation_passes_transient_step_up_and_recovers_by_exact_mutation_replay
 #[tokio::test]
 async fn snapshot_reads_effective_scopes_and_maps_iam_availability() {
     let server = MockServer::start().await;
-    let (adapter, _, _, _) = setup(&server).await;
+    let (adapter, db, config, _) = setup(&server).await;
+    let mut desired = config.clone();
+    desired["description"] = json!("Unaccepted new description");
+    sqlx::query("UPDATE applications SET revision=2,config=?,effective_config=?")
+        .bind(desired.to_string())
+        .bind(config.to_string())
+        .execute(&db)
+        .await
+        .unwrap();
     Mock::given(method("GET"))
         .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test"))
         .respond_with(ResponseTemplate::new(200).set_body_json(record()))
@@ -124,6 +132,10 @@ async fn snapshot_reads_effective_scopes_and_maps_iam_availability() {
         .await
         .unwrap();
     assert_eq!(current["availability"], "active");
+    assert_eq!(
+        current["effective_configuration"]["description"],
+        "Catalog-owned description"
+    );
     assert_eq!(
         current["effective_configuration"]["app_scope"]["iam"],
         json!(["self.identity.read"])

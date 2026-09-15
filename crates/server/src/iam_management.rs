@@ -127,12 +127,17 @@ impl IamManagement {
                 "IAM returned another application's record",
             ));
         }
-        let base: String = sqlx::query_scalar(
-            "SELECT config FROM applications WHERE plane='production' AND app_id=?",
-        )
-        .bind(app)
-        .fetch_one(&self.db)
-        .await?;
+        let row = sqlx::query("SELECT revision,config,effective_config FROM applications WHERE plane='production' AND app_id=?")
+            .bind(app).fetch_one(&self.db).await?;
+        let accepted_revision = record["configuration_revision"]
+            .as_i64()
+            .ok_or_else(|| Error::unavailable("IAM omitted its accepted configuration revision"))?;
+        let base: String = if accepted_revision == row.get::<i64, _>("revision") {
+            row.get("config")
+        } else {
+            row.get::<Option<String>, _>("effective_config")
+                .ok_or_else(|| Error::unavailable("No matching accepted catalog metadata exists"))?
+        };
         let mut config: Value = serde_json::from_str(&base).map_err(|e| anyhow::anyhow!(e))?;
         config["org_id"] = json!(org);
         config["local_app_id"] = json!(local);
