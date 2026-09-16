@@ -1,0 +1,29 @@
+{
+  "name": "@teamofsilicons/honeycomb-docs",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && node scripts/build.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 4180",
+    "test": "node scripts/check.mjs && playwright test"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@fontsource/source-serif-4": "5.3.0",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.5.1",
+    "marked": "18.0.13",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vite-plugin-solid": "2.11.14"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

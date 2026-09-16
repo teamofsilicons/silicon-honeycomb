@@ -1,0 +1,158 @@
+[
+  {
+    "slug": "",
+    "title": "A home for your applications.",
+    "group": "Start here",
+    "description": "Package, share, and manage Silicon applications with Honeycomb."
+  },
+  {
+    "slug": "quickstart",
+    "title": "Start with Honeycomb",
+    "group": "Start here",
+    "description": "Install the CLI, authenticate, and discover your first package."
+  },
+  {
+    "slug": "installation",
+    "title": "Install the CLI",
+    "group": "Start here",
+    "description": "Native binaries, Cargo installation, shell setup, and background updates."
+  },
+  {
+    "slug": "authentication",
+    "title": "Authentication & permissions",
+    "group": "Start here",
+    "description": "Connect your IAM identity, share organizations, and understand access."
+  },
+  {
+    "slug": "upload-an-app",
+    "title": "Upload an application",
+    "group": "Publish an app",
+    "description": "From native binaries to a private application and its first release."
+  },
+  {
+    "slug": "package-format",
+    "title": "Package format",
+    "group": "Publish an app",
+    "description": "The honeycomb.yaml schema, target layout, and archive safety rules."
+  },
+  {
+    "slug": "application-config",
+    "title": "Application configuration",
+    "group": "Publish an app",
+    "description": "A field-by-field guide to registration and configuration updates."
+  },
+  {
+    "slug": "releases",
+    "title": "Releases & assets",
+    "group": "Publish an app",
+    "description": "Immutable versions, logo uploads, and reliable retry behavior."
+  },
+  {
+    "slug": "publication",
+    "title": "Publication & reviews",
+    "group": "Publish an app",
+    "description": "Move from a private registration to an approved public application."
+  },
+  {
+    "slug": "scopes-and-obo",
+    "title": "Scopes & delegated access",
+    "group": "Publish an app",
+    "description": "Declare IAM permissions and application-to-application endpoint access."
+  },
+  {
+    "slug": "library",
+    "title": "Use the application library",
+    "group": "Use Honeycomb",
+    "description": "Find public and private apps, inspect releases, and share feedback."
+  },
+  {
+    "slug": "configuration",
+    "title": "Local configuration",
+    "group": "Use Honeycomb",
+    "description": "Control CLI storage, backend selection, updates, and diagnostics."
+  },
+  {
+    "slug": "cli-reference",
+    "title": "CLI command reference",
+    "group": "Use Honeycomb",
+    "description": "Every command, argument, default, and flag from honeycomb --help."
+  },
+  {
+    "slug": "operations",
+    "title": "Operations & reliable retries",
+    "group": "Use Honeycomb",
+    "description": "Understand revisions, pending work, reconciliation, and safe recovery."
+  },
+  {
+    "slug": "webhooks",
+    "title": "Webhooks & application secrets",
+    "group": "Publish an app",
+    "description": "Manage receiver destinations, rotate credentials, and use IAM step-up proofs."
+  },
+  {
+    "slug": "rust-client",
+    "title": "Rust client SDK",
+    "group": "Integrate",
+    "description": "Use the stateless Rust client for catalog, authentication, releases, and administration."
+  },
+  {
+    "slug": "http-api",
+    "title": "HTTP API",
+    "group": "Integrate",
+    "description": "Authentication, mutation headers, request examples, and every registered v1 route."
+  },
+  {
+    "slug": "compatibility",
+    "title": "Versions & compatibility",
+    "group": "Integrate",
+    "description": "Keep API contracts, client versions, and application revisions separate."
+  },
+  {
+    "slug": "testing-environments",
+    "title": "Testing environments",
+    "group": "Integrate",
+    "description": "Shared isolation, pinned imports, lifecycle operations, and service receipts."
+  },
+  {
+    "slug": "retention",
+    "title": "Activity & retention",
+    "group": "Integrate",
+    "description": "Report actual test use and understand dependency-aware idle cleanup."
+  },
+  {
+    "slug": "architecture",
+    "title": "Architecture & ownership",
+    "group": "Operate",
+    "description": "How the CLI, websites, backend, IAM, and Briefcase fit together."
+  },
+  {
+    "slug": "deployment",
+    "title": "Run & deploy Honeycomb",
+    "group": "Operate",
+    "description": "Local development, production configuration, persistent data, and release verification."
+  },
+  {
+    "slug": "privacy",
+    "title": "Privacy & diagnostics",
+    "group": "Operate",
+    "description": "What diagnostics contain and how to disable them."
+  },
+  {
+    "slug": "availability",
+    "title": "Availability & current limits",
+    "group": "Operate",
+    "description": "A clear boundary between shipped interfaces and completed production integration."
+  },
+  {
+    "slug": "troubleshooting",
+    "title": "Troubleshooting",
+    "group": "Start here",
+    "description": "Recover from installation, sign-in, permissions, package, and workflow failures."
+  },
+  {
+    "slug": "glossary",
+    "title": "Glossary",
+    "group": "Start here",
+    "description": "The identifiers and terms used throughout Honeycomb."
+  }
+]

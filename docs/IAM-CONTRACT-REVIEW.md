@@ -11,7 +11,7 @@ has no management API in `IAM-HANDOFF.md`.
 ### Now: authenticated application creation
 
 1. `self.identity.read`, `self.profile.read` and `self.membership.read` are now
-   effective on `tos>honeycomb` (IAM revision 3). Renew user consent when signing
+   effective on `tos>honeycomb`; `self.tags.read` is also effective at IAM revision 4. Renew user consent when signing
    in. Existing sessions must not gain undisclosed authority automatically.
 2. Ensure both organization-scoped and unscoped introspection disclose current
    `owner` / `admin` / `member` roles with that membership grant and consent.
@@ -34,8 +34,8 @@ has no management API in `IAM-HANDOFF.md`.
 
 ### After Briefcase setup
 
-Add `self.tags.read` to Honeycomb's declared/effective IAM scopes and renew user
-consent. Briefcase rejects a delegated authorization snapshot with undisclosed
+`self.tags.read` is now effective (IAM revision 4), and renewed consent plus a
+released CLI production login/status check passed on 2026-09-16. Briefcase rejects a delegated authorization snapshot with undisclosed
 tags, and IAM migration 0093 only discloses tags when the issuer token, issuer
 approval, audience approval, and user consent permit it. The earlier four-scope
 storage checklist omitted this additional disclosure requirement.
@@ -43,7 +43,7 @@ storage checklist omitted this additional disclosure requirement.
 Add external scopes on provider `tos>briefcase`: `briefcase.uploads.reserve`,
 `briefcase.uploads.commit`, `briefcase.files.read`, and
 `briefcase.link_access.update`. Obtain the required provider approval and user
-consent. These support logo/archive storage and public links; they are deferred
+consent. The live management check still reports all four missing. These support logo/archive storage and public links; they are deferred
 and are not the cause of the disabled application-creation button.
 
 ### Remaining IAM contract implementation

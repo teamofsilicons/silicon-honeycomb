@@ -17,6 +17,8 @@ jobs:
       - run: cargo +1.98.0 test --workspace --locked
       - run: cargo +1.98.0 package --workspace --exclude silicon-honeycomb-server --locked
       - run: cargo +1.98.0 build --workspace --examples --bins --locked
+      - run: python3 docs-site/scripts/generate_reference.py --check
+      - run: python3 docs-site/scripts/check_examples.py
       - run: python3 scripts/test_cli.py
       - run: python3 scripts/test_install.py
       - run: python3 scripts/test_cargo_install.py
@@ -46,3 +48,26 @@ jobs:
         with:
           name: browser-failures
           path: web/test-results
+
+  documentation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - run: npm ci
+        working-directory: docs-site
+      - run: npm run build
+        working-directory: docs-site
+      - run: npx playwright install --with-deps chromium
+        working-directory: docs-site
+      - run: npm test
+        working-directory: docs-site
+      - uses: actions/upload-artifact@v7.0.1
+        if: failure()
+        with:
+          name: documentation-browser-failures
+          path: docs-site/test-results

@@ -1,0 +1,30 @@
+format_version: 1
+app_id: my-org>my-app
+version: 1.0.0
+bin:
+  my-app: main
+targets:
+  linux-x86_64:
+    root: targets/linux-x86_64
+    executables:
+      main: my-app
+  linux-aarch64:
+    root: targets/linux-aarch64
+    executables:
+      main: my-app
+  windows-x86_64:
+    root: targets/windows-x86_64
+    executables:
+      main: my-app.exe
+  windows-aarch64:
+    root: targets/windows-aarch64
+    executables:
+      main: my-app.exe
+  macos-x86_64:
+    root: targets/macos-x86_64
+    executables:
+      main: my-app
+  macos-aarch64:
+    root: targets/macos-aarch64
+    executables:
+      main: my-app

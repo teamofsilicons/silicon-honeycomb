@@ -13,7 +13,7 @@ curl -fsS https://backend.honeycomb.teamofsilicons.com/api/v1/iam \
   -H 'Honeycomb-Client-Version: 0.1.0'
 ```
 
-These URLs require production deployment. Use your local backend origin until then.
+These production discovery URLs are deployed. Use your own origin for a local backend.
 The response lists implemented, non-retired `supported_versions`, per-version
 state/minimum-client policy, and the seven-day retirement interval. The Rust client
 and website server declare their API contract and package version automatically.

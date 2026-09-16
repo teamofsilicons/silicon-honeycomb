@@ -16,12 +16,15 @@ identity and authorization authority.
 | Library | `web` (library mode) | Public catalog and authorized private discovery |
 | Console | `web` (console mode) | Authenticated application creation and release management |
 
+Read the [Honeycomb documentation](https://docs.honeycomb.teamofsilicons.com) for installation, app uploads, the CLI, Rust SDK, and operational guides.
+
 The human-owned `UNDERSTANDING.md` is the product specification. Integration
 requirements and unfinished work are tracked in the [local handoff](docs/LOCAL-HANDOFF.md),
 [current IAM contract review](docs/IAM-CONTRACT-REVIEW.md), and
 [implementation history](docs/IMPLEMENTATION.md). This repository is under active
-implementation. Live IAM management and ecosystem lifecycle integration are still
-pending; production operations remain pending until those services accept them.
+implementation. Live IAM authentication and protected management reads are verified. Full Briefcase,
+publication, adoption, and ecosystem lifecycle acceptance remain incomplete; see the
+[current availability guide](docs-site/content/availability.md).
 
 See [API contracts and compatibility](docs/API-CONTRACTS.md) for version selection,
 consumer compatibility, deprecation and the seven-day idle retirement policy.
@@ -50,8 +53,7 @@ IAM and Briefcase; it is excluded from the production image.
 
 ## Install the CLI
 
-The following public commands become available after the first repository release
-and crates publication. No release or crate has been published by this local work.
+CLI 0.1.0 is published as six native release binaries and on crates.io.
 
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
@@ -64,7 +66,7 @@ cargo install silicon-honeycomb-cli --locked
 honeycomb service install
 ```
 
-Install from this checkout today:
+Or install from this checkout:
 
 ```sh
 cargo install --path crates/cli --locked

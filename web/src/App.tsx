@@ -571,6 +571,9 @@ export default function App() {
           </button>
         </nav>
         <div class="sidebar-bottom">
+          <a href="https://docs.honeycomb.teamofsilicons.com">
+            Documentation <ArrowUpRight size={15} />
+          </a>
           <a
             href={isConsole() ? config().libraryOrigin : config().consoleOrigin}
           >
