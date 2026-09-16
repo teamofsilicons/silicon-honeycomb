@@ -1082,7 +1082,7 @@ export default function App() {
                     <p>Use the shell installer on macOS or Linux.</p>
                     <Code
                       text={
-                        '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"'
+                        "printf \"Starting Honeycomb installer…\\n\"; /bin/bash -c \"$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)\""
                       }
                     />
                     <p>Or install with Cargo.</p>

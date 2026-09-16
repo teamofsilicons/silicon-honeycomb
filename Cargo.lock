@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2464,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "anyhow",

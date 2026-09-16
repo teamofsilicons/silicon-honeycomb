@@ -4,7 +4,17 @@ use std::{fs, path::Path, process::Command};
 
 /// Fetch the latest vendor release, verify its checksum, and atomically replace the CLI.
 /// Prebuilt installs need no Rust toolchain for their hourly updates.
-pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<bool> {
+pub async fn update_cli(prefix: &Path, current_executable: &Path) -> Result<bool> {
+    update_cli_with_progress(prefix, current_executable, &|_| {}).await
+}
+/// Update Honeycomb with stage and download notifications.
+pub async fn update_cli_with_progress(
+    _prefix: &Path,
+    current_executable: &Path,
+    progress: &(dyn Fn(crate::progress::ProgressEvent) + Sync),
+) -> Result<bool> {
+    use crate::progress::ProgressEvent::Stage;
+    progress(Stage("Checking for a Honeycomb update"));
     let http = reqwest::Client::builder()
         .user_agent(concat!("honeycomb-updater/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(300))
@@ -43,6 +53,7 @@ pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<boo
     let asset = format!("honeycomb-{target}.tar.gz");
     let base =
         format!("https://github.com/teamofsilicons/silicon-honeycomb/releases/download/v{version}");
+    progress(Stage("Fetching release checksum"));
     let checksum = bounded(
         http.get(format!("{base}/{asset}.sha256")).send().await?,
         1024,
@@ -52,11 +63,15 @@ pub async fn update_cli(_prefix: &Path, current_executable: &Path) -> Result<boo
         .split_whitespace()
         .next()
         .context("Missing release checksum")?;
-    let archive = bounded(
+    progress(Stage("Connecting to Honeycomb download"));
+    let archive = crate::progress::download(
         http.get(format!("{base}/{asset}")).send().await?,
         128 * 1024 * 1024,
+        None,
+        progress,
     )
     .await?;
+    progress(Stage("Verifying and installing Honeycomb"));
     install_cli_release(
         &archive,
         checksum,

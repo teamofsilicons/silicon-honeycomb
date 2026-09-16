@@ -56,7 +56,10 @@ def main():
             env.pop('HONEYCOMB_NO_MODIFY_PATH', None)
             (home / '.bashrc').write_text('# existing shell configuration\n')
             # The exact curl -> bash invocation requested by the user, against a local fixture.
-            run(['/bin/bash', '-c', f'/bin/bash -c "$(curl -fsSL {base}/install.sh)"'], env)
+            initial = run(['/bin/bash', '-c', f'printf "Starting Honeycomb installer…\\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 {base}/install.sh)"'], env)
+            stages = ['[1/5] Preparing', '[2/5] Downloading', '[3/5] Downloading checksum', '[4/5] Extracting', '[5/5] Configuring']
+            positions = [initial.stderr.index(stage) for stage in stages]
+            assert positions == sorted(positions), initial.stderr
             installed = home / '.honeycomb/dir/system/bin/honeycomb'
             assert installed.is_file()
             assert (home / '.bashrc').read_text().startswith('# existing shell configuration\n')

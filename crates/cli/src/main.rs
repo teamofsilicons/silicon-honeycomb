@@ -1,3 +1,4 @@
+mod progress;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
@@ -6,6 +7,7 @@ use honeycomb_client::{
     installer::{self, Installed},
     package,
 };
+use progress::Progress;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -570,7 +572,18 @@ async fn run() -> Result<()> {
         return Ok(());
     }
     let started = std::time::Instant::now();
-    let result = execute(&cli).await;
+    let message = match &cli.command {
+        Command::Install { app_id, .. } => Some(format!("Starting installation of {app_id}")),
+        Command::Update { app_id } => Some(format!("Starting update of {app_id}")),
+        Command::SelfUpdate => Some("Starting Honeycomb update".to_owned()),
+        _ => None,
+    };
+    let progress = Progress::new(
+        !cli.json && message.is_some(),
+        message.as_deref().unwrap_or(""),
+    );
+    let result = execute(&cli, &progress).await;
+    progress.finish(result.is_ok());
     record_command(
         &cli,
         "cli",
@@ -581,7 +594,7 @@ async fn run() -> Result<()> {
     .await;
     result
 }
-async fn execute(cli: &Cli) -> Result<()> {
+async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     let root = root()?;
     fs::create_dir_all(&root)?;
     let mut settings: Settings = read(&root.join("config.json"))?;
@@ -630,7 +643,7 @@ async fn execute(cli: &Cli) -> Result<()> {
         return Ok(());
     }
     if matches!(cli.command, Command::SelfUpdate) {
-        return self_update(&root, true).await;
+        return self_update(&root, true, Some(progress)).await;
     }
     if let Command::Daemon { once } = cli.command {
         loop {
@@ -639,7 +652,7 @@ async fn execute(cli: &Cli) -> Result<()> {
                 let started = std::time::Instant::now();
                 // Check packages even if the Honeycomb binary update server is unavailable.
                 let packages = update_packages(&root, cli, false).await;
-                let result = self_update(&root, false).await.and(packages);
+                let result = self_update(&root, false, None).await.and(packages);
                 record_command(
                     cli,
                     "daemon",
@@ -1043,13 +1056,22 @@ async fn execute(cli: &Cli) -> Result<()> {
                 version.as_deref(),
                 Some(alias.iter().cloned().collect()),
                 false,
-                false,
+                Some(progress),
             )
             .await?;
             write_private(&plane_dir.join("context.json"), &context)?;
         }
         Command::Update { app_id } => {
-            install(&client, &plane_dir, app_id, None, None, true, false).await?;
+            install(
+                &client,
+                &plane_dir,
+                app_id,
+                None,
+                None,
+                true,
+                Some(progress),
+            )
+            .await?;
             write_private(&plane_dir.join("context.json"), &context)?;
         }
         Command::Uninstall { app_id } => {
@@ -1077,13 +1099,16 @@ async fn execute(cli: &Cli) -> Result<()> {
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
     }
+    if settings.auto_update {
+        progress.stage("Checking scheduled updates");
+    }
     if settings.auto_update && update_packages(&root, cli, true).await.is_err() {
         eprintln!("Package update check deferred; run honeycomb update for details");
     }
     // Maintenance failures must not change the user's successful command result.
     if settings.auto_update
         && now() - settings.last_update_check >= 3600
-        && let Err(e) = self_update(&root, false).await
+        && let Err(e) = self_update(&root, false, None).await
     {
         eprintln!("Update check deferred: {e}");
     }
@@ -1096,7 +1121,7 @@ async fn install(
     version: Option<&str>,
     aliases: Option<BTreeMap<String, String>>,
     updating: bool,
-    quiet: bool,
+    progress: Option<&Progress>,
 ) -> Result<()> {
     if !honeycomb_client::valid_app_id(id) {
         bail!("Expected an org>app identifier; quote it in your shell");
@@ -1107,11 +1132,17 @@ async fn install(
         .read(true)
         .write(true)
         .open(root.join("install.lock"))?;
+    if let Some(progress) = progress {
+        progress.stage("Waiting for the installation lock");
+    }
     lock.lock_exclusive()?;
     let mut records: BTreeMap<String, Installed> = read(&root.join("installed.json"))?;
     let previous = records.get(id);
     if updating && previous.is_none() {
         bail!("{id} is not installed; run honeycomb install '{id}' first");
+    }
+    if let Some(progress) = progress {
+        progress.stage("Finding the requested release");
     }
     let releases = client.releases(id).await?;
     let release = releases
@@ -1119,7 +1150,8 @@ async fn install(
         .find(|r| version.is_none_or(|v| v == r.version))
         .context("Requested release is unavailable")?;
     if previous.is_some_and(|p| p.version == release.version && p.sha256 == release.sha256) {
-        if !quiet {
+        if let Some(progress) = progress {
+            progress.pause();
             show(&json!({"app_id":id,"version":release.version,"status":"already_up_to_date"}))?;
         }
         return Ok(());
@@ -1129,7 +1161,16 @@ async fn install(
         .unwrap_or_default();
     let stage = root.join(format!("download-{}.tar.gz", uuid::Uuid::new_v4()));
     let result = async {
-        client.download(id, release, &stage).await?;
+        client
+            .download_with_progress(id, release, &stage, &|event| {
+                if let Some(progress) = progress {
+                    progress.event(event);
+                }
+            })
+            .await?;
+        if let Some(progress) = progress {
+            progress.stage("Unpacking and activating commands");
+        }
         installer::install_archive_for(id, &stage, root, &aliases, previous)
     }
     .await;
@@ -1141,9 +1182,13 @@ async fn install(
         .next()
         .context("No commands installed")?
         .clone();
+    if let Some(progress) = progress {
+        progress.stage("Saving installation record");
+    }
     records.insert(id.into(), record.clone());
     write_private(&root.join("installed.json"), &records)?;
-    if !quiet {
+    if let Some(progress) = progress {
+        progress.pause();
         show(
             &json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())}),
         )?;
@@ -1180,7 +1225,7 @@ async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) 
     let mut failed = false;
     for id in records.keys() {
         // Failure for one package must not prevent other installed packages updating.
-        failed |= install(&client, &directory, id, None, None, true, true)
+        failed |= install(&client, &directory, id, None, None, true, None)
             .await
             .is_err();
     }
@@ -1246,7 +1291,7 @@ async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<
     }
     Ok(())
 }
-async fn self_update(root: &Path, force: bool) -> Result<()> {
+async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> Result<()> {
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1254,6 +1299,9 @@ async fn self_update(root: &Path, force: bool) -> Result<()> {
         .write(true)
         .open(root.join("update.lock"))?;
     if lock.try_lock_exclusive().is_err() {
+        if let Some(progress) = progress {
+            progress.stage("Another Honeycomb update is already running");
+        }
         return Ok(());
     }
     let mut settings: Settings = read(&root.join("config.json"))?;
@@ -1263,9 +1311,27 @@ async fn self_update(root: &Path, force: bool) -> Result<()> {
     settings.last_update_check = now();
     write_private(&root.join("config.json"), &settings)?;
     let executable = std::env::current_exe()?;
-    let updated =
-        honeycomb_client::maintenance::update_cli(&root.join("system"), &executable).await?;
+    let updated = honeycomb_client::maintenance::update_cli_with_progress(
+        &root.join("system"),
+        &executable,
+        &|event| {
+            if let Some(progress) = progress {
+                progress.event(event);
+            }
+        },
+    )
+    .await?;
+    if let Some(progress) = progress {
+        progress.stage(if updated {
+            "Honeycomb updated"
+        } else {
+            "Honeycomb is already up to date"
+        });
+    }
     if force {
+        if let Some(progress) = progress {
+            progress.pause();
+        }
         show(&json!({"updated":updated,"executable":executable}))?;
     }
     Ok(())

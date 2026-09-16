@@ -4,7 +4,7 @@ exclude = ["vendor/silicon-iam-client"]
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -23,8 +23,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 semver = { version = "1", features = ["serde"] }
 url = { version = "2", features = ["serde"] }
 tempfile = "3"
-honeycomb-core = { package = "silicon-honeycomb-core", path = "crates/core", version = "0.2.0" }
-honeycomb-client = { package = "silicon-honeycomb-client", path = "crates/client", version = "0.2.0" }
+honeycomb-core = { package = "silicon-honeycomb-core", path = "crates/core", version = "0.2.1" }
+honeycomb-client = { package = "silicon-honeycomb-client", path = "crates/client", version = "0.2.1" }
 
 [profile.release]
 lto = "thin"

@@ -1,5 +1,5 @@
 ## Current contract
-The current HTTP major is **v1**. The CLI and Rust client are **0.2.0**. Website clients use HTTP v1. Package manifests use **format_version: 1**. Each uploaded application independently uses semantic versions for its releases.
+The current HTTP major is **v1**. The CLI and Rust client are **0.2.1**. Website clients use HTTP v1. Package manifests use **format_version: 1**. Each uploaded application independently uses semantic versions for its releases.
 
 Call `GET /api/contracts` to discover supported versions. Responses identify `Honeycomb-API-Version` and `Honeycomb-Contract-State`. Existing raw callers may omit negotiation headers and use the version in their URL.
 

@@ -1,25 +1,27 @@
 ## macOS and Linux
 ```sh
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
+printf "Starting Honeycomb installer…\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
 ```
 Requires Bash, curl, tar, and either `sha256sum` or `shasum`. Prebuilt binaries support x86_64 and aarch64 on macOS and Linux. The installer checks the archive checksum, requires exactly one regular `honeycomb` executable, and activates the replacement atomically.
+
+The installer reports preparation immediately, then download progress, checksum verification, activation, and shell/update-worker setup. Source installations also show Cargo’s build progress.
 
 The default binary lives in `~/.honeycomb/dir/system/bin`. Bash, Zsh (including `ZDOTDIR`), and supported POSIX shell startup files receive an idempotent PATH entry. A child installer cannot change the parent terminal's environment: start a new terminal or run the printed activation command.
 
 ## Cargo and Windows
 Install Rust and its platform build prerequisites, then run:
 ```sh
-cargo install silicon-honeycomb-cli --version '=0.1.0' --locked
+cargo install silicon-honeycomb-cli --version '=0.2.1' --locked
 honeycomb --version
 honeycomb service install
 ```
 The command is `honeycomb`; the crate is `silicon-honeycomb-cli`. Cargo places the binary in its configured bin directory, usually `~/.cargo/bin`; make sure that directory is on PATH. Cargo installation supports Windows, Linux, and macOS. Native release downloads also include Windows x86_64 and aarch64.
 
-[Release archives and checksums](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.1.0) are available for all six required targets. The Bash installer itself is for macOS/Linux.
+[Release archives and checksums](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.2.1) are available for all six required targets. The Bash installer itself is for macOS/Linux.
 
 ## Choose a version or installation home
 ```sh
-HONEYCOMB_VERSION=0.1.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
+printf "Starting Honeycomb installer…\n"; HONEYCOMB_VERSION=0.2.1 /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
 ```
 | Variable | Effect |
 | --- | --- |
@@ -36,7 +38,9 @@ honeycomb self-update
 honeycomb config set auto_update false
 honeycomb daemon --once
 ```
-The per-user worker checks hourly and honors `auto_update`. It uses launchd on macOS, systemd user services on Linux, and the platform task mechanism on Windows. Self-update verifies vendor release integrity. Application updates use `honeycomb update APP_ID` separately.
+The per-user worker checks hourly and honors `auto_update`. It uses launchd on macOS, systemd user services on Linux, and the platform task mechanism on Windows. Self-update verifies vendor release integrity. The worker also updates installed applications in their original account and environment context. CLI commands check for due updates too. Use `honeycomb update APP_ID` for an immediate application update.
+
+Interactive `install`, `update`, and `self-update` commands show progress on stderr from startup through release lookup, download, verification, and installation. Download percentages reflect bytes received, not estimated total installation time. Redirected output uses plain progress lines; `--json` and background maintenance omit progress output.
 
 ## Build from source
 ```sh

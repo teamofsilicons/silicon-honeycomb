@@ -7,7 +7,7 @@ honeycomb --version
 Cargo installations need Cargo's bin directory on PATH. Custom homes need the path printed by the installer. Check `honeycomb config env` after changing home or backend. Re-running the native installer does not duplicate its shell entry.
 
 ## The install command is quiet
-The outer `curl -fsSL` first fetches `install.sh`; it is intentionally quiet. Once the script starts it prints progress. Check access to GitHub/raw.githubusercontent.com if that initial fetch stalls. Downloading the script separately with curl's timeout/progress options can distinguish a network issue from installation work.
+The install command prints a starting message before fetching `install.sh`, and curl shows transfer progress. The fetch has a 20-second connection timeout and a two-minute overall timeout. The script then reports preparation, binary download, verification, activation, and setup. If the initial fetch fails, check access to GitHub/raw.githubusercontent.com and retry.
 
 ## IAM token expired or was already used
 Request a fresh Honeycomb token and exchange it promptly, once. Use the URL returned by `honeycomb iam`. A token issued for another application cannot sign you into Honeycomb. Authentication rejection now returns a sign-in recovery error instead of being reported as a generic service outage.

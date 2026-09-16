@@ -1,7 +1,7 @@
 ## 1. Install the CLI
 On macOS or Linux:
 ```sh
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
+printf "Starting Honeycomb installer…\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
 ```
 The installer selects your native binary, verifies its SHA-256, and configures supported shell startup files. Open a new terminal, then check:
 ```sh

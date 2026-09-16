@@ -4,7 +4,8 @@ set -euo pipefail
 umask 077
 
 fail() { printf 'honeycomb installer: %s\n' "$*" >&2; exit 1; }
-printf 'Installing Honeycomb…\n'
+progress() { printf '%s\n' "$*" >&2; }
+progress '[1/5] Preparing Honeycomb installation…'
 honeycomb_home="${SILICON_HOME:-${HOME:?HOME or SILICON_HOME must be set}}"
 honeycomb_dir="$honeycomb_home/.honeycomb/dir"
 honeycomb_bin="$honeycomb_dir/system/bin"
@@ -15,6 +16,7 @@ trap 'rm -rf "$honeycomb_temp"' EXIT
 if [ -n "${HONEYCOMB_SOURCE_DIR:-}" ]; then
   command -v cargo >/dev/null || fail 'Cargo is required for source installation. Install Rust, then retry.'
   [ -f "$HONEYCOMB_SOURCE_DIR/crates/cli/Cargo.toml" ] || fail 'HONEYCOMB_SOURCE_DIR must point to the Honeycomb repository.'
+  progress '[2/5] Building and installing Honeycomb (Cargo progress follows)…'
   cargo install --locked --path "$HONEYCOMB_SOURCE_DIR/crates/cli" --root "$honeycomb_dir/system" --bin honeycomb
 else
   command -v curl >/dev/null || fail 'curl is required.'
@@ -35,8 +37,9 @@ else
     *) fail 'Release URL must use HTTPS.' ;;
   esac
   honeycomb_archive="honeycomb-$honeycomb_target.tar.gz"
-  printf 'Downloading %s…\n' "$honeycomb_archive"
+  progress "[2/5] Downloading $honeycomb_archive (connecting, 0 bytes received)…"
   curl --proto "$honeycomb_protocol" -fL --progress-bar --connect-timeout 20 --max-time 600 --retry 2 "$honeycomb_base/$honeycomb_archive" -o "$honeycomb_temp/$honeycomb_archive"
+  progress '[3/5] Downloading checksum and verifying release…'
   curl --proto "$honeycomb_protocol" -fsSL --connect-timeout 20 --max-time 60 --retry 2 "$honeycomb_base/$honeycomb_archive.sha256" -o "$honeycomb_temp/checksum"
   honeycomb_expected="$(awk 'NR==1 {print $1}' "$honeycomb_temp/checksum")"
   [[ "$honeycomb_expected" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'Release checksum has an invalid format.'
@@ -48,6 +51,7 @@ else
     fail 'sha256sum or shasum is required for release verification.'
   fi
   [ "$honeycomb_actual" = "$honeycomb_expected" ] || fail 'SHA-256 verification failed. No executable was installed.'
+  progress '[4/5] Extracting, checking and activating Honeycomb…'
   honeycomb_listing="$(tar -tzf "$honeycomb_temp/$honeycomb_archive")"
   [ "$honeycomb_listing" = honeycomb ] || fail 'Release archive must contain exactly one honeycomb executable.'
   tar -xzf "$honeycomb_temp/$honeycomb_archive" -C "$honeycomb_temp" -- honeycomb
@@ -61,6 +65,7 @@ else
 fi
 
 "$honeycomb_bin/honeycomb" --version
+progress '[5/5] Configuring shell and automatic updates…'
 "$honeycomb_bin/honeycomb" config env > "$honeycomb_dir/env"
 # The installer is a child process: startup files configure subsequent shells.
 # Quote paths as shell data, including spaces, apostrophes and dollar signs.
@@ -91,6 +96,7 @@ for honeycomb_shell_file in "${honeycomb_shell_files[@]}"; do
   printf 'Shell configured: %s\n' "$honeycomb_shell_file"
 done
 if [ "${HONEYCOMB_NO_SERVICE:-0}" != 1 ]; then
+  progress 'Registering the hourly update worker…'
   case "$(uname -s)" in
     Darwin)
       # launchd XML is generated with escaped values by the CLI, avoiding path interpolation.

@@ -11,6 +11,7 @@
 pub use honeycomb_core::*;
 pub mod installer;
 pub mod maintenance;
+pub mod progress;
 /// Honeycomb's license notice, embedded so native CLI distributions carry it.
 pub const LICENSE_TEXT: &str = include_str!("../LICENSE");
 /// Stable local context name without exposing tokens or environment root keys.
@@ -399,12 +400,25 @@ impl Client {
         )?)
     }
     pub async fn download(&self, id: &str, release: &Release, destination: &Path) -> Result<()> {
+        self.download_with_progress(id, release, destination, &|_| {})
+            .await
+    }
+    /// Download and verify an immutable release, reporting stages and received bytes.
+    pub async fn download_with_progress(
+        &self,
+        id: &str,
+        release: &Release,
+        destination: &Path,
+        progress: &(dyn Fn(progress::ProgressEvent) + Sync),
+    ) -> Result<()> {
+        use progress::ProgressEvent::Stage;
         if release.app_id != id {
             bail!("Release belongs to a different application");
         }
         let mut url = self.url(&["apps", id, "download"])?;
         url.query_pairs_mut()
             .append_pair("version", &release.version);
+        progress(Stage("Connecting to package download"));
         let response = Self::check(
             self.request(Method::GET, url, None)
                 .header("x-download-receipt", uuid::Uuid::new_v4().to_string())
@@ -412,7 +426,14 @@ impl Client {
                 .await?,
         )
         .await?;
-        let bytes = Self::bounded(response, package::MAX_ARCHIVE_BYTES as usize).await?;
+        let bytes = progress::download(
+            response,
+            package::MAX_ARCHIVE_BYTES as usize,
+            u64::try_from(release.size).ok(),
+            progress,
+        )
+        .await?;
+        progress(Stage("Verifying package checksum and contents"));
         if hex::encode(Sha256::digest(&bytes)) != release.sha256
             || bytes.len() as i64 != release.size
         {
