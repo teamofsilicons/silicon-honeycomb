@@ -182,11 +182,20 @@ async fn isolated_rotation_replays_same_request_and_stops_after_generation_chang
     environment_mock(&server).await;
     let id = Uuid::new_v4();
     operation(&adapter, id, "secret.rotate").await;
-    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/secret-rotations"))).and(header("x-honeycomb-actor-token","oat_fixture_actor")).respond_with(move |r:&wiremock::Request|{
+    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/secret-rotations"))).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(move |r:&wiremock::Request|{
+        assert!(!r.headers.contains_key("x-honeycomb-actor-token"));
+        assert!(!r.headers.contains_key("x-honeycomb-application-authorization"));
+        assert_eq!(r.headers.get("x-honeycomb-testing-key").unwrap(), "K".repeat(32).as_str());
         let body:Value=serde_json::from_slice(&r.body).unwrap();assert_eq!(body["operation_id"],id.to_string());assert_eq!(body["generation"],2);
         ResponseTemplate::new(200).set_body_json(json!({"operation_id":id,"state":"accepted","environment_id":ENV,"app_id":APP,"configuration_revision":1,"iam_revision":4,"credential_version":2,"app_secret":"fixture-rotated-secret"}))
     }).expect(2).mount(&server).await;
     let input = json!({"operation_id":id,"app_id":APP,"configuration_revision":1,"expected_iam_revision":3});
+    assert!(
+        adapter
+            .testing_rotate_secret(&input, "oat_fixture_actor", None, &"Z".repeat(32))
+            .await
+            .is_err()
+    );
     let first = adapter
         .testing_rotate_secret(&input, "oat_fixture_actor", None, &"K".repeat(32))
         .await
@@ -230,6 +239,9 @@ async fn configured_app_waits_for_participant_and_reserves_revision_only_once() 
     let config = json!({"org_id":"alpha","local_app_id":"app","name":"Application","description":"Test application","base_url":"https://app.invalid","webhook_url":"https://app.invalid/webhook","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"obo_review_message":"","testing_idle_days":30});
     sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES(?,?,'alpha','Application','Test',?,'',1,1)").bind(ENV).bind(APP).bind(config.to_string()).execute(&adapter.db).await.unwrap();
     Mock::given(method("PUT")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/configuration"))).respond_with(move |r:&wiremock::Request| {
+        assert!(!r.headers.contains_key("x-honeycomb-actor-token"));
+        assert!(!r.headers.contains_key("x-honeycomb-application-authorization"));
+        assert_eq!(r.headers.get("x-honeycomb-testing-key").unwrap(), "K".repeat(32).as_str());
         let body:Value=serde_json::from_slice(&r.body).unwrap();assert_eq!(body["operation_id"],id.to_string());
         ResponseTemplate::new(200).set_body_json(json!({"operation_id":id,"state":"accepted","environment_id":ENV,"app_id":APP,"configuration_revision":1,"iam_revision":4,"ready":false,"app_secret":"fixture-config-secret","effective_configuration":{"app_id":APP,"org_id":"alpha","configuration_revision":1,"app_scope":{"iam":["self.identity.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"private"}}))
     }).expect(2).mount(&server).await;

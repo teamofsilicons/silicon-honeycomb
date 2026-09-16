@@ -369,7 +369,7 @@ impl IamManagement {
     async fn testing_mutate(
         &self,
         o: &Value,
-        actor: &str,
+        _actor: &str,
         step_up: Option<&str>,
         environment_key: &str,
         rotation: bool,
@@ -423,13 +423,13 @@ impl IamManagement {
                 "Testing lifecycle changed before management retry",
             ));
         }
-        self.testing_execute_mutation(app, &input, actor, step_up, rotation)
+        self.testing_execute_mutation(app, &input, environment_key, step_up, rotation)
             .await
     }
     pub(super) async fn testing_operation_result(
         &self,
         id: &str,
-        actor: &str,
+        _actor: &str,
         environment_key: &str,
     ) -> Result<Value> {
         let plane = self.testing_plane(environment_key).await?;
@@ -463,7 +463,7 @@ impl IamManagement {
         self.testing_execute_mutation(
             &row.get::<String, _>("app_id"),
             &input,
-            actor,
+            environment_key,
             None,
             rotation,
         )
@@ -567,7 +567,7 @@ impl IamManagement {
         &self,
         app: &str,
         input: &models::HoneycombTestingAppMutation,
-        actor: &str,
+        environment_key: &str,
         step_up: Option<&str>,
         rotation: bool,
     ) -> Result<Value> {
@@ -580,12 +580,19 @@ impl IamManagement {
                 "Finish the pending environment lifecycle operation first",
             ));
         }
-        let actor = SecretString::from(actor.to_owned());
+        if self.testing_plane(environment_key).await? != plane {
+            return Err(Error::forbidden());
+        }
+        let key = EnvironmentKey::new(environment_key)
+            .map_err(|_| Error::bad("Invalid testing environment key"))?;
         let mut m = mutation(id)?;
         if let Some(proof) = step_up {
             m = m.step_up(proof);
         }
-        let authority = ManagementAuthority::Actor(&actor);
+        // Honeycomb already checked the current test administrator. IAM receives
+        // bounded root authority for this exact plane, never a test OAT presented
+        // as a production management user token.
+        let authority = ManagementAuthority::Environment(&key);
         let receipt = if rotation {
             self.client
                 .rotate_testing_application_secret(app, &authority, input, &m)
