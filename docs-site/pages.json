@@ -138,12 +138,6 @@
     "description": "What diagnostics contain and how to disable them."
   },
   {
-    "slug": "availability",
-    "title": "Availability & current limits",
-    "group": "Operate",
-    "description": "A clear boundary between shipped interfaces and completed production integration."
-  },
-  {
     "slug": "troubleshooting",
     "title": "Troubleshooting",
     "group": "Start here",

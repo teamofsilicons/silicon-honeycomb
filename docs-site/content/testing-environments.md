@@ -1,4 +1,4 @@
-> Integration status: these interfaces exist and have local contract tests. Full ecosystem production acceptance remains incomplete. Read [availability](/availability/) before depending on cross-service lifecycle behavior.
+> Integration status: these interfaces exist and have local contract tests. Full ecosystem production acceptance remains incomplete.
 
 ## What an environment isolates
 Honeycomb coordinates one shared testing environment across participating services. IAM handles the isolated identity/token/OBO work; each data service owns its test records. Testing credentials must never reach production through a fallback.

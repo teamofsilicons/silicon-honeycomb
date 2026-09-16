@@ -22,5 +22,5 @@ Registering an application creates its identity and configuration. Uploading a r
 
 IAM continues to authenticate users and enforce accepted permissions. Honeycomb manages application workflows; Briefcase stores package bytes. [Read the architecture](/architecture/).
 
-## Version and availability
-These guides describe CLI/client **0.1.0**, package format **1**, and HTTP API **v1**, checked against the repository on **16 September 2026**. Some shared testing, publication, bundle, and adoption workflows still depend on unfinished service contracts. The [availability page](/availability/) distinguishes shipped interfaces from completed production acceptance.
+## Documentation version
+These guides describe CLI/client **0.1.0**, package format **1**, and HTTP API **v1**, checked against the repository on **16 September 2026**. Some shared testing, publication, bundle, and adoption workflows still depend on unfinished service contracts.

@@ -21,4 +21,4 @@ An idle provider remains protected while an active application depends on it, in
 The worker records cleanup jobs durably, retries incomplete participant work with backoff, and exposes progress. Soft deletion's recovery clock begins after disabled-access receipts from every participant. Cleanup itself does not refresh application activity.
 
 ## Current limitation
-The automatic-retention participant contract is not fully mapped by the current IAM adapter. Jobs must stay visibly pending until the service confirms the action. Keep scheduled-testing cutovers disabled until these cross-service behaviors are accepted. [Availability](/availability/) tracks this limitation separately from local tests.
+The automatic-retention participant contract is not fully mapped by the current IAM adapter. Jobs must stay visibly pending until the service confirms the action. Keep scheduled-testing cutovers disabled until these cross-service behaviors are accepted.

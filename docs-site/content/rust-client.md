@@ -69,7 +69,7 @@ let isolated = client.with_environment(std::env::var("HONEYCOMB_TEST_KEY")?)?;
 let _ = isolated;
 Ok(()) }
 ```
-The environment root key must be exactly 32 alphanumeric characters. The SDK sends `X-Testing-Environment-Key`; it never falls back to production if testing authorization fails. Some operations also require an appropriate user session. The server's [integration availability](/availability/) still applies.
+The environment root key must be exactly 32 alphanumeric characters. The SDK sends `X-Testing-Environment-Key`; it never falls back to production if testing authorization fails. Some operations also require an appropriate user session.
 
 ## Method families
 | Area | Methods |

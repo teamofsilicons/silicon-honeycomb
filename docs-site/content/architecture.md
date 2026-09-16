@@ -29,4 +29,4 @@ SQLite holds application and workflow metadata on persistent volumes. Package by
 Vercel serves library/console assets and the documentation site. AWS hosts the Rust backend and the two persistent website session services behind Caddy. Namecheap hosts DNS. Each website has its own session configuration and callback URL. This deployment uses a single backend host and persistent local SQLite; it is not a horizontally scaled or highly available design.
 
 ## Design versus completion
-Ownership statements describe architecture. They do not claim every bundle/adoption/lifecycle API is implemented. Consult [availability](/availability/) for those boundaries.
+Ownership statements describe architecture. They do not claim every bundle/adoption/lifecycle API is implemented.

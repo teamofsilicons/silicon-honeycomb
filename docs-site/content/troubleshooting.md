@@ -31,7 +31,7 @@ Read the latest app, review, draft, or environment record. Review concurrent edi
 Use `--alias original=new-name`. Honeycomb will not replace a command owned by another package or found elsewhere on PATH. Update preserves recorded aliases.
 
 ## Pending forever
-Inspect `honeycomb operations get OPERATION_ID` or the environment's service progress. Fix the named integration before retrying. Some lifecycle/publication contracts remain incomplete; consult [availability](/availability/). Health checks and local tests do not turn a pending remote operation into an accepted one.
+Inspect `honeycomb operations get OPERATION_ID` or the environment's service progress. Fix the named integration before retrying. Some lifecycle/publication contracts remain incomplete. Health checks and local tests do not turn a pending remote operation into an accepted one.
 
 ## Need help
 Read command-specific `--help`, inspect the [CLI reference](/cli-reference/), and submit a concise reproduction through `honeycomb report`. Include versions and safe error codes, not tokens, app secrets, testing keys, or sensitive package bytes.

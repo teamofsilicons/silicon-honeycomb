@@ -29,4 +29,4 @@ honeycomb --idempotency-key my-secret-rotation-001 apps rotate-secret 'my-org>my
 Save the one-time result securely and update your server-side secret store. IAM controls revocation and credential versions. Do not assume an old credential remains usable.
 
 ## Production and testing
-These management routes currently support production applications. Test-only application administration and some webhook metadata remain integration gaps; see [availability](/availability/).
+These management routes currently support production applications. Test-only application administration and some webhook metadata remain integration gaps.

@@ -13,7 +13,7 @@ Replace the revision with current state. Submission creates durable review work,
 3. Honeycomb validators review the package and publication after required provider approvals.
 4. IAM accepts activation and Honeycomb reconciles archive visibility before publication is complete.
 
-Requested access, approval, effective permissions, and public archive access are distinct states. The current production integration still has [contract gaps](/availability/); a pending operation must remain pending until the responsible service confirms it.
+Requested access, approval, effective permissions, and public archive access are distinct states. The current production integration still has contract gaps; a pending operation must remain pending until the responsible service confirms it.
 
 ## Participate as a reviewer
 ```sh

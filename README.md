@@ -24,7 +24,7 @@ requirements and unfinished work are tracked in the [local handoff](docs/LOCAL-H
 [implementation history](docs/IMPLEMENTATION.md). This repository is under active
 implementation. Live IAM authentication and protected management reads are verified. Full Briefcase,
 publication, adoption, and ecosystem lifecycle acceptance remain incomplete; see the
-[current availability guide](docs-site/content/availability.md).
+[engineering handoff](docs/LOCAL-HANDOFF.md).
 
 See [API contracts and compatibility](docs/API-CONTRACTS.md) for version selection,
 consumer compatibility, deprecation and the seven-day idle retirement policy.
