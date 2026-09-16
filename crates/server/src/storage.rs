@@ -7,6 +7,85 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use silicon_iam_client::{Client, EnvironmentKey, Mutation, models};
 
+// Only documented error codes and validated correlation IDs may cross this boundary.
+// Upstream messages/details can contain credentials or request data and are never copied.
+fn iam_storage_error(error: silicon_iam_client::Error) -> Error {
+    use silicon_iam_client::Error as IamError;
+    let (status, api, request_id) = match &error {
+        IamError::Api(api) => (
+            Some(api.status),
+            Some(api.as_ref()),
+            api.request_id.as_deref(),
+        ),
+        IamError::RateLimited { source, .. } => (
+            Some(429),
+            Some(source.as_ref()),
+            source.request_id.as_deref(),
+        ),
+        IamError::UnstructuredResponse { status, request_id } => {
+            (Some(*status), None, request_id.as_deref())
+        }
+        _ => (None, None, None),
+    };
+    let mut result = if api.is_some() && status == Some(401) {
+        Error::new(
+            axum::http::StatusCode::UNAUTHORIZED,
+            "authentication_required",
+            "IAM could not authenticate the storage request. Sign in again, then retry the same operation.",
+        )
+    } else if api.is_some() && status == Some(403) {
+        Error::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "storage_authorization_required",
+            "IAM denied delegated storage access. Check current organization access, consent and effective external scopes, then retry the same operation.",
+        )
+    } else if api.is_some_and(|e| e.code == "invalid_subject_token") && status == Some(400) {
+        Error::new(
+            axum::http::StatusCode::UNAUTHORIZED,
+            "authentication_required",
+            "The IAM login token is no longer valid. Sign in again, then retry the same operation.",
+        )
+    } else if status == Some(429) {
+        Error::unavailable(
+            "IAM temporarily rate-limited storage authorization. Wait and retry the same operation.",
+        )
+    } else {
+        Error::unavailable(
+            "IAM could not complete storage authorization. Retry the same operation; if it persists, report the diagnostic details.",
+        )
+    };
+    if let Some(status) = status {
+        result.1.details.push(format!("upstream_status={status}"));
+    }
+    if let Some(api) = api
+        && matches!(
+            api.code.as_str(),
+            "internal_error"
+                | "service_unavailable"
+                | "rate_limited"
+                | "unauthorized"
+                | "authentication_required"
+                | "invalid_credentials"
+                | "forbidden"
+                | "invalid_subject_token"
+                | "obo_subject_token_forbidden"
+                | "obo_authority_revoked"
+                | "obo_organization_not_authorized"
+                | "not_found"
+                | "insufficient_scope"
+                | "consent_required"
+                | "idempotency_conflict"
+                | "idempotency_response_expired"
+        )
+    {
+        result.1.details.push(format!("upstream_code={}", api.code));
+    }
+    if let Some(id) = request_id.and_then(|id| uuid::Uuid::parse_str(id).ok()) {
+        result.1.details.push(format!("upstream_request_id={id}"));
+    }
+    result
+}
+
 pub struct Briefcase {
     pub iam: Client,
     pub http: reqwest::Client,
@@ -31,12 +110,17 @@ impl Briefcase {
             ),
             None => self.iam.clone(),
         };
-        let catalog =
-            iam.obo().endpoints(&self.audience).await.map_err(|_| {
-                Error::unavailable("Cannot discover Briefcase OBO endpoints in IAM")
-            })?;
+        let catalog = iam
+            .obo()
+            .endpoints(&self.audience)
+            .await
+            .map_err(iam_storage_error)?;
         let input:models::OboExchangeRequest=serde_json::from_value(json!({"org_id":org,"subject_token":token,"audience":self.audience,"endpoint_id":endpoint,"metadata":{},"request":{"method":"POST","body_sha256":silicon_iam_client::api::obo::body_sha256(&bytes)}})).map_err(|e|anyhow::anyhow!(e))?;
-        let proof=iam.obo().exchange_signed(&input,&catalog,&Mutation::new()).await.map_err(|_|Error::unavailable("IAM refused the Briefcase OBO proof. Check consent and effective external scopes."))?;
+        let proof = iam
+            .obo()
+            .exchange_signed(&input, &catalog, &Mutation::new())
+            .await
+            .map_err(iam_storage_error)?;
         let mut request = self
             .http
             .post(format!("{}{path}", self.base_url))

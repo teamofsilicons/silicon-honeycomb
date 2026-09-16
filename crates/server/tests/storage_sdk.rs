@@ -314,3 +314,88 @@ async fn archive_read_and_publication_select_the_resource_organization() {
 async fn archive_read_and_publication_preserve_the_test_plane() {
     archive_read_and_publish(true).await;
 }
+
+async fn exchange_failure(
+    status: u16,
+    code: &str,
+    request_id: &str,
+) -> silicon_honeycomb_server::error::Error {
+    let iam = MockServer::start().await;
+    let storage = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/obo-access/applications/vendor%3Estorage/endpoints"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"vendor>storage","org_id":"vendor"},"endpoints":[{"endpoint_id":"briefcase.files.read","path":"/api/v1/obo/files/read","metadata":{},"critical":false}]})))
+        .mount(&iam).await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/obo-access/exchanges"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({"error":{"code":code,"message":"SECRET_UPSTREAM_MESSAGE","details":{"subject_token":"SECRET_UPSTREAM_DETAILS"},"request_id":request_id}})))
+        .mount(&iam).await;
+    let adapter = Briefcase {
+        iam: Client::builder(&iam.uri())
+            .unwrap()
+            .telemetry(false)
+            .credential(Credential::application(
+                "vendor>catalog",
+                "SECRET_APP_CREDENTIAL",
+            ))
+            .build()
+            .unwrap(),
+        http: reqwest::Client::new(),
+        base_url: storage.uri(),
+        app_id: "vendor>catalog".into(),
+        audience: "vendor>storage".into(),
+    };
+    let error = adapter
+        .read("entry", "vendor", Some("SECRET_SUBJECT_TOKEN"), None)
+        .await
+        .unwrap_err();
+    assert!(storage.received_requests().await.unwrap().is_empty());
+    let exposed = serde_json::to_string(&error.1).unwrap();
+    assert!(
+        !exposed.contains("SECRET_"),
+        "upstream data escaped: {exposed}"
+    );
+    error
+}
+
+#[tokio::test]
+async fn iam_server_failure_keeps_safe_diagnostics_without_consent_advice() {
+    let id = "01a0a904-aee3-75c3-b60c-ad97b466c388";
+    let error = exchange_failure(500, "internal_error", id).await;
+    assert_eq!(error.0, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.1.code, "integration_unavailable");
+    assert!(!error.1.message.contains("consent"));
+    assert!(!error.1.message.contains("scopes"));
+    assert!(
+        error
+            .1
+            .details
+            .contains(&"upstream_code=internal_error".to_owned())
+    );
+    assert!(
+        error
+            .1
+            .details
+            .contains(&format!("upstream_request_id={id}"))
+    );
+}
+
+#[tokio::test]
+async fn iam_denial_retains_authorization_recovery_guidance() {
+    let error = exchange_failure(
+        403,
+        "obo_authority_revoked",
+        "01a0a904-aee3-75c3-b60c-ad97b466c388",
+    )
+    .await;
+    assert_eq!(error.0, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(error.1.code, "storage_authorization_required");
+    assert!(error.1.message.contains("consent"));
+    assert!(error.1.message.contains("same operation"));
+}
+
+#[tokio::test]
+async fn iam_unknown_codes_and_malformed_correlation_ids_are_not_exposed() {
+    let error = exchange_failure(500, "SECRET_UNKNOWN_CODE", "SECRET_REQUEST_ID").await;
+    assert_eq!(error.1.details, vec!["upstream_status=500"]);
+}
