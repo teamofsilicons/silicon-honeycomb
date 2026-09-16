@@ -750,6 +750,16 @@ async fn save_app(
                 "Wait for the pending environment lifecycle operation before changing test application configuration",
             ));
         }
+        // All test app configurations reserve this environment's participant
+        // revision. A second app must not supersede an unfinished first setup.
+        let configuring: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND kind='configure' AND state='pending')",
+        ).bind(&c.plane).fetch_one(&mut *tx).await?;
+        if configuring {
+            return Err(Error::conflict(
+                "Finish or retry the pending test application configuration before starting another in this environment",
+            ));
+        }
     }
     let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
     if rotating {
