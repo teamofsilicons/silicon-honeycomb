@@ -30,6 +30,14 @@ The PostgreSQL test proves public second-organization selection succeeds, privat
 
 ## Delivery state
 
-These are local source changes and tests. No commit, push, registry publication, or production deployment was performed. Production behavior has not been reverified with these fixes.
+The fixes are committed and pushed to `main` in Honeycomb, IAM, and DM.
+
+- Honeycomb core, client, and CLI **0.2.3** are published to crates.io. [GitHub release v0.2.3](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.2.3) contains six native archives and six SHA-256 sidecars. [Native build run 35133500340](https://github.com/teamofsilicons/silicon-honeycomb/actions/runs/35133500340) passed on every target. All downloaded archive checksums and native macOS ARM64 execution were verified. The public `/api/v1/cli/latest` endpoint returns 0.2.3 and all six targets.
+- Production Honeycomb already received these backend changes as part of the concurrent Interface bundle rollout. Its immutable image is `sha256:0e012e12b60f825292ffd84057f5b5cba49ad6e32f6b67c55801783ad8628e87`. SSM verification `d2f2caec-361c-4eaf-ad52-10e99c5fa799` confirmed the exact publication diagnostic implementation in the running binary and successful migrations 0020 and 0021. Migration 0020 matches the source checksum. The newer bundle deployment was preserved; the candidate containing only migrations through 0020 was not installed over it.
+- IAM API, scoped API, and worker run source `caf45a021c8b06e5b7695cd2550ffe5c30879a35`, image `sha256:7a9d77ac00b9e4e776cfd7381ad19505f6557034eec70f74028912c4667d72fd`. SSM rollout `a674d29e-79a5-40fa-a867-c826119c35db` verified all three services, readiness, exact revision, and unchanged runtime configuration. CloudFormation change set `external-bugs-caf45a0` reached `UPDATE_COMPLETE`.
+- Honeycomb documentation is deployed. The corrected publication journey passes on desktop and mobile. Initial CI found two release-maintenance issues: IAM's fix report needed an explicit documentation-catalog exclusion, and the mobile browser test needed to open navigation. Both corrections are pushed.
+- Post-rollout public readiness checks succeeded for all eight services: DM 204; Hook, Remind, Commit, Waveform, Briefcase, IAM, and Honeycomb 200. The other six services already contained their ledger fixes and did not require a new runtime deployment for this work.
+
+Live checks cover readiness, deployed revision/artifact identity, migrations, and CLI release discovery. Exact publication-error behavior and the private cross-organization rejection were exercised with isolated integration tests; no production application was modified solely for a regression test.
 
 Honeycomb's server applies additive SQLite migration `0020_release_validation.sql` at startup; include it in the backend release. Ship the matching Honeycomb client/CLI to retain validation errors for rejected CLI uploads. IAM needs a backend release but no new database migration. Existing failed uploads cannot be reconstructed: re-upload the invalid archive after rollout to capture its exact validation result, or run `honeycomb validate` locally.
