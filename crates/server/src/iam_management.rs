@@ -212,8 +212,12 @@ impl IamManagement {
     async fn snapshot(&self, app: &str) -> Result<Value> {
         let record = self.client.application(app).await.map_err(map_error)?;
         let configuration = self.configuration(app, &record).await?;
-        let publication:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane='production' AND app_id=? AND revision=? AND state IN ('activating','published') ORDER BY created_at DESC LIMIT 1")
-            .bind(app).bind(record["configuration_revision"].as_i64().unwrap_or(-1)).fetch_optional(&self.db).await?;
+        // A locally published request cannot substitute for IAM's current approval.
+        // Null means the authority no longer confirms a valid publication plan.
+        let publication:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane='production' AND app_id=? AND revision=? AND id=? AND state IN ('activating','published')")
+            .bind(app).bind(record["configuration_revision"].as_i64().unwrap_or(-1))
+            .bind(record["publication_request_id"].as_str().unwrap_or(""))
+            .fetch_optional(&self.db).await?;
         Ok(
             json!({"app_id":app,"configuration_revision":record["configuration_revision"],"iam_revision":record["iam_revision"],"visibility":record["visibility"],"availability":if record["availability"]=="verified"{"active"}else{"disabled"},"effective_configuration":configuration,"publication_request_id":publication,"credential_version":record["credential_version"]}),
         )

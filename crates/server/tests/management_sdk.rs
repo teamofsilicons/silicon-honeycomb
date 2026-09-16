@@ -229,3 +229,34 @@ async fn webhook_uses_official_routes_actor_step_up_and_exact_replay_without_lea
         );
     }
 }
+
+#[tokio::test]
+async fn snapshot_requires_current_iam_confirmation_of_the_local_publication() {
+    let local = uuid::Uuid::new_v4().to_string();
+    for confirmed in [Value::Null, json!(uuid::Uuid::new_v4()), json!(local)] {
+        let server = MockServer::start().await;
+        let (adapter, db, _, _) = setup(&server).await;
+        sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at) VALUES(?,'production','tos>sdk-test',1,'published','actor',1)")
+            .bind(&local).execute(&db).await.unwrap();
+        let mut authoritative = record();
+        authoritative["visibility"] = json!("public");
+        authoritative["publication_request_id"] = confirmed.clone();
+        Mock::given(method("GET"))
+            .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(authoritative))
+            .mount(&server)
+            .await;
+        let snapshot = adapter
+            .application_snapshot("tos>sdk-test", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot["publication_request_id"],
+            if confirmed == local {
+                json!(local)
+            } else {
+                Value::Null
+            }
+        );
+    }
+}
