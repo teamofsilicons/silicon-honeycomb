@@ -502,6 +502,9 @@ test("console uploads and activates an approved release visible in the anonymous
     });
     expect(decision.ok()).toBe(true);
     await page.reload();
+    await expect(page.getByRole("heading", { name: "Your applications." })).toBeVisible();
+    if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
+      await page.getByRole("button", { name: "Open navigation" }).click();
     await page.getByRole("button", { name: "Sent requests", exact: true }).click();
     const sentRequest = page.locator("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
     await expect(sentRequest).toContainText("Published", { timeout: 30_000 });
