@@ -666,9 +666,11 @@ async fn update_app(
         .fetch_one(&s.db)
         .await?;
         if encrypted.is_empty() {
-            return Err(Error::bad(
-                "An imported app must supply a test-only webhook secret to change its configuration; the production secret is never copied",
-            ));
+            return Err(Error::bad(if c.plane == "production" {
+                "An imported app must supply its webhook URL and signing secret to change its configuration; Honeycomb does not retrieve existing secrets from IAM"
+            } else {
+                "An imported app must supply a test-only webhook secret to change its configuration; the production secret is never copied"
+            }));
         }
         input.webhook_secret = s.decrypt(&encrypted)?;
     }

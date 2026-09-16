@@ -4228,3 +4228,82 @@ async fn telemetry_test_events_are_local_bounded_and_generation_fenced() {
         1000
     );
 }
+
+#[tokio::test]
+async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() {
+    use silicon_honeycomb_server::reconciliation;
+    let (mut s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("reconcile"),
+        "legacy-create-0001",
+        None,
+    )
+    .await;
+    let config: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    sqlx::query("UPDATE applications SET revision=0,effective_revision=0,iam_revision=9,credential_version=1,webhook_secret='' WHERE app_id='tos>reconcile'").execute(&s.db).await.unwrap();
+    let manager = Arc::new(SnapshotManager(std::sync::Mutex::new(
+        json!({"app_id":"tos>reconcile","iam_revision":10,"configuration_revision":0,"visibility":"public","availability":"active","effective_configuration":config}),
+    )));
+    s.management = manager.clone();
+    reconciliation::tick(&s).await.unwrap();
+    let result: (i64, i64, String, String, i64) = sqlx::query_as("SELECT iam_revision,effective_revision,visibility,state,credential_version FROM applications WHERE app_id='tos>reconcile'").fetch_one(&s.db).await.unwrap();
+    assert_eq!(result, (10, 0, "private".into(), "active".into(), 1));
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM application_reconciliation")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "accepted"
+    );
+    // The same snapshot must not downgrade a Honeycomb-managed configuration.
+    sqlx::query("UPDATE applications SET revision=1,effective_revision=1")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE application_reconciliation SET state='pending'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    assert!(
+        reconciliation::reconcile(&s, "production", "tos>reconcile")
+            .await
+            .is_err()
+    );
+    // Nor can revision zero bootstrap an unaccepted ordinary creation.
+    sqlx::query(
+        "UPDATE applications SET effective_revision=0,iam_revision=0,effective_config=NULL",
+    )
+    .execute(&s.db)
+    .await
+    .unwrap();
+    assert!(
+        reconciliation::reconcile(&s, "production", "tos>reconcile")
+            .await
+            .is_err()
+    );
+    // An omitted revision is still an invalid response, not legacy zero.
+    manager
+        .0
+        .lock()
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("configuration_revision");
+    assert!(
+        reconciliation::reconcile(&s, "production", "tos>reconcile")
+            .await
+            .is_err()
+    );
+}

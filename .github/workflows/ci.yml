@@ -19,6 +19,7 @@ jobs:
       - run: cargo +1.98.0 build --workspace --examples --bins --locked
       - run: python3 docs-site/scripts/generate_reference.py --check
       - run: python3 docs-site/scripts/check_examples.py
+      - run: python3 scripts/test_adopt_legacy_app.py
       - run: python3 scripts/test_cli.py
       - run: python3 scripts/test_install.py
       - run: python3 scripts/test_cargo_install.py

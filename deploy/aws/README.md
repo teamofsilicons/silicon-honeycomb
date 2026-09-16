@@ -51,3 +51,35 @@ Namecheap DNS:
 Verify `/health`, `/api/contracts`, public catalog access and both frontend
 `/api/config` and `/api/session` routes after deploying. IAM grants, consent,
 notifications and deferred Briefcase acceptance remain separate checks.
+
+## Adopting an existing legacy IAM application
+
+An application created before Honeycomb can have IAM configuration revision zero.
+Deploy revision-zero reconciliation support before importing it. The privileged
+`scripts/adopt_legacy_app.py` operator tool reads IAM's current accepted record,
+checks its immutable ID and organization, and imports an active **private** catalog
+record. It does not mutate IAM, obtain its app/webhook secrets, or publish a release.
+It refuses to overwrite an existing Honeycomb app. This is an operator migration,
+not a public endpoint or a replacement for actor-authorized app registration.
+
+Run on the backend host, using the existing protected environment file and local
+SQLite database; first omit `--apply` to review its safe projection:
+
+```sh
+python3 adopt_legacy_app.py --app 'tos>briefcase' \
+  --expected-identity 01a070db-89b4-7542-83f1-4fad5cbce625 \
+  --metadata briefcase-catalog.json \
+  --database /var/lib/silicon-honeycomb/backend/honeycomb.db \
+  --env-file /etc/silicon-honeycomb/backend.env \
+  --actor 'operator:user-requested-briefcase-adoption' \
+  --backup-dir /var/lib/silicon-honeycomb/backups/legacy-adoption --apply
+```
+
+The tool verifies a consistent SQLite backup before acquiring a write transaction,
+re-reads IAM to reject concurrent changes, and records an accepted `iam.adopt`
+operation and audit entry. Worker reconciliation continues from IAM revision zero;
+new Honeycomb configuration updates start at revision one. Existing app and webhook
+secrets are preserved in IAM; a later configuration edit must supply the webhook
+URL and signing secret. The existing app is private until normal release and
+publication requirements are fulfilled. Verify its live CLI result and accepted
+reconciliation after the import; keep the receipt and backup path in the operator log.

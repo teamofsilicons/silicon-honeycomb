@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Exercise legacy import against the complete production SQLite schema."""
+import json
+from pathlib import Path
+import sqlite3
+import unittest
+from adopt_legacy_app import insert, projection
+
+
+class AdoptionTests(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        for migration in sorted((Path(__file__).resolve().parents[1] / "crates/server/migrations").glob("*.sql")):
+            self.db.executescript(migration.read_text())
+        self.record = dict(app_id="tos>briefcase", org_id="tos", application_id="existing-id",
+                           app_name="Silicon Briefcase", app_logo=None, base_url="https://example.com",
+                           configuration_revision=0, iam_revision=9, credential_version=1,
+                           availability="verified", visibility="public", testing_idle_days=30,
+                           app_scope={"iam": ["granted", "pending"], "external": []},
+                           effective_scopes=[{"scope": "granted"}], obo_endpoints=[],
+                           obo_review_message=None, webhook_scope=["full"], app_secret="MUST-NOT-COPY")
+        self.metadata = {"description": " ".join(["description"] * 50), "website_url": "https://example.com"}
+
+    def config(self):
+        return projection(self.record, "tos>briefcase", "existing-id", self.metadata)
+
+    def test_import_preserves_identity_and_filters_secrets_pending_grants_and_publication(self):
+        config = self.config()
+        with self.db:
+            receipt = insert(self.db, self.record, config, "operator:test")
+        app = self.db.execute("SELECT org_id,revision,iam_revision,effective_revision,credential_version,visibility,state,webhook_secret,config FROM applications").fetchone()
+        self.assertEqual(app[:8], ("tos", 0, 9, 0, 1, "private", "active", ""))
+        self.assertEqual(json.loads(app[8])["app_scope"]["iam"], ["granted"])
+        self.assertNotIn("webhook_url", config)
+        self.assertNotIn("MUST-NOT-COPY", json.dumps(config))
+        self.assertEqual(receipt["application_id"], "existing-id")
+        self.assertEqual(self.db.execute("SELECT action FROM audit").fetchone()[0], "iam.adopt")
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM publication_requests").fetchone()[0], 0)
+        with self.assertRaises(sqlite3.IntegrityError), self.db:
+            insert(self.db, self.record, config, "operator:duplicate")
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0], 1)
+
+    def test_mismatched_or_unaccepted_record_is_rejected(self):
+        for field, value in [("org_id", "other"), ("application_id", "other-id"),
+                             ("app_id", "tos>other"), ("configuration_revision", 1),
+                             ("iam_revision", 0), ("availability", "disabled"), ("credential_version", 0)]:
+            with self.subTest(field=field):
+                record = dict(self.record, **{field: value})
+                with self.assertRaises(ValueError):
+                    projection(record, "tos>briefcase", "existing-id", self.metadata)
+
+
+if __name__ == "__main__":
+    unittest.main()

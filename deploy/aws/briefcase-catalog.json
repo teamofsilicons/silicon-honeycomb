@@ -1,0 +1,5 @@
+{
+  "description": "Silicon Briefcase provides organization file storage for people and applications in the Silicon ecosystem. It supports files, folders, uploads, downloads, sharing, and delegated access through IAM. Applications can reserve and commit uploads, read authorized files, and manage link access through approved Briefcase endpoints. Organization membership and effective permissions determine which resources each person or application can use.",
+  "website_url": "https://briefcase.teamofsilicons.com",
+  "docs_url": "https://docs.briefcase.teamofsilicons.com"
+}

@@ -73,7 +73,7 @@ pub async fn reconcile(s: &State, plane: &str, app_id: &str) -> Result<()> {
         .ok_or_else(|| Error::unavailable("IAM snapshot is older than its notification"))?;
     let configuration_revision = snapshot["configuration_revision"]
         .as_i64()
-        .filter(|v| *v > 0)
+        .filter(|v| *v >= 0)
         .ok_or_else(|| Error::unavailable("IAM omitted its accepted configuration revision"))?;
     let visibility = snapshot["visibility"]
         .as_str()
@@ -87,10 +87,19 @@ pub async fn reconcile(s: &State, plane: &str, app_id: &str) -> Result<()> {
         return Err(Error::unavailable("IAM returned a different application"));
     }
     let mut tx = s.db.begin().await?;
-    let app = sqlx::query("SELECT revision,effective_revision,iam_revision,config FROM applications WHERE plane=? AND app_id=?")
+    let app = sqlx::query("SELECT revision,effective_revision,iam_revision,config,effective_config FROM applications WHERE plane=? AND app_id=?")
         .bind(plane).bind(app_id).fetch_one(&mut *tx).await?;
     let desired: Value =
         serde_json::from_str(&app.get::<String, _>("config")).map_err(|e| anyhow::anyhow!(e))?;
+    // IAM applications predating Honeycomb have accepted configuration revision
+    // zero. Only an explicitly seeded, accepted legacy projection can use zero;
+    // it must never accept an ordinary pending creation or roll back revision 1.
+    if configuration_revision == 0
+        && (app.get::<i64, _>("iam_revision") <= 0
+            || app.get::<Option<String>, _>("effective_config").is_none())
+    {
+        return Err(Error::conflict("No accepted legacy configuration exists"));
+    }
     if configuration_revision > app.get::<i64, _>("revision")
         || configuration_revision < app.get::<i64, _>("effective_revision")
         || revision < app.get::<i64, _>("iam_revision")
