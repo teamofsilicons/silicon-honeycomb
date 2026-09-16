@@ -12,13 +12,10 @@ pub trait Management: Send + Sync {
         operation: &Value,
         actor_token: &str,
     ) -> Result<Value> {
-        if app_id == "tos>iam" {
-            self.lifecycle(operation, actor_token).await
-        } else {
-            Err(Error::unavailable(format!(
-                "Protected lifecycle transport is not configured for {app_id}"
-            )))
-        }
+        let _ = (operation, actor_token);
+        Err(Error::unavailable(format!(
+            "Protected lifecycle transport is not configured for {app_id}"
+        )))
     }
     /// Service-authorized retention; must not require or manufacture a user session.
     async fn retention_lifecycle(&self, _app_id: &str, _operation: &Value) -> Result<Value> {

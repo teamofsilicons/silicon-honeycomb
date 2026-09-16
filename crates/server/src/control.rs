@@ -152,7 +152,7 @@ pub async fn create_environment(
     let mut tx = s.db.begin().await?;
     sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,created_at,last_activity) VALUES(?,?,?,?,?,?,?,?,?)").bind(&id).bind(&body.org_id).bind(&actor.principal_id).bind(&body.name).bind(&body.description).bind(encrypted).bind(hex::encode(Sha256::digest(&root))).bind(now()).bind(now()).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production',?,?,'environment.prepare',?,?,1,?)").bind(&op).bind(&actor.principal_id).bind(k).bind(&id).bind(digest).bind(now()).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?, 'tos>iam',0,'{}','pending',?,1)").bind(&id).bind(&op).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?, ?,0,'{}','pending',?,1)").bind(&id).bind(&s.iam_app_id).bind(&op).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,?,0,'{}','pending',?,1)").bind(&id).bind(&s.app_id).bind(&op).execute(&mut *tx).await?;
     tx.commit().await?;
     let mut result =

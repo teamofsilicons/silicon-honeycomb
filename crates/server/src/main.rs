@@ -13,7 +13,23 @@ async fn main() -> anyhow::Result<()> {
     let required = |name: &str| {
         std::env::var(name).map_err(|_| anyhow::anyhow!("{name} is required; see .env.example"))
     };
-    let app_id = std::env::var("HONEYCOMB_APP_ID").unwrap_or_else(|_| "tos>honeycomb".into());
+    let app_id = required("HONEYCOMB_APP_ID")?;
+    let iam_app_id = required("IAM_APPLICATION_ID")?;
+    let storage_app_id = required("BRIEFCASE_APP_ID")?;
+    for (key, value) in [
+        ("HONEYCOMB_APP_ID", &app_id),
+        ("IAM_APPLICATION_ID", &iam_app_id),
+        ("BRIEFCASE_APP_ID", &storage_app_id),
+    ] {
+        anyhow::ensure!(
+            honeycomb_core::model::valid_app_id(value),
+            "{key} must name a registered application"
+        );
+    }
+    anyhow::ensure!(
+        app_id != iam_app_id && app_id != storage_app_id && iam_app_id != storage_app_id,
+        "Identity, storage and coordinator roles require distinct registered applications"
+    );
     let iam_url = std::env::var("IAM_BASE_URL")
         .unwrap_or_else(|_| "https://backend.iam.teamofsilicons.com".into());
     let secret = required("HONEYCOMB_APP_SECRET")?;
@@ -32,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         base_url: std::env::var("BRIEFCASE_BASE_URL")
             .unwrap_or_else(|_| "https://backend.briefcase.teamofsilicons.com".into()),
         app_id: app_id.clone(),
-        audience: "tos>briefcase".into(),
+        audience: storage_app_id,
     };
     let mut state = State {
         telemetry: silicon_honeycomb_server::telemetry::Recorder::from_env(),
@@ -44,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         management: Arc::new(AwaitingIamIntegration),
         storage: Arc::new(storage),
         app_id,
+        iam_app_id,
         iam_login_url: std::env::var("IAM_LOGIN_URL")
             .unwrap_or_else(|_| "https://iam.teamofsilicons.com".into()),
         encryption_key,
@@ -53,20 +70,22 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .filter(|v| !v.is_empty())
     {
-        let mut management = silicon_honeycomb_server::iam_management::IamManagement::new(
+        let participants =
+            silicon_honeycomb_server::participant_management::ParticipantRegistry::from_json(
+                &std::env::var("HONEYCOMB_LIFECYCLE_PARTICIPANTS").unwrap_or_else(|_| "[]".into()),
+                |name| std::env::var(name).ok(),
+            )?;
+        anyhow::ensure!(
+            !participants.contains(&state.iam_app_id) && !participants.contains(&state.app_id),
+            "Identity and coordinator roles cannot also be external lifecycle participants"
+        );
+        let management = silicon_honeycomb_server::iam_management::IamManagement::new(
             &iam_url,
             credential,
             state.db.clone(),
             encryption_key,
-        )?;
-        if let Some(token) = std::env::var("BRIEFCASE_HONEYCOMB_SERVICE_TOKEN")
-            .ok()
-            .filter(|v| !v.is_empty())
-        {
-            let base = std::env::var("BRIEFCASE_BASE_URL")
-                .unwrap_or_else(|_| "https://backend.briefcase.teamofsilicons.com".into());
-            management = management.with_briefcase(&base, token)?;
-        }
+        )?
+        .with_participants(participants);
         state.management = Arc::new(management);
     }
     let notifications = std::env::var("IAM_HONEYCOMB_NOTIFICATION_SIGNING_KEY")

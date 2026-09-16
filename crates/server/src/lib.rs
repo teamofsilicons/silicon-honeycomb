@@ -2,7 +2,6 @@
 pub mod activation;
 pub mod api;
 pub mod auth;
-pub mod briefcase_management;
 pub mod catalog;
 pub mod contracts;
 pub mod control;
@@ -13,6 +12,7 @@ pub mod integration;
 pub mod lifecycle;
 pub mod logos;
 pub mod notifications;
+pub mod participant_management;
 pub mod reconciliation;
 pub mod retention;
 pub mod retention_worker;
@@ -40,6 +40,8 @@ pub struct State {
     pub management: Arc<dyn Management>,
     pub storage: Arc<dyn ArchiveStorage>,
     pub app_id: String,
+    /// Registered application providing identity lifecycle authority.
+    pub iam_app_id: String,
     pub iam_login_url: String,
     pub encryption_key: [u8; 32],
     pub webhook_secret: String,

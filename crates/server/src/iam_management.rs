@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 pub struct IamManagement {
     client: ManagementClient,
-    briefcase: Option<crate::briefcase_management::BriefcaseManagement>,
+    participants: crate::participant_management::ParticipantRegistry,
     db: sqlx::SqlitePool,
     encryption_key: [u8; 32],
 }
@@ -26,16 +26,17 @@ impl IamManagement {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             client: ManagementClient::new(base, SecretString::from(credential))?,
-            briefcase: None,
+            participants: Default::default(),
             db,
             encryption_key,
         })
     }
-    pub fn with_briefcase(mut self, base: &str, token: String) -> anyhow::Result<Self> {
-        self.briefcase = Some(crate::briefcase_management::BriefcaseManagement::new(
-            base, token,
-        )?);
-        Ok(self)
+    pub fn with_participants(
+        mut self,
+        participants: crate::participant_management::ParticipantRegistry,
+    ) -> Self {
+        self.participants = participants;
+        self
     }
     async fn saved(&self, id: &str, kind: &str, app: &str, body: Value) -> Result<Value> {
         let encrypted = crate::encrypt(&self.encryption_key, &body.to_string())?;
@@ -250,41 +251,11 @@ fn map_error(error: silicon_iam_client::Error) -> Error {
 }
 #[async_trait]
 impl Management for IamManagement {
-    async fn service_lifecycle(&self, app: &str, operation: &Value, actor: &str) -> Result<Value> {
-        match app {
-            "tos>iam" => self.lifecycle(operation, actor).await,
-            "tos>briefcase" => {
-                self.briefcase
-                    .as_ref()
-                    .ok_or_else(|| {
-                        Error::unavailable(
-                            "Protected lifecycle transport is not configured for tos>briefcase",
-                        )
-                    })?
-                    .apply(operation)
-                    .await
-            }
-            _ => Err(Error::unavailable(format!(
-                "Protected lifecycle transport is not configured for {app}"
-            ))),
-        }
+    async fn service_lifecycle(&self, app: &str, operation: &Value, _actor: &str) -> Result<Value> {
+        self.participants.apply(app, operation).await
     }
     async fn retention_lifecycle(&self, app: &str, operation: &Value) -> Result<Value> {
-        if app == "tos>briefcase" {
-            return self
-                .briefcase
-                .as_ref()
-                .ok_or_else(|| {
-                    Error::unavailable(
-                        "Protected lifecycle transport is not configured for tos>briefcase",
-                    )
-                })?
-                .apply(operation)
-                .await;
-        }
-        Err(Error::unavailable(
-            "Protected automatic retention transport is not configured for this service",
-        ))
+        self.participants.apply(app, operation).await
     }
     async fn scope_catalog(&self, org: &str, provider: Option<&str>) -> Result<Value> {
         self.client
@@ -479,79 +450,32 @@ pub async fn notification(
 }
 
 #[cfg(test)]
-mod briefcase_tests {
+mod participant_tests {
     use super::*;
-    use crate::briefcase_management::BriefcaseManagement;
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{header, method},
-    };
 
     #[tokio::test]
-    async fn routes_briefcase_service_and_retention_without_actor_credentials() {
-        let server = MockServer::start().await;
+    async fn unconfigured_participants_never_inherit_identity_authority() {
         let db = crate::database("sqlite::memory:").await.unwrap();
-        let mut adapter = IamManagement::new(
-            &server.uri(),
+        let adapter = IamManagement::new(
+            "https://identity.example",
             format!("hck_{}", "a".repeat(43)),
             db,
             [7; 32],
         )
         .unwrap();
-        let op = json!({"operation_id":uuid::Uuid::new_v4(),"environment_id":uuid::Uuid::new_v4(),"org_id":"tos","app_id":"tos>briefcase","environment_revision":1,"generation":1,"key_version":1,"action":"prepare","testing_key":"root"});
-        assert!(
-            adapter
-                .service_lifecycle("tos>briefcase", &op, "actor")
-                .await
-                .is_err()
-        );
-        adapter.briefcase = Some(
-            BriefcaseManagement::test_client(
-                &server.uri(),
-                "dedicated-briefcase-service-token-123456".into(),
-            )
-            .unwrap(),
-        );
-        let mut response = op.clone();
-        response["state"] = "completed".into();
-        Mock::given(method("PUT"))
-            .and(header(
-                "authorization",
-                "Bearer dedicated-briefcase-service-token-123456",
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
-            .expect(2)
-            .mount(&server)
-            .await;
-        assert_eq!(
-            adapter
-                .service_lifecycle("tos>briefcase", &op, "must-not-be-forwarded")
-                .await
-                .unwrap(),
-            response
-        );
-        assert_eq!(
-            adapter
-                .retention_lifecycle("tos>briefcase", &op)
-                .await
-                .unwrap(),
-            response
-        );
-        for request in server.received_requests().await.unwrap() {
-            assert!(!request.headers.contains_key("x-honeycomb-actor-token"));
+        for app in [
+            "vendor>storage",
+            "vendor>identity",
+            "tos>briefcase",
+            "tos>iam",
+        ] {
+            assert!(
+                adapter
+                    .service_lifecycle(app, &json!({}), "actor")
+                    .await
+                    .is_err()
+            );
+            assert!(adapter.retention_lifecycle(app, &json!({})).await.is_err());
         }
-        let iam = adapter.lifecycle(&op, "actor").await.unwrap_err();
-        let dispatch = adapter
-            .service_lifecycle("tos>iam", &op, "actor")
-            .await
-            .unwrap_err();
-        assert_eq!(iam.1.message, dispatch.1.message);
-        assert!(
-            adapter
-                .service_lifecycle("tos>other", &op, "actor")
-                .await
-                .is_err()
-        );
-        assert!(adapter.retention_lifecycle("tos>iam", &op).await.is_err());
     }
 }

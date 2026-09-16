@@ -79,7 +79,7 @@ pub async fn schedule(s: &State, id: &str, at: i64) -> Result<Option<String>> {
     .await?;
     // All participants must clear only the target apps' data, including storage they own
     // in another service. Core services and each retired app are always participants.
-    let mut participants = BTreeSet::from(["tos>iam".to_owned(), s.app_id.clone()]);
+    let mut participants = BTreeSet::from([s.iam_app_id.clone(), s.app_id.clone()]);
     participants.extend(targets.iter().cloned());
     for app in participants {
         sqlx::query("INSERT OR IGNORE INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,?,0,'{}','pending',?,?)")

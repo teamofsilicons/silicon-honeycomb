@@ -16,6 +16,7 @@ parser.add_argument("--stack", default="silicon-honeycomb-production")
 parser.add_argument("--image-tag", required=True)
 parser.add_argument("--briefcase-region", default="us-east-1")
 parser.add_argument("--briefcase-secret", default="silicon-briefcase/production")
+parser.add_argument("--briefcase-public-base-url", help="Actual configured Briefcase API URL when injected outside its runtime secret")
 args = parser.parse_args()
 
 
@@ -55,6 +56,7 @@ commands.append(" ".join(f"{key}={shlex.quote(value)}" for key, value in values.
 testing_credentials = ensure_testing_credentials(
     args.profile, args.region, outputs["RuntimeSecretArn"],
     args.briefcase_region, args.briefcase_secret,
+    briefcase_public_base_url=args.briefcase_public_base_url,
 )
 result = aws("ssm", "send-command", "--instance-ids", outputs["InstanceId"],
              "--document-name", "AWS-RunShellScript", "--comment", f"Honeycomb deployment {args.image_tag}",

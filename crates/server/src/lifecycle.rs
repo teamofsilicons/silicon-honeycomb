@@ -84,7 +84,7 @@ async fn coordinate_inner(
     }
     let generation: i64 = environment.get("generation");
     let key_version: i64 = environment.get("key_version");
-    let services=sqlx::query("SELECT app_id,snapshot,state FROM environment_services WHERE environment_id=? AND operation_id=? ORDER BY CASE WHEN app_id='tos>iam' THEN 0 ELSE 1 END,app_id").bind(id).bind(operation_id).fetch_all(&s.db).await?;
+    let services=sqlx::query("SELECT app_id,snapshot,state FROM environment_services WHERE environment_id=? AND operation_id=? ORDER BY CASE WHEN app_id=? THEN 0 ELSE 1 END,app_id").bind(id).bind(operation_id).bind(&s.iam_app_id).fetch_all(&s.db).await?;
     if services.is_empty() {
         return Err(Error::conflict(
             "Lifecycle operation has no participating services",
@@ -111,6 +111,8 @@ async fn coordinate_inner(
         let request = json!({"retired_apps":retired_apps,"reason":if automatic {"inactivity"} else {"requested"},"operation_id":operation_id,"action":service_action,"environment_id":id,"org_id":environment.get::<String,_>("org_id"),"environment_revision":revision,"generation":generation,"key_version":key_version,"testing_key":s.decrypt(&environment.get::<String,_>("encrypted_key"))?,"app_id":app,"snapshot":serde_json::from_str::<Value>(&service.get::<String,_>("snapshot")).map_err(|e|anyhow::anyhow!(e))?});
         let result = if app == s.app_id {
             apply_local(s,id,action,operation_id,lease).await.map(|_|json!({"state":"completed","operation_id":operation_id,"environment_id":id,"app_id":app,"environment_revision":revision,"generation":generation,"key_version":key_version,"retired_apps":retired_apps}))
+        } else if !automatic && app == s.iam_app_id {
+            s.management.lifecycle(&request, actor_token).await
         } else if automatic {
             s.management.retention_lifecycle(&app, &request).await
         } else {
@@ -121,7 +123,7 @@ async fn coordinate_inner(
         let mut stored_receipt = None;
         let error=match result {
             Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version && (action!="retire" || receipt["retired_apps"]==retired_apps) => {
-                if action=="import" && app=="tos>iam" {
+                if action=="import" && app==s.iam_app_id {
                     match accepted_imports(&request["snapshot"]["imports"], &receipt["imports"]) {
                         Ok(imports)=>{stored_receipt=Some(imports.to_string());None},
                         Err(message)=>Some(message),
@@ -138,7 +140,7 @@ async fn coordinate_inner(
             return Err(Error::conflict("Lifecycle coordinator lease expired"));
         }
         // Import application services only after IAM has accepted their isolated records.
-        if matches!(action, "import" | "retire") && app == "tos>iam" && failed {
+        if matches!(action, "import" | "retire") && app == s.iam_app_id && failed {
             break;
         }
     }
@@ -174,8 +176,8 @@ async fn coordinate_inner(
         ));
     }
     if action == "import" {
-        let row=sqlx::query("SELECT snapshot,receipt FROM environment_services WHERE environment_id=? AND app_id='tos>iam' AND operation_id=?")
-            .bind(id).bind(operation_id).fetch_one(&mut *tx).await?;
+        let row=sqlx::query("SELECT snapshot,receipt FROM environment_services WHERE environment_id=? AND app_id=? AND operation_id=?")
+            .bind(id).bind(&s.iam_app_id).bind(operation_id).fetch_one(&mut *tx).await?;
         let payload: Value = serde_json::from_str(&row.get::<String, _>("snapshot"))
             .map_err(|e| anyhow::anyhow!(e))?;
         let imports: Value = serde_json::from_str(&row.get::<String, _>("receipt"))
@@ -208,13 +210,22 @@ async fn coordinate_inner(
     if action == "retire" {
         // Keep the core coordinators and every surviving application linked.
         for app in retired_apps.as_array().unwrap() {
-            if app != "tos>iam" && app.as_str() != Some(s.app_id.as_str()) {
+            if app.as_str() != Some(s.iam_app_id.as_str())
+                && app.as_str() != Some(s.app_id.as_str())
+            {
                 sqlx::query("DELETE FROM environment_services WHERE environment_id=? AND app_id=? AND operation_id=?").bind(id).bind(app.as_str().unwrap()).bind(operation_id).execute(&mut *tx).await?;
             }
         }
     }
     if action == "clean" {
-        sqlx::query("DELETE FROM environment_services WHERE environment_id=? AND app_id NOT IN ('tos>iam',?)").bind(id).bind(&s.app_id).execute(&mut *tx).await?;
+        sqlx::query(
+            "DELETE FROM environment_services WHERE environment_id=? AND app_id NOT IN (?,?)",
+        )
+        .bind(id)
+        .bind(&s.iam_app_id)
+        .bind(&s.app_id)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("UPDATE environment_services SET snapshot='{}',source_revision=0,receipt=NULL,error=NULL WHERE environment_id=?").bind(id).execute(&mut *tx).await?;
     }
     if action == "retire" {

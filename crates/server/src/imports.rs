@@ -177,7 +177,7 @@ pub async fn import(
     let imports: Vec<Value> = changes.values().cloned().collect();
     // IAM prepares all isolated authentication records before application services.
     let mut participants = changes;
-    participants.insert("tos>iam".into(), json!({"imports":imports}));
+    participants.insert(s.iam_app_id.clone(), json!({"imports":imports}));
     participants
         .entry(s.app_id.clone())
         .or_insert_with(|| json!({}));

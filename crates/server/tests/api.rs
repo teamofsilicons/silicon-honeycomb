@@ -120,6 +120,7 @@ async fn setup(accept: bool) -> (State, Arc<AtomicBool>) {
         management: Arc::new(Manager { accept }),
         storage: Arc::new(Store),
         app_id: "tos>honeycomb".into(),
+        iam_app_id: "tos>iam".into(),
         iam_login_url: "https://iam.example.com".into(),
         encryption_key: [7; 32],
         webhook_secret: "test-secret".into(),

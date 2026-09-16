@@ -287,6 +287,7 @@ async fn main() -> anyhow::Result<()> {
         management: Arc::new(FixtureManagement::default()),
         storage: Arc::new(FixtureStorage::default()),
         app_id: "tos>honeycomb".into(),
+        iam_app_id: "tos>iam".into(),
         iam_login_url: format!("http://127.0.0.1:{port}"),
         encryption_key: [7; 32],
         webhook_secret: "fixture-webhook-secret-0000000000000".into(),
