@@ -25,10 +25,12 @@ has no management API in `IAM-HANDOFF.md`.
    revoked memberships and service-only requests cannot perform that mutation.
    The management service credential is already provisioned; no replacement is
    needed merely to add the membership scope.
-4. Configure queued management notifications to the now-live receiver at
+4. The management notification receiver is configured at
    `https://backend.honeycomb.teamofsilicons.com/management/webhook/`, using the
-   existing independent management notification signing key. Verify signed
-   delivery, retry and authoritative revision reconciliation.
+   independent management notification signing key. A read-only production
+   database check confirmed durable receipt of event
+   `2c4ac254-4428-42a2-b590-72df67e32e58` for `tos>honeycomb`, revision 3.
+   Live retry and reconciliation of an adopted catalog application remain to verify.
 
 ### After Briefcase setup
 
@@ -110,7 +112,9 @@ registry dependency once available. No IAM source was edited or published here.
   held in AWS Secrets Manager as `silicon-honeycomb/production/iam-management`.
   Its environment variable names match Honeycomb's existing backend adapter.
   Credentials stay outside this repository.
-- IAM notifications are queued pending Honeycomb's live HTTPS receiver.
+- IAM's worker delivered its real revision-3 notification, and Honeycomb's
+  persisted receipt was verified through SSM on 2026-09-16. Receipt of this
+  bootstrap identity event does not prove catalog adoption or UI reconciliation.
   Scheduled testing remains disabled. The rollout does not resolve the contract
   gaps below or establish authenticated actor mutations through Honeycomb.
 
