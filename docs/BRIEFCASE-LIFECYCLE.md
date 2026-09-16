@@ -1,6 +1,7 @@
 # Briefcase lifecycle participant
 
-The management adapter sends Briefcase operations to
+The management adapter routes each configured participant by its application ID.
+Briefcase uses the same participant contract as other services:
 `PUT /internal/honeycomb/organizations/{org_id}/testing-environments/{environment_id}/operations/{operation_id}`.
 The coordinator's JSON operation is sent unchanged. Retries reuse the same operation ID and body;
 Briefcase stores pending, completed and failed receipts. Honeycomb accepts completion only for
@@ -12,7 +13,15 @@ or configure a token when registering an app or creating a testing environment.
 Existing credentials are reused across deployments. The running services load
 `BRIEFCASE_HONEYCOMB_SERVICE_TOKEN` internally; it remains independent of application
 secrets, testing keys and user sessions. Honeycomb's management adapter also uses
-its existing `IAM_HONEYCOMB_SERVICE_CREDENTIAL` and HTTPS `BRIEFCASE_BASE_URL`.
+its existing `IAM_HONEYCOMB_SERVICE_CREDENTIAL`. The
+`HONEYCOMB_LIFECYCLE_PARTICIPANTS` JSON configuration binds each `app_id` to an HTTPS
+`base_url` and a `token_env` secret reference. Unknown apps fail closed; catalog
+metadata cannot select a control destination or inherit another app's credential.
+
+The configured `IAM_APPLICATION_ID` identifies the identity authority for lifecycle
+ordering and core-record preservation; `HONEYCOMB_APP_ID` identifies the local
+coordinator. `BRIEFCASE_APP_ID` selects the storage OBO audience. None of these roles
+is selected by comparing an app with a literal organization or application name.
 
 For self-hosted deployments, provision a dedicated shared token of at least 32
 visible ASCII characters through the deployment secret store. Normal and automatic

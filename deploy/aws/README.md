@@ -37,6 +37,14 @@ are absent, and refuses conflicting existing credentials. It preserves unrelated
 runtime settings and never prints the credential. The deploying AWS identity needs
 read/write access to both service secrets; service runtime roles remain separate.
 Use `--briefcase-region` and `--briefcase-secret` for a different managed deployment.
+The helper reads `BRIEFCASE_IAM_APP_ID` and `BRIEFCASE_PUBLIC_BASE_URL` from the
+Briefcase runtime configuration. If CloudFormation injects the API URL outside its
+secret, pass that exact deployed value as `--briefcase-public-base-url`. It writes
+Honeycomb's `BRIEFCASE_APP_ID`, backend origin, and
+`HONEYCOMB_LIFECYCLE_PARTICIPANTS` entry without replacing unrelated participants.
+Conflicting identity or destination configuration stops deployment. Set
+`IAM_APPLICATION_ID` to the registered identity-authority app and
+`HONEYCOMB_APP_ID` to the coordinator app in Honeycomb's backend runtime map.
 Provisioning secrets does not reload a running Briefcase service: its deployment
 must load the shared secret too. Ordinary environment creation never rotates or
 re-provisions this service credential.
