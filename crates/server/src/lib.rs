@@ -2,6 +2,7 @@
 pub mod activation;
 pub mod api;
 pub mod auth;
+pub mod briefcase_management;
 pub mod catalog;
 pub mod contracts;
 pub mod control;

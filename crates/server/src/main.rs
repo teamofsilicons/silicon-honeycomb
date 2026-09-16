@@ -53,14 +53,21 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .filter(|v| !v.is_empty())
     {
-        state.management = Arc::new(
-            silicon_honeycomb_server::iam_management::IamManagement::new(
-                &iam_url,
-                credential,
-                state.db.clone(),
-                encryption_key,
-            )?,
-        );
+        let mut management = silicon_honeycomb_server::iam_management::IamManagement::new(
+            &iam_url,
+            credential,
+            state.db.clone(),
+            encryption_key,
+        )?;
+        if let Some(token) = std::env::var("BRIEFCASE_HONEYCOMB_SERVICE_TOKEN")
+            .ok()
+            .filter(|v| !v.is_empty())
+        {
+            let base = std::env::var("BRIEFCASE_BASE_URL")
+                .unwrap_or_else(|_| "https://backend.briefcase.teamofsilicons.com".into());
+            management = management.with_briefcase(&base, token)?;
+        }
+        state.management = Arc::new(management);
     }
     let notifications = std::env::var("IAM_HONEYCOMB_NOTIFICATION_SIGNING_KEY")
         .ok()
