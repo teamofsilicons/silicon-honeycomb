@@ -188,12 +188,14 @@ pub trait ArchiveStorage: Send + Sync {
     async fn read(
         &self,
         reference: &str,
+        org: &str,
         actor_token: Option<&str>,
         environment: Option<&str>,
     ) -> Result<Vec<u8>>;
     async fn publish(
         &self,
         reference: &str,
+        org: &str,
         actor_token: &str,
         environment: Option<&str>,
         operation_id: &str,

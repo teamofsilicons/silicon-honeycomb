@@ -22,7 +22,7 @@ impl Briefcase {
         body: Value,
         token: &str,
         environment: Option<&str>,
-        org: Option<&str>,
+        org: &str,
     ) -> Result<(reqwest::Response, Option<String>)> {
         let bytes = serde_json::to_vec(&body).map_err(|e| anyhow::anyhow!(e))?;
         let iam = match environment {
@@ -87,7 +87,7 @@ impl Briefcase {
                 body,
                 token,
                 environment,
-                Some(file.org),
+                file.org,
             )
             .await?;
         let reservation: Value = response
@@ -139,7 +139,7 @@ impl Briefcase {
                 json!({"operation_id":operation_id,"upload_id":upload_id}),
                 token,
                 environment,
-                Some(file.org),
+                file.org,
             )
             .await?;
         let committed: Value = response
@@ -205,7 +205,7 @@ impl ArchiveStorage for Briefcase {
             )
             .await?;
         let published = self
-            .publish_file(&reference, token, environment, operation_id, Some(org))
+            .publish_file(&reference, token, environment, operation_id, org)
             .await?;
         let published: Value = serde_json::from_str(&published).map_err(|e| anyhow::anyhow!(e))?;
         let path = published["public_path"]
@@ -227,6 +227,7 @@ impl ArchiveStorage for Briefcase {
     async fn read(
         &self,
         reference: &str,
+        org: &str,
         token: Option<&str>,
         environment: Option<&str>,
     ) -> Result<Vec<u8>> {
@@ -253,7 +254,7 @@ impl ArchiveStorage for Briefcase {
                 json!({"entry_id":entry,"download":true}),
                 token,
                 environment,
-                None,
+                org,
             )
             .await?
             .0
@@ -284,11 +285,12 @@ impl ArchiveStorage for Briefcase {
     async fn publish(
         &self,
         reference: &str,
+        org: &str,
         token: &str,
         environment: Option<&str>,
         operation_id: &str,
     ) -> Result<String> {
-        self.publish_file(reference, token, environment, operation_id, None)
+        self.publish_file(reference, token, environment, operation_id, org)
             .await
     }
 }
@@ -300,7 +302,7 @@ impl Briefcase {
         token: &str,
         environment: Option<&str>,
         operation_id: &str,
-        org: Option<&str>,
+        org: &str,
     ) -> Result<String> {
         let stored: Option<Value> = serde_json::from_str(reference).ok();
         let entry = stored

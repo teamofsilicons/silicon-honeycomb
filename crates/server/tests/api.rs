@@ -93,10 +93,17 @@ impl ArchiveStorage for Store {
     ) -> Result<String> {
         Ok("entry-id".into())
     }
-    async fn read(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
+    async fn read(&self, _: &str, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
         Ok(vec![])
     }
-    async fn publish(&self, reference: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+    async fn publish(
+        &self,
+        reference: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<String> {
         Ok(reference.into())
     }
 }
@@ -2317,10 +2324,17 @@ impl ArchiveStorage for PublicationStorage {
     ) -> Result<String> {
         unreachable!()
     }
-    async fn read(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
+    async fn read(&self, _: &str, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
         Ok(vec![])
     }
-    async fn publish(&self, reference: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+    async fn publish(
+        &self,
+        reference: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<String> {
         *self
             .calls
             .lock()
@@ -3916,10 +3930,10 @@ impl ArchiveStorage for LogoStorage {
     ) -> Result<String> {
         unreachable!()
     }
-    async fn read(&self, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
+    async fn read(&self, _: &str, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
         unreachable!()
     }
-    async fn publish(&self, _: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+    async fn publish(&self, _: &str, _: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
         unreachable!()
     }
 }

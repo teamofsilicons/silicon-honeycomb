@@ -191,8 +191,8 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
     let app = request["app_id"].as_str().unwrap();
     let publication = request["request_id"].as_str().unwrap();
     let revision = request["configuration_revision"].as_i64().unwrap();
-    let current: i64 =
-        sqlx::query_scalar("SELECT revision FROM applications WHERE plane=? AND app_id=?")
+    let (current, org): (i64, String) =
+        sqlx::query_as("SELECT revision,org_id FROM applications WHERE plane=? AND app_id=?")
             .bind(&c.plane)
             .bind(app)
             .fetch_one(&s.db)
@@ -258,6 +258,7 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
             .storage
             .publish(
                 &reference,
+                &org,
                 token,
                 c.environment.as_deref(),
                 &archive_operation,

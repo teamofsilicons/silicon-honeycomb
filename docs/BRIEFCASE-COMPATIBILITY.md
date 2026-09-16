@@ -40,10 +40,12 @@ supports isolated requests selected by the IAM test application secret.
 - The tags requirement follows Briefcase
   `src/infrastructure/iam/official.rs::authorization` and IAM migration 0093;
   missing tags cannot safely be converted into an empty tag list.
-- Honeycomb must retain/pass the owning organization for delegated reads and
-  link publication. Its upload paths pass the organization, but archive read and
-  publication currently omit it; IAM rejects an omitted selection when a token
-  authorizes multiple organizations. This is a Honeycomb adapter issue.
+- Honeycomb now passes the resource's owning organization for delegated reads
+  and link publication as well as upload. The archive storage interface requires
+  that organization, including reads of older entry-ID-only references. HTTP
+  contract tests verify explicit selection for a caller owned by a different
+  organization, exact signed request bytes, and production/test isolation. Live
+  multi-organization acceptance still depends on the missing scopes and consent.
 
 ## Required for full shared testing compatibility
 

@@ -1005,6 +1005,7 @@ async fn upload_release(
             .storage
             .publish(
                 &reference,
+                &app.org_id,
                 c.token.as_deref().unwrap(),
                 c.environment.as_deref(),
                 &op,
@@ -1103,6 +1104,7 @@ async fn download(
         .storage
         .read(
             &row.get::<String, _>("storage_ref"),
+            &app.org_id,
             c.token.as_deref(),
             c.environment.as_deref(),
         )

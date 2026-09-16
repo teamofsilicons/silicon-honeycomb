@@ -213,7 +213,7 @@ impl ArchiveStorage for FixtureStorage {
         );
         Ok(id)
     }
-    async fn read(&self, id: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
+    async fn read(&self, id: &str, _: &str, _: Option<&str>, _: Option<&str>) -> Result<Vec<u8>> {
         self.0
             .lock()
             .unwrap()
@@ -221,7 +221,14 @@ impl ArchiveStorage for FixtureStorage {
             .cloned()
             .ok_or_else(Error::missing)
     }
-    async fn publish(&self, reference: &str, _: &str, _: Option<&str>, _: &str) -> Result<String> {
+    async fn publish(
+        &self,
+        reference: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<String> {
         Ok(reference.into())
     }
 }
