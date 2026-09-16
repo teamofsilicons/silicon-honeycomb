@@ -1,29 +1,75 @@
 # Briefcase registration status — 2026-09-16
 
-**Awaiting the user's explicit confirmation before submitting a new registration.**
-See [the complete registration preview](BRIEFCASE-REGISTRATION-PREVIEW.md).
+**Created directly in production IAM and Honeycomb, public and approved.**
 
-The user rejected adoption and requested a completely new app with fresh IAM
-credentials. They then explicitly requested removing every existing production IAM
-app except Honeycomb directly from the database, freeing `tos>briefcase` for reuse.
-That reset completed successfully; see [operator evidence](../deploy/operator/README.md).
-Honeycomb's identity and management connection were preserved and verified live.
+The user explicitly authorized direct database creation and public approval instead
+of the normal registration request because the planned archive URL does not resolve.
+No normal registration request was sent. This is an audited operator bootstrap,
+not a successful archive upload or remote package validation.
 
-No new Briefcase record has been created in IAM or Honeycomb, and no application
-secret has been issued. The new webhook signing secret and normal registration
-payload are prepared outside Git with owner-only permissions. The six-target
-`briefcase-1.1.0.tar.gz` archive was found and passed Honeycomb validation.
+## Applied configuration
 
-The old Briefcase IAM identity and credentials are gone as requested. Following
-confirmed registration, its fresh credentials must be configured in the service.
-A planned permanent archive URL now points to Honeycomb's actual Briefcase folder
-and filename; it is not a live uploaded release. Upload OBO proofs for file creation,
-reservation and commit are prepared with a 60-minute lifetime.
-Archive upload and publication remain separate actions and have not been completed.
+- App: `tos>briefcase`, organization `tos`, name Silicon Briefcase.
+- Fresh IAM UUID: `12f4471e-f078-45a0-99c1-1484437d0cf1`.
+- IAM: public, verified, revision 3, configuration revision 1, credential version 1.
+- Honeycomb: public, active, desired/effective configuration revision 1.
+- All ten declared IAM scopes approved with `provider_approval` basis.
+- Eleven OBO endpoints enabled. File creation, upload reservation and upload commit
+  proofs last 3,600 seconds (60 minutes); the other endpoints retain 300 seconds.
+- Fresh application and webhook credentials are saved in the protected local
+  `~/.config/silicon/honeycomb/briefcase-fresh-20260916/credentials.json` (0600).
+  Secrets are not included in Git or operator command logs.
+- Honeycomb's existing IAM identity and connection were preserved.
 
-## Earlier backend maintenance
+[Full configuration and planned archive URLs](BRIEFCASE-REGISTRATION-PREVIEW.md).
 
-`beb9c63` added audited legacy revision-zero adoption support, with passing server,
-Clippy, formatting, dependency and Python import checks. Deployment
-`482946e1-e129-4fbc-9012-ba0ec253501c` succeeded on Honeycomb's AWS host. That adoption
-path was never applied to Briefcase and is not used for this new registration.
+## Release and remaining service work
+
+Release `1.1.0` is cataloged with the validated local archive's exact SHA-256
+`ccee3f85e257e61faa826f65dfff7b42d7964471cd3ea127d69b0f161281019e`
+and size 20,711,083 bytes. Its storage reference explicitly records `pending_upload`
+and `remote_archive_validated: false`.
+
+Planned public bytes URL:
+<https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment>
+
+The archive has **not** been uploaded. Briefcase still needs its fresh credentials
+configured, then the matching archive uploaded at the exact planned path with
+public link access enabled. Public catalog visibility does not make the missing
+archive downloadable. Honeycomb verifies downloaded bytes against the stored hash.
+
+## Production verification
+
+- IAM management GET confirms public/verified status, ten approved scopes, eleven
+  endpoints and all proof lifetimes.
+- Fresh application secret successfully authenticated to OAuth introspection:
+  HTTP 200 with `active: false` for an intentionally nonexistent probe token.
+- Honeycomb unauthenticated application and catalog reads return HTTP 200, public
+  active Briefcase and latest version `1.1.0`.
+- Background IAM reconciliation accepted revision 3 without an error and retained
+  public visibility. IAM and Honeycomb publication gates are approved.
+- No end-to-end archive download or running Briefcase login is claimed.
+
+## Operator evidence
+
+IAM transaction passed a rollback rehearsal before commit; database constraints
+remained enabled. Backup: IAM host
+`/etc/silicon-iam/operator-briefcase-20260916/before-create.dump`.
+
+- IAM rehearsal SSM: `481435b3-09ad-4988-9420-26b3f9507475`.
+- IAM backup/commit SSM: `057c4f61-558c-49db-96c8-f40d314efd42`.
+- Honeycomb rehearsal SSM: `42a028fa-e347-4602-953f-c1b7969d0167`.
+- Honeycomb commit SSM: `a3f1bf93-ef91-42ca-93ab-4a918607fe24`.
+- Honeycomb verification SSM: `7aebc44b-40fb-4ecc-b1fd-156f3cf2c4d2`.
+- SQLite backup: Honeycomb host
+  `/var/lib/silicon-honeycomb/backups/briefcase-direct-20260916T032201Z/honeycomb.db`.
+- Explicit operator publication operation: `4ceee2f5-6173-4b8f-8c14-29e5689d940b`.
+- Publication: `a6231052-1406-4f31-97e2-4b4fa02b5fff`.
+
+RDS master credentials were rotated through AWS to restore operator database
+access after both stored credential versions were rejected. Runtime API database
+credentials remained separate and continued authenticating.
+
+The earlier user-authorized removal of old IAM applications is documented in
+[the reset evidence](../deploy/operator/README.md). The earlier legacy adoption
+implementation (`beb9c63`) was never used for Briefcase.

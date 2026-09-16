@@ -52,6 +52,7 @@ Carbon, organization, membership records and 35 testing environment records rema
 The separate testing database was not reset. Old production app credentials no
 longer authenticate; their running services require new registration/configuration.
 
-The new Briefcase registration is prepared separately. The user requested explicit
-confirmation before submission, so no new application has been created or archive
-uploaded. Review `docs/BRIEFCASE-REGISTRATION-PREVIEW.md` before confirmation.
+The subsequent user instruction authorized direct database creation and public
+approval of fresh Briefcase, without a normal registration request. See
+`docs/BRIEFCASE-REGISTRATION-STATUS.md` for the separate bootstrap result. The archive
+remains unuploaded.

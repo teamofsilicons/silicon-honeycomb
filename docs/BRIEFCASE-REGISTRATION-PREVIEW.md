@@ -1,22 +1,22 @@
 # Briefcase new-app registration preview
 
-**Status: prepared; not submitted. User confirmation is required before registration.**
+**Status: direct database bootstrap completed; public and approved in IAM and Honeycomb.**
 
-This creates a new IAM identity and fresh application credentials through the ordinary authenticated Honeycomb `apps create` flow. No previous identity or credential is adopted.
+The user explicitly authorized direct database creation and public approval because the planned package URL does not resolve yet. No normal registration request was sent. This creates a fresh IAM identity and credentials; no previous identity or credential is adopted. See [current status and verification](BRIEFCASE-REGISTRATION-STATUS.md).
 
 ## Application
 
 - Organization: `tos`
 - Application ID: `tos>briefcase`
 - Display name: Silicon Briefcase
-- Initial visibility: private to `tos`
+- Visibility: public
 - Testing idle limit: 30 days
 - Website: https://briefcase.teamofsilicons.com
 - Documentation: https://docs.briefcase.teamofsilicons.com
 - Backend origin: https://backend.briefcase.teamofsilicons.com
 - Webhook: https://backend.briefcase.teamofsilicons.com/webhook/
 - Webhook categories: `full`
-- New webhook signing secret: prepared in a protected local file; omitted here.
+- Fresh application and webhook secrets: generated and saved with owner-only permissions outside Git; omitted here.
 
 ## Description
 
@@ -77,9 +77,8 @@ resolve to a verified release. Public download additionally requires effective
 public link access; the folder name `public` alone does not grant access.
 
 The future link is saved in the local release plan alongside the validated archive
-hash and size. The normal app registration payload has no archive URL field;
-Honeycomb currently creates release records after a successful Briefcase upload.
-No application or release record is being submitted as part of this draft edit.
+hash and size. The operator bootstrap records this path directly instead of sending
+the normal registration/upload request. It does not assert that an upload occurred.
 
 ## Release archive
 
@@ -89,4 +88,4 @@ No application or release record is being submitted as part of this draft edit.
 - SHA-256: `ccee3f85e257e61faa826f65dfff7b42d7964471cd3ea127d69b0f161281019e`
 - Honeycomb validation: passed for Linux, macOS and Windows on x86_64 and aarch64.
 
-Registration, archive upload, service credential configuration, and publication are separate steps. No new application secret has been issued yet; normal registration returns it once. Fresh credentials must subsequently be configured in Briefcase before its login/storage can work. The archive has not been uploaded.
+Fresh credentials have been issued and authenticated against production IAM. They must be configured in the Briefcase service before its login/storage can work. The archive has not been uploaded, and a public catalog entry does not make its download available.
