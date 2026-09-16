@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/teamofsilicons/silicon-iam",
-  "commit": "7abd5756afd1a370b6342b87aad57ab4c730a7a6",
-  "version": "1.10.0",
+  "commit": "21e61b4f6de0b35e1588db9ea651a27409dc7b0e",
+  "version": "1.11.0",
   "note": "Official source snapshot from local upstream commit, not published to crates.io. Source files unchanged; package manifest expands upstream workspace settings. Replace with the registry release when available.",
   "source_sha256": {
     "src/api/application_mutations.rs": "2369636501489ff707d7959d462a7e9e877721aa2ab488608f86faff9a547697",
@@ -25,18 +25,19 @@
     "src/api/system.rs": "84f37af5590c5b9ec2e51964f647e7124c2be5d336acb78f5d2768c0a1a45cb4",
     "src/api/tags.rs": "b4d7f2dbfa88009a5463272819cfc374560ed0d70b2ea20ebfd40c88f032a8dd",
     "src/api/trust.rs": "ab28b335f5aac2131bd5085a2e048a9516eb8a6c222d1f7448aad15c68cd8d5b",
-    "src/client.rs": "8fd47888f9c0abaa1849244aebf3b462e116387a8bc337b9190e55e7e7ae8f49",
+    "src/client.rs": "28ff77972322b636f7347a652bbba2d20063ffbb290abbfb3c5e5a77752da811",
     "src/credentials.rs": "7479b8a935e9c5ed046b22e88be77dfbf64301a3e82a0068eeaeba79722f3be9",
     "src/error.rs": "a976719d135096ad9a8b40484311af897915e8c76128819e2ec481bcab6dd9e1",
-    "src/honeycomb.rs": "f4be15142782764442e5dabf479451f931dcd83999f78c405141683485ee7f06",
+    "src/honeycomb/contracts.rs": "29b87e9666631fc05a277a2816c79e18a820b2d8ab3100693c66c379b881d023",
+    "src/honeycomb.rs": "0df98c97ded4ef0a8fe2dce0b3524d485f62756161965da680dea28f09856e06",
     "src/lib.rs": "16e11323a37865bac6ea872486709d5466ce8e56fa095975991e58265379ccdd",
-    "src/models.rs": "b2516f1b24c909a98fcc0456b145b9bdf1fff40399a2bf71e2a0e0a5ba63e816",
+    "src/models.rs": "c3145ac7d4a4ea8c7c630301451f972bec4cd6eb6d3922cfe96f563cb312bc12",
     "src/models_manual.rs": "efe601fce938858913424c8257498f2e700a714ed82b9242d49955eca5251629",
     "src/request.rs": "8fd3c0a7974b7c505c3a284853b4209819017b1c438913d6056d5f7da04ce83e",
     "src/support.rs": "a5c8b6bf7b94ec7d138244a3303dc2bbab9503b1277c9fef679cd5ce61dd22a6",
     "src/telemetry.rs": "92abcb20df93dbd3ce022858c1f3258482aba19c40b00d19737c4728ec47bb0b",
     "src/telemetry_routes.json": "4144dee1ec0743050e560c714159bac5664de7b24a37f32519355e8ced776f9d",
     "src/update.rs": "21e7aa2d379783a50981d094d133e1993cce653e619fcf6f837530448c1013c9",
-    "src/webhook.rs": "5fb9dc95a9ef83446dd037ccd807ba120a3b443221231b841e1373e22e3da3b8"
+    "src/webhook.rs": "19d5d10f5fb3aa10da1378c84114921ff62d0651d1730d5233046396a872e89e"
   }
 }
