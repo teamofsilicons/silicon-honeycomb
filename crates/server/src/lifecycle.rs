@@ -308,14 +308,9 @@ async fn coordinate_inner(
         }
     }
     if action == "clean" {
-        sqlx::query(
-            "DELETE FROM environment_services WHERE environment_id=? AND app_id NOT IN (?,?)",
-        )
-        .bind(id)
-        .bind(&s.iam_app_id)
-        .bind(&s.app_id)
-        .execute(&mut *tx)
-        .await?;
+        // Cleaning removes imports and their data, but participants still own
+        // environment fences and capacity. Keep them linked so later rotation,
+        // deletion, restoration and purge reach every service that was prepared.
         sqlx::query("UPDATE environment_services SET snapshot='{}',source_revision=0,receipt=NULL,error=NULL WHERE environment_id=?").bind(id).execute(&mut *tx).await?;
     }
     if action == "retire" {

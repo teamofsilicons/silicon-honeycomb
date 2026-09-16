@@ -4630,7 +4630,7 @@ async fn configured_identity_environment_creation_uses_service_roles() {
     assert_eq!(*services.calls.lock().unwrap(), ["vendor>identity"]);
 }
 #[tokio::test]
-async fn configured_identity_clean_runs_identity_first_and_preserves_only_core_roles() {
+async fn cleaned_participants_remain_linked_for_deletion_and_restoration() {
     let (s, services, env) = configured_identity_environment().await;
     let id = env["environment_id"].as_str().unwrap();
     // Old product handles are ordinary participants when another identity and
@@ -4670,11 +4670,44 @@ async fn configured_identity_clean_runs_identity_first_and_preserves_only_core_r
     .fetch_all(&s.db)
     .await
     .unwrap();
-    assert_eq!(participants, ["vendor>coordinator", "vendor>identity"]);
+    assert_eq!(
+        participants,
+        [
+            "aaa>participant",
+            "tos>honeycomb",
+            "tos>iam",
+            "vendor>coordinator",
+            "vendor>identity"
+        ]
+    );
     let ready: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM environment_services WHERE environment_id=? AND state='ready' AND generation=2",
     ).bind(id).fetch_one(&s.db).await.unwrap();
-    assert_eq!(ready, 2);
+    assert_eq!(ready, 5);
+    for (action, revision, state) in [("delete", 2, "deleted"), ("restore", 3, "ready")] {
+        services.calls.lock().unwrap().clear();
+        let (status, result) = call(
+            &s,
+            "POST",
+            &format!("/api/v1/environments/{id}/actions/{action}"),
+            Some("member"),
+            Value::Null,
+            &format!("cleaned-participant-{action}-0001"),
+            Some(revision),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{result}");
+        assert_eq!(result["state"], state);
+        assert_eq!(
+            *services.calls.lock().unwrap(),
+            [
+                "vendor>identity",
+                "aaa>participant",
+                "tos>honeycomb",
+                "tos>iam"
+            ]
+        );
+    }
 }
 
 struct PublicationContractManager {
