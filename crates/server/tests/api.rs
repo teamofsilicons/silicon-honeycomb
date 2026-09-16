@@ -4856,3 +4856,92 @@ async fn publication_review_checks_live_plan_eligibility_and_iam_reason_limits()
         ]
     );
 }
+
+#[tokio::test]
+async fn environment_changes_wait_for_pending_test_configuration_without_mutating_keys() {
+    let (s, services, env) = configured_identity_environment().await;
+    let id = env["environment_id"].as_str().unwrap();
+    let pending = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,'member',?,'configure','vendor>app','fixture',1,1)")
+        .bind(&pending).bind(id).bind(&pending).execute(&s.db).await.unwrap();
+    let before: (i64, i64, i64, String) = sqlx::query_as(
+        "SELECT revision,generation,key_version,key_hash FROM environments WHERE id=?",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    let calls_before = services.calls.lock().unwrap().len();
+    for action in ["clean", "rotate-key", "delete"] {
+        let (status, _) = call(
+            &s,
+            "POST",
+            &format!("/api/v1/environments/{id}/actions/{action}"),
+            Some("member"),
+            Value::Null,
+            &format!("pending-test-{action}-0001"),
+            Some(1),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+    let after: (i64, i64, i64, String) = sqlx::query_as(
+        "SELECT revision,generation,key_version,key_hash FROM environments WHERE id=?",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(calls_before, services.calls.lock().unwrap().len());
+    sqlx::query("UPDATE operations SET state='accepted' WHERE id=?")
+        .bind(pending)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (status, result) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/clean"),
+        Some("member"),
+        Value::Null,
+        "after-test-config-clean-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{result}");
+    assert_eq!(result["state"], "ready");
+}
+
+#[tokio::test]
+async fn root_key_delete_is_rejected_before_lifecycle_state_changes() {
+    let (s, services, env) = configured_identity_environment().await;
+    let id = env["environment_id"].as_str().unwrap();
+    let encrypted: String = sqlx::query_scalar("SELECT encrypted_key FROM environments WHERE id=?")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    let calls_before = services.calls.lock().unwrap().len();
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/environments/{id}/actions/delete"))
+                .header("x-testing-environment-key", s.decrypt(&encrypted).unwrap())
+                .header("idempotency-key", "root-delete-rejected-0001")
+                .header("if-match", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let state: (String, i64) = sqlx::query_as("SELECT state,revision FROM environments WHERE id=?")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, ("ready".into(), 1));
+    assert_eq!(services.calls.lock().unwrap().len(), calls_before);
+}

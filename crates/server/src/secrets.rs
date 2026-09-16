@@ -68,6 +68,15 @@ pub async fn rotate(
                 "Secret rotation requires the current accepted application revision",
             ));
         }
+        if c.plane != "production" {
+            let changing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane='production' AND resource=? AND kind LIKE 'environment.%' AND state='pending')")
+                .bind(&c.plane).fetch_one(&mut *tx).await?;
+            if changing {
+                return Err(Error::conflict(
+                    "Finish the environment lifecycle operation before rotating a test application credential",
+                ));
+            }
+        }
         let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','configure','publication.activate'))")
             .bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
         if pending {

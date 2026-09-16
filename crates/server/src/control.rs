@@ -257,6 +257,15 @@ async fn environment_action_inner(
     let k = key(&h)?;
     let expected = revision(&h)?;
     let (row, actor) = manage(&s, &h, &id).await?;
+    if actor.starts_with("environment-root:")
+        && matches!(action.as_str(), "delete" | "restore" | "purge")
+    {
+        return Err(Error::new(
+            StatusCode::FORBIDDEN,
+            "environment_manager_required",
+            "Sign in as an environment manager to delete, restore or permanently remove this environment.",
+        ));
+    }
     if action == "retry" {
         if row.get::<i64, _>("revision") != expected {
             return Err(Error::conflict("Environment revision changed"));
@@ -319,6 +328,13 @@ async fn environment_action_inner(
     }
     let op = uuid::Uuid::new_v4().to_string();
     let mut tx = s.db.begin().await?;
+    let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE state='pending' AND ((plane='production' AND resource=? AND kind LIKE 'environment.%') OR (plane=? AND kind IN ('configure','secret.rotate','webhook.approve','webhook.rotate'))))")
+        .bind(&id).bind(&id).fetch_one(&mut *tx).await?;
+    if pending {
+        return Err(Error::conflict(
+            "Finish or retry pending environment and test application operations first",
+        ));
+    }
     let rotated: Option<String> = if action == "rotate-key" {
         Some(
             rand::thread_rng()
@@ -339,6 +355,18 @@ async fn environment_action_inner(
         return Err(Error::conflict("Environment revision changed"));
     }
     sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production',?,?,?,?,?,?,?)").bind(&op).bind(actor).bind(k).bind(format!("environment.{action}")).bind(&id).bind(digest).bind(expected+1).bind(now()).execute(&mut *tx).await?;
+    if rotated.is_some() {
+        // IAM authorizes rotation with the previous root while participants accept the new root.
+        // Keep the old key encrypted so an interrupted operation can replay its original authority.
+        sqlx::query("UPDATE operations SET request_json=? WHERE id=?")
+            .bind(
+                json!({"previous_encrypted_key": row.get::<String, _>("encrypted_key")})
+                    .to_string(),
+            )
+            .bind(&op)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query(
         "UPDATE environment_services SET state='pending',operation_id=? WHERE environment_id=?",
     )
