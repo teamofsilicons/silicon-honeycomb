@@ -93,7 +93,7 @@ impl IdentityProvider for FixtureIam {
     }
 }
 #[derive(Default)]
-struct FixtureManagement(Mutex<BTreeMap<String, Value>>);
+struct FixtureManagement(Mutex<BTreeMap<String, Value>>, Arc<FixtureIam>);
 #[async_trait]
 impl Management for FixtureManagement {
     async fn webhook_state(&self, app: &str, _: Option<&str>) -> Result<Value> {
@@ -147,9 +147,38 @@ impl Management for FixtureManagement {
         )
     }
     async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
-        Ok(
-            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("fixture-plan-{}",r["request_id"].as_str().unwrap()),"gates":[]}),
-        )
+        let plan = json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("fixture-plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"honeycomb","scopes":[]}]});
+        self.0.lock().unwrap().insert(
+            format!("plan:{}", plan["plan_id"].as_str().unwrap()),
+            plan.clone(),
+        );
+        Ok(plan)
+    }
+    async fn review_eligibility(
+        &self,
+        plan: &str,
+        provider: &str,
+        actor: &str,
+        env: Option<&str>,
+    ) -> Result<bool> {
+        let identity = self.1.authenticate(actor, env).await?;
+        let plans = self.0.lock().unwrap();
+        let Some(plan) = plans.get(&format!("plan:{plan}")) else {
+            return Ok(false);
+        };
+        if !plan["gates"]
+            .as_array()
+            .is_some_and(|gates| gates.iter().any(|gate| gate["provider"] == provider))
+        {
+            return Ok(false);
+        }
+        Ok(match provider {
+            "honeycomb" => identity.validator,
+            "iam" => false,
+            app => app
+                .split_once('>')
+                .is_some_and(|(org, _)| identity.admin(org)),
+        })
     }
     async fn activate_publication(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         let result = json!({"state":"accepted","operation_id":o["operation_id"],"request_id":o["request_id"],"publication_request_id":o["request_id"],"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"visibility":"public","effective_configuration":o["configuration"]});
@@ -280,11 +309,19 @@ async fn main() -> anyhow::Result<()> {
         let config = json!({"org_id":"tos","local_app_id":id,"name":name,"description":description,"website_url":"https://teamofsilicons.com","docs_url":format!("https://docs.{id}.teamofsilicons.com"),"base_url":format!("https://backend.{id}.teamofsilicons.com"),"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[]});
         sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production',?,'tos',?,?,?,'active',1,1,?,?,?,1,1)").bind(app_id).bind(name).bind(description).bind(visibility).bind(config.to_string()).bind(config.to_string()).bind("fixture-no-secret").execute(&db).await?;
     }
+    let identity = Arc::new(FixtureIam::default());
+    let management = FixtureManagement(
+        Mutex::new(BTreeMap::from([(
+            "plan:fixture-plan".into(),
+            json!({"gates":[{"provider":"tos>briefcase","scopes":["obo:tos>briefcase:files.read"]},{"provider":"honeycomb","scopes":[]}]}),
+        )])),
+        identity.clone(),
+    );
     let state = State {
         telemetry: Default::default(),
         db,
-        identity: Arc::new(FixtureIam::default()),
-        management: Arc::new(FixtureManagement::default()),
+        identity,
+        management: Arc::new(management),
         storage: Arc::new(FixtureStorage::default()),
         app_id: "tos>honeycomb".into(),
         iam_app_id: "tos>iam".into(),
@@ -309,7 +346,7 @@ async fn main() -> anyhow::Result<()> {
         sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot,plan_id) VALUES(?,'production',?,1,'awaiting_scope_review','fixture-requester',1,?,'fixture-plan')")
             .bind(&request_id).bind(&app_id).bind(config.to_string()).execute(&state.db).await?;
         for (provider, scopes) in [
-            ("tos>briefcase", json!(["files.read"])),
+            ("tos>briefcase", json!(["obo:tos>briefcase:files.read"])),
             ("honeycomb", json!([])),
         ] {
             sqlx::query("INSERT INTO review_gates(request_id,provider,scopes) VALUES(?,?,?)")
