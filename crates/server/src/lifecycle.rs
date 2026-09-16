@@ -13,6 +13,23 @@ pub async fn coordinate(
     operation_id: &str,
     actor_token: &str,
 ) -> Result<Value> {
+    coordinate_authorized(s, id, operation_id, actor_token, None).await
+}
+pub async fn coordinate_application(
+    s: &State,
+    id: &str,
+    operation_id: &str,
+    authority: &crate::integration::TestingApplicationAuthority,
+) -> Result<Value> {
+    coordinate_authorized(s, id, operation_id, "", Some(authority)).await
+}
+async fn coordinate_authorized(
+    s: &State,
+    id: &str,
+    operation_id: &str,
+    actor_token: &str,
+    application: Option<&crate::integration::TestingApplicationAuthority>,
+) -> Result<Value> {
     let lease = uuid::Uuid::new_v4().to_string();
     let acquired=sqlx::query("UPDATE operations SET lease_token=?,lease_until=? WHERE id=? AND resource=? AND plane='production' AND state='pending' AND (lease_token IS NULL OR lease_until<?)")
         .bind(&lease).bind(now()+600).bind(operation_id).bind(id).bind(now()).execute(&s.db).await?;
@@ -21,11 +38,19 @@ pub async fn coordinate(
             .bind(id)
             .fetch_one(&s.db)
             .await?;
+        let operation_state: String = sqlx::query_scalar(
+            "SELECT state FROM operations WHERE id=? AND resource=? AND plane='production'",
+        )
+        .bind(operation_id)
+        .bind(id)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(Error::missing)?;
         return Ok(
-            json!({"operation_id":operation_id,"environment_id":id,"state":state,"message":"Operation is already coordinating or completed; inspect its current service receipts"}),
+            json!({"operation_id":operation_id,"environment_id":id,"state":state,"operation_state":operation_state,"message":"Operation is already coordinating or completed; inspect its current service receipts"}),
         );
     }
-    let result = coordinate_inner(s, id, operation_id, actor_token, &lease).await;
+    let result = coordinate_inner(s, id, operation_id, actor_token, &lease, application).await;
     sqlx::query(
         "UPDATE operations SET lease_token=NULL,lease_until=NULL WHERE id=? AND lease_token=?",
     )
@@ -41,6 +66,7 @@ async fn coordinate_inner(
     operation_id: &str,
     actor_token: &str,
     lease: &str,
+    application: Option<&crate::integration::TestingApplicationAuthority>,
 ) -> Result<Value> {
     let environment = sqlx::query("SELECT * FROM environments WHERE id=?")
         .bind(id)
@@ -90,6 +116,7 @@ async fn coordinate_inner(
             "Lifecycle operation has no participating services",
         ));
     }
+    let mut application_credential = None;
     for service in services {
         let held=sqlx::query("UPDATE operations SET lease_until=? WHERE id=? AND lease_token=? AND lease_until>? AND state='pending'")
             .bind(now()+600).bind(operation_id).bind(lease).bind(now()).execute(&s.db).await?;
@@ -112,7 +139,17 @@ async fn coordinate_inner(
         let result = if app == s.app_id {
             apply_local(s,id,action,operation_id,lease).await.map(|_|json!({"state":"completed","operation_id":operation_id,"environment_id":id,"app_id":app,"environment_revision":revision,"generation":generation,"key_version":key_version,"retired_apps":retired_apps}))
         } else if !automatic && app == s.iam_app_id {
-            s.management.lifecycle(&request, actor_token).await
+            if let Some(authority) = application {
+                s.management
+                    .application_lifecycle(
+                        &request,
+                        &authority.authorization,
+                        authority.attachment_key.as_deref(),
+                    )
+                    .await
+            } else {
+                s.management.lifecycle(&request, actor_token).await
+            }
         } else if automatic {
             s.management.retention_lifecycle(&app, &request).await
         } else {
@@ -125,13 +162,22 @@ async fn coordinate_inner(
             Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version && (action!="retire" || receipt["retired_apps"]==retired_apps) => {
                 if action=="import" && app==s.iam_app_id {
                     match accepted_imports(&request["snapshot"]["imports"], &receipt["imports"]) {
-                        Ok(imports)=>{stored_receipt=Some(imports.to_string());None},
+                        Ok(imports)=>{
+                            stored_receipt=Some(imports.to_string());
+                            if let Some(authority) = application {
+                                let credential = &receipt["application_credential"];
+                                if credential["app_id"] == authority.identity.app_id && credential["environment_id"] == id && credential["app_secret"].as_str().is_some_and(|s| !s.is_empty()) {
+                                    application_credential = Some(json!({"app_id":credential["app_id"],"environment_id":id,"app_secret":credential["app_secret"]}));
+                                }
+                            }
+                            None
+                        },
                         Err(message)=>Some(message),
                     }
                 } else { None }
             },
             Ok(_)=>Some("Service has not confirmed the exact operation, environment revision, generation and key version".to_string()),
-            Err(e)=>Some(e.1.message),
+            Err(e)=>Some(if application.is_some() {"Application lifecycle request failed; retry after checking IAM authority and participant readiness".to_owned()} else {e.1.message}),
         };
         let failed = error.is_some();
         let written=sqlx::query("UPDATE environment_services SET state=?,error=?,generation=?,receipt=? WHERE environment_id=? AND app_id=? AND operation_id=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
@@ -256,9 +302,11 @@ async fn coordinate_inner(
         .await?;
     sqlx::query("INSERT INTO audit(id,plane,actor,action,resource,created_at) VALUES(?,'production','honeycomb-coordinator',?,?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(format!("environment.{action}.completed")).bind(id).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(
-        json!({"operation_id":operation_id,"environment_id":id,"state":final_state,"revision":revision,"generation":generation,"key_version":key_version,"operation_state":"accepted"}),
-    )
+    let mut result = json!({"operation_id":operation_id,"environment_id":id,"state":final_state,"revision":revision,"generation":generation,"key_version":key_version,"operation_state":"accepted"});
+    if let Some(credential) = application_credential {
+        result["application_credential"] = credential;
+    }
+    Ok(result)
 }
 async fn apply_local(
     s: &State,
@@ -287,6 +335,10 @@ async fn apply_local(
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM environment_activity_events WHERE environment_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM environment_application_links WHERE environment_id=?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -380,6 +432,7 @@ async fn retire_local(s: &State, environment: &str, operation: &str, lease: &str
             "DELETE FROM audit WHERE plane=? AND resource=?",
             "DELETE FROM outbox WHERE plane=? AND json_extract(payload,'$.app_id')=?",
             "DELETE FROM environment_imports WHERE environment_id=? AND app_id=?",
+            "DELETE FROM environment_application_links WHERE environment_id=? AND app_id=?",
             "DELETE FROM environment_app_activity WHERE environment_id=? AND app_id=?",
             "DELETE FROM environment_activity_events WHERE environment_id=? AND app_id=?",
         ] {

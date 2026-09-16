@@ -10,6 +10,7 @@ use axum::{
     Json,
     extract::{Path, State as S},
     http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -19,11 +20,11 @@ use std::collections::{BTreeMap, VecDeque};
 
 #[derive(Deserialize, Serialize)]
 pub struct Import {
-    app_id: String,
+    pub(crate) app_id: String,
     #[serde(default)]
-    release: Option<String>,
+    pub(crate) release: Option<String>,
     #[serde(default)]
-    refresh: bool,
+    pub(crate) refresh: bool,
 }
 
 pub async fn import(
@@ -31,23 +32,83 @@ pub async fn import(
     h: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<Import>,
+) -> Result<Response> {
+    let (status, value) = import_request(s, h, id, body).await?;
+    Ok((status, [("cache-control", "no-store")], value).into_response())
+}
+async fn import_request(
+    s: State,
+    h: HeaderMap,
+    id: String,
+    body: Import,
+) -> Result<(StatusCode, Json<Value>)> {
+    if crate::control::application::presented(&h)? {
+        let authority = crate::control::application::authenticate(&s, &h).await?;
+        return import_application(s, h, id, body, &authority).await;
+    }
+    import_inner(s, h, id, body, None).await
+}
+pub(crate) async fn import_application(
+    s: State,
+    h: HeaderMap,
+    id: String,
+    body: Import,
+    authority: &crate::integration::TestingApplicationAuthority,
+) -> Result<(StatusCode, Json<Value>)> {
+    if body.app_id != authority.identity.app_id {
+        return Err(Error::forbidden());
+    }
+    import_inner(s, h, id, body, Some(authority)).await
+}
+async fn import_inner(
+    s: State,
+    h: HeaderMap,
+    id: String,
+    body: Import,
+    application: Option<&crate::integration::TestingApplicationAuthority>,
 ) -> Result<(StatusCode, Json<Value>)> {
     let operation_key = key(&h)?;
     let expected = revision(&h)?;
-    let (environment, actor) = manage(&s, &h, &id).await?;
+    let (environment, actor) = if let Some(authority) = application {
+        let environment = sqlx::query("SELECT * FROM environments WHERE id=?")
+            .bind(&id)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(Error::missing)?;
+        let attachment = authority.attachment_key.as_deref().is_some_and(|key| {
+            hex::encode(Sha256::digest(key)) == environment.get::<String, _>("key_hash")
+                && environment.get::<String, _>("state") == "ready"
+        });
+        if !crate::control::application::owns(&environment, authority) && !attachment {
+            return Err(Error::forbidden());
+        }
+        (environment, crate::control::application::actor(authority))
+    } else {
+        manage(&s, &h, &id).await?
+    };
     // Authenticate any supplied user token in production. A root key is only
     // environment authority and cannot make a private dependency discoverable.
     let mut production_headers = h.clone();
     production_headers.remove("x-testing-environment-key");
-    let c = context(&s, &production_headers).await?;
+    let c = if application.is_none() {
+        Some(context(&s, &production_headers).await?)
+    } else {
+        None
+    };
     let digest = hex::encode(Sha256::digest(
-        json!({"kind":"environment.import","environment":id,"revision":expected,"body":body})
+        json!({"kind":"environment.import","environment":id,"revision":if application.is_some() {None} else {Some(expected)},"body":body})
             .to_string(),
     ));
     let mut tx = s.db.begin().await?;
     if let Some(op)=sqlx::query("SELECT id,request_hash,state FROM operations WHERE plane='production' AND actor=? AND idempotency_key=?")
         .bind(&actor).bind(operation_key).fetch_optional(&mut *tx).await? {
         if op.get::<String,_>("request_hash")!=digest {return Err(Error::conflict("Idempotency key already used for different input"));}
+        if let Some(authority) = application {
+            let operation: String = op.get("id");
+            drop(tx);
+            let result = crate::lifecycle::coordinate_application(&s, &id, &operation, authority).await?;
+            return Ok((StatusCode::ACCEPTED, Json(result)));
+        }
         return Ok((StatusCode::ACCEPTED,Json(json!({"operation_id":op.get::<String,_>("id"),"state":op.get::<String,_>("state")}))));
     }
     if environment.get::<i64, _>("revision") != expected
@@ -78,7 +139,13 @@ pub async fn import(
                 .await?
                 .ok_or_else(Error::missing)?;
         if source.get::<String, _>("visibility") != "public"
-            && !c.member(&source.get::<String, _>("org_id"))
+            && !application.map_or_else(
+                || {
+                    c.as_ref()
+                        .is_some_and(|c| c.member(&source.get::<String, _>("org_id")))
+                },
+                |a| a.identity.org_id == source.get::<String, _>("org_id"),
+            )
         {
             return Err(Error::missing());
         }
@@ -158,6 +225,10 @@ pub async fn import(
         visited.insert(app, snapshot);
     }
     if changes.is_empty() {
+        drop(tx);
+        if let Some(authority) = application {
+            crate::control::application::link(&s, &id, authority, "ready").await?;
+        }
         return Ok((
             StatusCode::OK,
             Json(
@@ -185,8 +256,21 @@ pub async fn import(
         sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,?,?,?,'pending',?,?) ON CONFLICT(environment_id,app_id) DO UPDATE SET source_revision=excluded.source_revision,snapshot=excluded.snapshot,state='pending',operation_id=excluded.operation_id,error=NULL,receipt=NULL")
             .bind(&id).bind(app).bind(snapshot["source_revision"].as_i64().unwrap_or(0)).bind(snapshot.to_string()).bind(&operation).bind(environment.get::<i64,_>("generation")).execute(&mut *tx).await?;
     }
+    if let Some(authority) = application {
+        sqlx::query("INSERT INTO environment_application_links(environment_id,application_id,app_id,last_activity,state) VALUES(?,?,?,?,'pending') ON CONFLICT(environment_id,application_id) DO UPDATE SET last_activity=excluded.last_activity,state='pending'")
+            .bind(&id).bind(&authority.identity.application_id).bind(&authority.identity.app_id).bind(now()).execute(&mut *tx).await?;
+    }
     tx.commit().await?;
-    let result =
-        crate::lifecycle::coordinate(&s, &id, &operation, c.token.as_deref().unwrap_or("")).await?;
+    let result = if let Some(authority) = application {
+        crate::lifecycle::coordinate_application(&s, &id, &operation, authority).await?
+    } else {
+        crate::lifecycle::coordinate(
+            &s,
+            &id,
+            &operation,
+            c.as_ref().and_then(|c| c.token.as_deref()).unwrap_or(""),
+        )
+        .await?
+    };
     Ok((StatusCode::ACCEPTED, Json(result)))
 }

@@ -34,6 +34,7 @@ pub struct Client {
     http: reqwest::Client,
     base: Url,
     token: Option<String>,
+    application: Option<(String, String)>,
     environment: Option<String>,
     telemetry: bool,
 }
@@ -88,6 +89,7 @@ impl Client {
                 .build()?,
             base,
             token: None,
+            application: None,
             environment: None,
             telemetry: true,
         })
@@ -122,10 +124,32 @@ impl Client {
     pub fn with_token(&self, token: impl Into<String>) -> Self {
         Self {
             token: Some(token.into()),
+            application: None,
             ..self.clone()
         }
     }
+    /// Production app credentials authorize only app-owned environment control.
+    /// Use the create request's testing_key field to attach; never select a test plane.
+    pub fn with_application(&self, app_id: &str, app_secret: &str) -> Result<Self> {
+        if !valid_app_id(app_id)
+            || app_secret.is_empty()
+            || app_secret.len() > 2048
+            || self.environment.is_some()
+        {
+            bail!(
+                "Application environment control requires a valid app ID and production credential"
+            );
+        }
+        Ok(Self {
+            application: Some((app_id.to_owned(), app_secret.to_owned())),
+            token: None,
+            ..self.clone()
+        })
+    }
     pub fn with_environment(&self, key: impl Into<String>) -> Result<Self> {
+        if self.application.is_some() {
+            bail!("Use the application create request to attach a testing key");
+        }
         let key = key.into();
         if key.len() != 32 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
             bail!(
@@ -164,6 +188,9 @@ impl Client {
             );
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
+        }
+        if let Some((app_id, secret)) = &self.application {
+            request = request.basic_auth(app_id, Some(secret));
         }
         if let Some(env) = &self.environment {
             request = request.header("x-testing-environment-key", env);
@@ -621,6 +648,25 @@ impl Client {
             Method::POST,
             &["environments"],
             &json!({"org_id":org,"name":name,"description":description}),
+            m,
+        )
+        .await
+    }
+    /// Create this application's environment, or attach it to an active shared key.
+    pub async fn create_application_environment(
+        &self,
+        name: &str,
+        description: &str,
+        testing_key: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        if self.application.is_none() {
+            bail!("Configure production application credentials first");
+        }
+        self.mutate(
+            Method::POST,
+            &["environments"],
+            &json!({"name":name,"description":description,"testing_key":testing_key}),
             m,
         )
         .await

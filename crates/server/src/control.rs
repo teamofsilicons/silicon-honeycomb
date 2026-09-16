@@ -1,3 +1,4 @@
+pub(crate) mod application;
 use crate::{
     State,
     api::{context, header_value, key, revision},
@@ -8,6 +9,7 @@ use axum::{
     Json,
     extract::{Path, State as S},
     http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use rand::{Rng, distributions::Alphanumeric};
 use serde::Deserialize;
@@ -72,6 +74,13 @@ pub(crate) async fn manage(s: &State, h: &HeaderMap, id: &str) -> Result<(Sqlite
         .fetch_optional(&s.db)
         .await?
         .ok_or_else(Error::missing)?;
+    if application::presented(h)? {
+        let authority = application::authenticate(s, h).await?;
+        if !application::owns(&row, &authority) {
+            return Err(Error::missing());
+        }
+        return Ok((row, application::actor(&authority)));
+    }
     if let Some(root) = header_value(h, "x-testing-environment-key")? {
         if hex::encode(Sha256::digest(root)) != row.get::<String, _>("key_hash")
             || row.get::<String, _>("state") == "deleted"
@@ -89,6 +98,9 @@ pub(crate) async fn manage(s: &State, h: &HeaderMap, id: &str) -> Result<(Sqlite
     Ok((row, i.principal_id.clone()))
 }
 pub async fn environments(S(s): S<State>, h: HeaderMap) -> Result<Json<Value>> {
+    if application::presented(&h)? {
+        return application::list(&s, &h).await;
+    }
     let c = context(&s, &h).await?;
     let i = c.identity()?;
     if c.plane != "production" {
@@ -115,16 +127,53 @@ pub async fn environments(S(s): S<State>, h: HeaderMap) -> Result<Json<Value>> {
 }
 #[derive(Deserialize)]
 pub struct CreateEnvironment {
+    #[serde(default)]
     org_id: String,
     name: String,
     #[serde(default)]
     description: String,
+    testing_key: Option<String>,
+    iam_test_key: Option<String>,
+}
+impl CreateEnvironment {
+    fn attachment_key(&self) -> Result<Option<&str>> {
+        if self.testing_key.is_some()
+            && self.iam_test_key.is_some()
+            && self.testing_key != self.iam_test_key
+        {
+            return Err(Error::bad("testing_key and iam_test_key must match"));
+        }
+        let key = self.testing_key.as_deref().or(self.iam_test_key.as_deref());
+        if key.is_some_and(|k| k.len() != 32 || !k.bytes().all(|b| b.is_ascii_alphanumeric())) {
+            return Err(Error::bad(
+                "testing_key must contain exactly 32 alphanumeric characters",
+            ));
+        }
+        Ok(key)
+    }
 }
 pub async fn create_environment(
     S(s): S<State>,
     h: HeaderMap,
     Json(body): Json<CreateEnvironment>,
+) -> Result<Response> {
+    let (status, value) = create_environment_inner(s, h, body).await?;
+    Ok((status, [("cache-control", "no-store")], value).into_response())
+}
+async fn create_environment_inner(
+    s: State,
+    h: HeaderMap,
+    body: CreateEnvironment,
 ) -> Result<(StatusCode, Json<Value>)> {
+    body.attachment_key()?;
+    if application::presented(&h)? {
+        return application::create(&s, &h, body).await;
+    }
+    if body.attachment_key()?.is_some() {
+        return Err(Error::bad(
+            "Application credentials are required to attach an app",
+        ));
+    }
     let k = key(&h)?;
     let c = context(&s, &h).await?;
     let actor = c.identity()?;
@@ -195,6 +244,15 @@ pub async fn environment_action(
     S(s): S<State>,
     h: HeaderMap,
     Path((id, action)): Path<(String, String)>,
+) -> Result<Response> {
+    let (status, value) = environment_action_inner(s, h, id, action).await?;
+    Ok((status, [("cache-control", "no-store")], value).into_response())
+}
+async fn environment_action_inner(
+    s: State,
+    h: HeaderMap,
+    id: String,
+    action: String,
 ) -> Result<(StatusCode, Json<Value>)> {
     let k = key(&h)?;
     let expected = revision(&h)?;
@@ -204,12 +262,9 @@ pub async fn environment_action(
             return Err(Error::conflict("Environment revision changed"));
         }
         let operation:String=sqlx::query_scalar("SELECT id FROM operations WHERE plane='production' AND resource=? AND revision=? AND kind LIKE 'environment.%' ORDER BY created_at DESC LIMIT 1").bind(&id).bind(expected).fetch_one(&s.db).await?;
-        let token = header_value(&h, "authorization")?
-            .and_then(|h| h.strip_prefix("Bearer "))
-            .unwrap_or("");
         return Ok((
             StatusCode::ACCEPTED,
-            Json(crate::lifecycle::coordinate(&s, &id, &operation, token).await?),
+            Json(application::coordinate(&s, &h, &id, &operation).await?),
         ));
     }
     let desired = match action.as_str() {
@@ -292,10 +347,7 @@ pub async fn environment_action(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    let token = header_value(&h, "authorization")?
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .unwrap_or("");
-    let mut result = crate::lifecycle::coordinate(&s, &id, &op, token).await?;
+    let mut result = application::coordinate(&s, &h, &id, &op).await?;
     if let Some(key) = rotated {
         result["testing_key"] = json!(key);
     }

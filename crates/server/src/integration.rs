@@ -3,8 +3,51 @@ use crate::error::{Error, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
+/// Verified by IAM's protected application-identity endpoint; contains no credential.
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct TestingApplicationIdentity {
+    pub application_id: String,
+    pub app_id: String,
+    pub organization_id: String,
+    pub org_id: String,
+    pub iam_revision: i64,
+}
+/// Request-scoped application authority. Never serialize or log this value.
+pub struct TestingApplicationAuthority {
+    pub identity: TestingApplicationIdentity,
+    pub authorization: String,
+    pub attachment_key: Option<String>,
+}
+
 #[async_trait]
 pub trait Management: Send + Sync {
+    async fn verify_testing_application(
+        &self,
+        _application_authorization: &str,
+    ) -> Result<TestingApplicationIdentity> {
+        Err(Error::unavailable(
+            "IAM production application verification is not configured",
+        ))
+    }
+    async fn application_lifecycle(
+        &self,
+        _operation: &Value,
+        _application_authorization: &str,
+        _attachment_key: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM application-owned testing lifecycle is not configured",
+        ))
+    }
+    async fn recover_testing_application_credential(
+        &self,
+        _environment_id: &str,
+        _application_authorization: &str,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM application test credential recovery is not configured",
+        ))
+    }
     /// Implement with each service's protected lifecycle API, independently of test sessions.
     async fn service_lifecycle(
         &self,
