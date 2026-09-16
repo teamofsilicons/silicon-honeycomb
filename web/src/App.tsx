@@ -61,6 +61,7 @@ function Dialog(props: {
   return (
     <dialog
       ref={dialog}
+      aria-label={props.title}
       onCancel={(e) => {
         e.preventDefault();
         props.close();
@@ -165,6 +166,8 @@ export default function App() {
   const [publication, setPublication] = createSignal<any>();
   const [showCreate, setShowCreate] = createSignal(false);
   const [logoUploading, setLogoUploading] = createSignal(false);
+  const [firstRelease, setFirstRelease] = createSignal<File>();
+  const [pendingRelease, setPendingRelease] = createSignal<{ appId: string; file: File; key: string }>();
   const [form, setForm] = createSignal<Record<string, any>>(blank());
   const editing = () => form().draft_edit_app_id as string | undefined;
   const [advanced, setAdvanced] = createSignal(false);
@@ -315,6 +318,7 @@ export default function App() {
   }
   function beginCreate(draft?: any) {
     setError("");
+    setFirstRelease(undefined);
     saveGeneration++;
     setDraftId(draft?.id || crypto.randomUUID());
     setDraftRevision(draft?.revision || 0);
@@ -395,23 +399,36 @@ export default function App() {
   }
   async function createApp(e: Event) {
     e.preventDefault();
-    if (logoUploading()) return;
+    if (busy() || logoUploading()) return;
     await act(async () => {
+      const editingId = editing();
+      const editingRevision = form().draft_edit_revision;
       const payload: Record<string, any> = {
         ...form(),
         app_scope: JSON.parse(scopeText()),
         obo_endpoints: JSON.parse(oboText()),
       };
+      const archive = editingId ? undefined : firstRelease();
+      const appId = `${payload.org_id}>${payload.local_app_id}`;
+      if (archive) {
+        if (archive.size > 512 * 1024 * 1024) throw new Error("CLI archives must be no larger than 512 MiB.");
+        const validation = await request("/api/v1/packages/validate", {
+          method: "POST", headers: { "Content-Type": "application/gzip" }, body: archive,
+        });
+        if (!validation.valid) throw new Error(validation.errors.join("\n"));
+        if (validation.manifest?.app_id !== appId)
+          throw new Error(`The archive must use app_id ${appId} in honeycomb.yaml. Update it and run honeycomb pack again.`);
+      }
       for (const field of Object.keys(payload))
         if (field.startsWith("draft_")) delete payload[field];
       for (const key of ["base_url", "website_url", "docs_url", "logo_url"])
         if (!payload[key]) payload[key] = null;
       const result = await request(
-        editing() ? endpoint(editing()!) : "/api/v1/apps",
+        editingId ? endpoint(editingId) : "/api/v1/apps",
         {
-          method: editing() ? "PUT" : "POST",
-          headers: editing()
-            ? { "If-Match": String(form().draft_edit_revision) }
+          method: editingId ? "PUT" : "POST",
+          headers: editingId
+            ? { "If-Match": String(editingRevision) }
             : {},
           body: JSON.stringify(payload),
         },
@@ -419,30 +436,60 @@ export default function App() {
       setShowCreate(false);
       saveGeneration++;
       clearTimeout(saveTimer);
-      if (result.app_secret) setSecret(result.app_secret);
-      setNotice(
-        result.state === "accepted"
-          ? editing()
-            ? "Application configuration updated."
-            : "Application created. Upload its first CLI release to continue."
-          : "Application saved. IAM configuration is pending.",
-      );
-      await load();
+      try {
+        setNotice(
+          result.state === "accepted"
+            ? editingId
+              ? "Application configuration updated."
+              : "Application created. Upload its first CLI release to continue."
+            : "Application saved. IAM configuration is pending.",
+        );
+        await load();
+        if (archive) {
+          setPendingRelease({ appId, file: archive, key: crypto.randomUUID() });
+          setSelected(await request(endpoint(appId)));
+          setDetailsTab("release");
+          setPublication(undefined);
+          setReviews([]);
+          setAppOperations([]);
+          setReconciliation(undefined);
+          setFirstRelease(undefined);
+          setNotice("Application saved. Uploading its first CLI release…");
+          try {
+            await sendRelease();
+            setNotice("Application saved and first CLI release uploaded.");
+          } catch (e) {
+            setNotice("Application saved. Its first CLI release still needs to be uploaded.");
+            throw new Error(`The application was saved, but the release upload failed. Retry the upload below. ${(e as Error).message}`);
+          }
+        }
+      } finally {
+        if (result.app_secret) setSecret(result.app_secret);
+      }
     });
   }
+  async function sendRelease() {
+    const pending = pendingRelease();
+    const app = selected();
+    if (!pending || !app || pending.appId !== app.app_id) return;
+    await request(endpoint(app.app_id) + "/releases", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/gzip",
+        "If-Match": String(app.revision),
+        "Idempotency-Key": pending.key,
+      },
+      body: pending.file,
+    });
+    setPendingRelease(undefined);
+    setSelected(await request(endpoint(app.app_id)));
+    await load();
+  }
   async function upload(file: File | undefined) {
-    if (!file || !selected()) return;
+    if (!file || !selected() || busy()) return;
+    setPendingRelease({ appId: selected()!.app_id, file, key: crypto.randomUUID() });
     await act(async () => {
-      await request(endpoint(selected()!.app_id) + "/releases", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/gzip",
-          "If-Match": String(selected()!.revision),
-        },
-        body: file,
-      });
-      setSelected(await request(endpoint(selected()!.app_id)));
-      await load();
+      await sendRelease();
     }, "CLI release uploaded.");
   }
   async function runEnvironmentAction(action: string) {
@@ -1315,6 +1362,10 @@ export default function App() {
                 }} />
               </Show>
               <Show when={detailsTab() === "release"}>
+                <Show when={pendingRelease()?.appId === app().app_id}>
+                  <p class="muted">Selected archive: {pendingRelease()?.file.name}</p>
+                  <button class="button outline" disabled={busy()} onClick={() => void act(sendRelease, "CLI release uploaded.")}>Retry release upload</button>
+                </Show>
                 <Show when={app().iam_revision === 0}>
                   <div class="inline-notice">
                     Your application is saved and awaiting IAM activation.
@@ -1519,6 +1570,19 @@ export default function App() {
             </small>
           </label>
           <div class="section-divider" />
+          <Show when={!editing()}>
+            <h3>First CLI release</h3>
+            <p class="muted">Choose the .tar.gz produced by honeycomb pack. It will be validated before registration and uploaded after your application is saved.</p>
+            <label class="upload-zone">
+              <Upload size={24} />
+              <strong>{firstRelease()?.name || "Choose a .tar.gz release"}</strong>
+              <span>All six required targets · up to 512 MiB</span>
+              <input type="file" aria-label="First CLI archive" accept=".gz,.tar.gz,application/gzip" disabled={busy()} onChange={e => setFirstRelease(e.currentTarget.files?.[0])} />
+            </label>
+            <Show when={firstRelease()}><button type="button" class="text-link" disabled={busy()} onClick={() => setFirstRelease(undefined)}>Add release later</button></Show>
+            <p class="muted">You can add the release later, but it is required before publishing. Files are not saved in drafts; select the archive again when reopening a draft.</p>
+            <div class="section-divider" />
+          </Show>
           <LogoField org={form().org_id} value={form().logo_url} change={url => edit("logo_url", url)} onBusy={setLogoUploading} />
           <div class="section-divider" />
           <h3>Connect to IAM</h3>

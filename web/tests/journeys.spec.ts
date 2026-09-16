@@ -3,6 +3,91 @@ const logoPng = readFileSync(new URL("./fixtures/logo.png", import.meta.url));
 import { test, expect } from "@playwright/test";
 const library = "http://localhost:19173",
   consoleSite = "http://localhost:19174";
+test("registration validates the first archive and retries its upload without recreating the app", async ({ page }, info) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const { execFileSync } = await import("node:child_process");
+  const root = mkdtempSync(join(tmpdir(), "honeycomb-registration-"));
+  const handle = `first-${info.project.name}-${Date.now()}`, appId = `tos>${handle}`;
+  const name = `First release ${info.project.name}`;
+  const archive = join(root, "release.tar.gz");
+  const keys: string[] = [];
+  let creates = 0;
+  try {
+    const targets: Record<string, unknown> = {};
+    for (const target of ["linux-x86_64", "linux-aarch64", "windows-x86_64", "windows-aarch64", "macos-x86_64", "macos-aarch64"]) {
+      mkdirSync(join(root, "targets", target, "bin"), { recursive: true });
+      writeFileSync(join(root, "targets", target, "bin", "greet"), "#!/bin/sh\necho hello\n", { mode: 0o755 });
+      targets[target] = { root: `targets/${target}`, executables: { app: "bin/greet" } };
+    }
+    writeFileSync(join(root, "honeycomb.yaml"), JSON.stringify({ format_version: 1, app_id: appId, version: "1.0.0", bin: { greet: "app" }, targets }));
+    const cli = fileURLToPath(new URL("../../target/debug/honeycomb", import.meta.url));
+    const env = { ...process.env, SILICON_HOME: join(root, "cli-home") };
+    execFileSync(cli, ["config", "set", "auto_update", "false"], { env });
+    execFileSync(cli, ["pack", root, "--output", archive], { env });
+    await page.route("**/api/v1/apps", async route => {
+      if (route.request().method() === "POST") {
+        creates++;
+        const response = await route.fetch();
+        return route.fulfill({ response, json: { ...await response.json(), app_secret: "fixture-one-time-application-secret" } });
+      }
+      await route.continue();
+    });
+    await page.route("**/api/v1/apps/*/releases", async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      keys.push(route.request().headers()["idempotency-key"]);
+      if (keys.length === 1) {
+        const accepted = await route.fetch();
+        expect(accepted.ok()).toBe(true);
+        return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "The upload response was lost." } }) });
+      }
+      await route.continue();
+    });
+    await page.goto(consoleSite);
+    await page.getByRole("link", { name: "Continue with IAM" }).click();
+    await page.getByRole("button", { name: "Create application", exact: true }).click();
+    const form = page.getByRole("dialog", { name: "Create an application", exact: true });
+    await form.getByLabel("Application handle").fill(handle + "-wrong");
+    await form.getByLabel("Application name", { exact: true }).fill(name);
+    await form.getByLabel("Description", { exact: true }).fill("This useful application provides tools for the Silicon ecosystem. ".repeat(7));
+    await form.getByLabel("Webhook URL").fill("https://example.com/webhook/");
+    await form.getByLabel("Webhook signing secret").fill("fixture-signing-secret-0000000000000000000");
+    await form.getByLabel("First CLI archive").setInputFiles({ name: "broken.tar.gz", mimeType: "application/gzip", buffer: Buffer.from("invalid archive") });
+    await form.getByRole("button", { name: "Create private application" }).click();
+    await expect(form.getByRole("alert")).toBeVisible();
+    expect(creates).toBe(0);
+    await form.getByLabel("First CLI archive").setInputFiles(archive);
+    await form.getByRole("heading", { name: "First CLI release" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `/tmp/honeycomb-registration-form-${info.project.name}.png` });
+    await form.getByRole("button", { name: "Create private application" }).click();
+    await expect(form.getByRole("alert")).toContainText("The archive must use app_id");
+    expect(creates).toBe(0);
+    await form.getByLabel("Application handle").fill(handle);
+    await form.getByRole("button", { name: "Create private application" }).click();
+    const detail = page.getByRole("dialog", { name, exact: true });
+    const secret = page.getByRole("dialog", { name: "Save your application secret", exact: true });
+    await expect(secret).toBeVisible();
+    await secret.getByRole("button", { name: "I’ve saved it" }).click();
+    await expect(detail.getByRole("alert")).toContainText("application was saved, but the release upload failed");
+    expect(creates).toBe(1);
+    await detail.getByRole("button", { name: "Retry release upload" }).click();
+    await expect(detail.getByRole("button", { name: "Retry release upload" })).toHaveCount(0);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    expect(creates).toBe(1);
+    const saved = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}`)).json();
+    expect(saved.latest_version).toBe("1.0.0");
+    const releases = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/releases`)).json();
+    expect(releases.items).toHaveLength(1);
+    await detail.getByRole("heading", { name: "Upload a CLI release" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `/tmp/honeycomb-first-release-${info.project.name}.png` });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 test("library header opens the console", async ({ page }) => {
   await page.goto(library);
   const link = page.locator(".topbar").getByRole("link", { name: "Create an app" });
@@ -395,6 +480,7 @@ test("console uploads and activates an approved release visible in the anonymous
     await page.getByRole("heading", { name, exact: true }).click();
     await page.getByRole("button", { name: "Releases & publication" }).click();
     const dialog = page.getByRole("dialog");
+    await expect(dialog.getByLabel("Upload CLI archive")).toBeEnabled();
     await dialog.getByLabel("Upload CLI archive").setInputFiles(archive);
     await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toBeEnabled();
     await dialog.getByLabel("Tell reviewers about your application").fill("Please review this complete six-target release.");
