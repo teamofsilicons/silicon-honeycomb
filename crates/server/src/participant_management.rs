@@ -206,9 +206,7 @@ impl ParticipantManagement {
             .send()
             .await
             .map_err(|_| unavailable())?;
-        if !response.status().is_success() {
-            return Err(unavailable());
-        }
+        let status = response.status();
         const MAX_RECEIPT: usize = 64 * 1024;
         if response
             .content_length()
@@ -224,6 +222,18 @@ impl ParticipantManagement {
             bytes.extend_from_slice(&chunk);
         }
         let receipt: Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+        if !status.is_success() {
+            if status == reqwest::StatusCode::CONFLICT
+                && receipt["error"]["code"] == "testing_environment_limit_reached"
+            {
+                return Err(Error::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "testing_environment_limit_reached",
+                    "This service has reached its testing-environment limit. Delete an unused environment through its normal recovery flow, then retry this operation.",
+                ));
+            }
+            return Err(unavailable());
+        }
         for field in [
             "operation_id",
             "environment_id",
@@ -444,6 +454,33 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests[0].body, requests[1].body);
         assert!(!String::from_utf8_lossy(&requests[0].body).contains("previous-root"));
+    }
+
+    #[tokio::test]
+    async fn capacity_failure_has_actionable_guidance_without_echoing_participant_data() {
+        let server = MockServer::start().await;
+        let registry = ParticipantRegistry::build(
+            &json!([configuration(
+                "vendor>storage",
+                &server.uri(),
+                "STORAGE_CONTROL_TOKEN"
+            )])
+            .to_string(),
+            |_| Some(TOKEN.into()),
+            false,
+        )
+        .unwrap();
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({"error":{"code":"testing_environment_limit_reached","message":"secret root token","details":{"testing_key":"secret-root"}}})))
+            .mount(&server).await;
+        let error = registry
+            .apply("vendor>storage", &operation("vendor>storage"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.0, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.1.code, "testing_environment_limit_reached");
+        assert!(error.1.message.contains("normal recovery flow"));
+        assert!(!error.1.message.contains("secret"));
     }
 
     #[tokio::test]
