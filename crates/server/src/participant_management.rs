@@ -174,11 +174,35 @@ impl ParticipantManagement {
             ]);
         // A retry keeps the same operation identity and payload. Participants retain
         // their receipts so a lost response cannot repeat a destructive operation.
+        // IAM also receives environment metadata and, during rotation, the previous
+        // root key as acting authority. Those fields are not part of a participant's
+        // lifecycle contract and must not cross this service boundary.
+        let payload: serde_json::Map<String, Value> = [
+            "operation_id",
+            "environment_id",
+            "org_id",
+            "app_id",
+            "environment_revision",
+            "generation",
+            "key_version",
+            "action",
+            "testing_key",
+            "snapshot",
+            "reason",
+            "retired_apps",
+        ]
+        .into_iter()
+        .filter_map(|field| {
+            operation
+                .get(field)
+                .map(|value| (field.to_owned(), value.clone()))
+        })
+        .collect();
         let mut response = self
             .http
             .put(endpoint)
             .bearer_auth(self.token.expose_secret())
-            .json(operation)
+            .json(&payload)
             .send()
             .await
             .map_err(|_| unavailable())?;
@@ -381,6 +405,45 @@ mod tests {
         );
         assert_eq!(storage.received_requests().await.unwrap().len(), 2);
         assert_eq!(worker.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn participant_payload_excludes_iam_metadata_and_previous_root_authority() {
+        let server = MockServer::start().await;
+        let registry = ParticipantRegistry::build(
+            &json!([configuration(
+                "vendor>storage",
+                &server.uri(),
+                "STORAGE_CONTROL_TOKEN"
+            )])
+            .to_string(),
+            |_| Some(TOKEN.into()),
+            false,
+        )
+        .unwrap();
+        let expected = operation("vendor>storage");
+        let mut coordinator = expected.clone();
+        coordinator["name"] = json!("Shared environment");
+        coordinator["description"] = json!("IAM-owned metadata");
+        coordinator["authority_testing_key"] = json!("previous-root-must-not-be-forwarded");
+        Mock::given(method("PUT"))
+            .and(path(endpoint(&expected)))
+            .and(body_json(&expected))
+            .respond_with(ResponseTemplate::new(200).set_body_json(receipt(&expected, "completed")))
+            .expect(2)
+            .mount(&server)
+            .await;
+        registry
+            .apply("vendor>storage", &coordinator)
+            .await
+            .unwrap();
+        registry
+            .apply("vendor>storage", &coordinator)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests[0].body, requests[1].body);
+        assert!(!String::from_utf8_lossy(&requests[0].body).contains("previous-root"));
     }
 
     #[tokio::test]
