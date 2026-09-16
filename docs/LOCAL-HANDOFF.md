@@ -1,75 +1,50 @@
-# Local checkpoint — 2026-09-16
+# Checkpoint — 2026-09-16
 
-This is a working local checkpoint, not a completed production rollout.
+Honeycomb 0.1.1 is published on GitHub and crates.io. The production backend
+includes official IAM 1.11 integration, publication and testing lifecycle adapters,
+isolated testing login, strict participant payloads, and actionable capacity errors.
 
-## Ready to review
+## Verified in production
 
-- Rust backend, stateless client and stateful `honeycomb` CLI.
-- curl/bash installer, Cargo source installation, binary updater and scheduled checks.
-- Public/private library and authenticated console using the current Interface
-  style: paper surfaces, blue accents and serif headings.
-- Package validation, upload/install/update/uninstall, drafts, catalog/search,
-  logo URL/file upload through Briefcase,
-  reviews/stars, publication discussions/decisions/activation, secret recovery,
-  permission picker, webhook approval/signing-secret rotation and testing-environment progress.
-- Durable IAM configuration/reconciliation and protected SDK integration for the
-  portions available in local IAM commit `7abd575`.
-- Production container definitions, HTTPS routing for the requested domains,
-  CI and six-platform release-candidate workflow.
-- Space Station diagnostics, CLI/web opt-out, and isolated testing telemetry.
-  The dedicated table is created and one synthetic ingestion was verified live;
-  see [TELEMETRY.md](TELEMETRY.md).
-- API contract discovery/negotiation, compatibility policy and persisted retirement
-  after seven idle days for explicitly deprecated contracts; see [API-CONTRACTS.md](API-CONTRACTS.md).
+- Signed-in Carbon CLI authentication and authenticated console access.
+- Explicit Saket validator assignment and IAM-confirmed reviewer eligibility.
+- Fresh private `tos>iam` registration, IAM 1.11.0 archive upload, private installation
+  and executable version check.
+- Normal Briefcase revision-2 publication plan, validator decision and activation;
+  anonymous Briefcase 1.1.0 installation, checksum and executable version check.
+- Anonymous library shows Briefcase while private IAM remains in the authenticated
+  console only.
+- Shared disposable environment creation and Briefcase import, then root-key
+  rotation, clean, recoverable deletion and restoration across IAM, Honeycomb and
+  Briefcase. Every operation was accepted with matching participant receipts.
+- Public GitHub curl/bash and crates.io installation of Honeycomb 0.1.1 on macOS
+  ARM64, including version, license, updater, authentication status and daemon opt-out.
 
-Local previews currently run at http://localhost:4173 (library) and
-http://localhost:4174 (console), using an explicit isolated IAM/storage fixture at
-http://127.0.0.1:18080. Sign-in uses the fixture owner. These are sample identities
-and sample applications; no production credentials or email delivery are involved.
+The ten legacy Briefcase capacity records were recoverably disabled with explicit
+user authorization. Nine were already deleted in IAM; the remaining active IAM
+environment was adopted and disabled through the official API. Existing keys and
+data were retained. The disposable acceptance environment was deleted after testing. Final read-only
+checks confirmed zero active IAM and Briefcase environments.
 
-## Verification
+## Validation and provenance
 
-- Rust workspace tests and strict Clippy passed. Latest backend coverage: 44 API
-  cases, plus runtime IAM, management SDK and Briefcase logo wire tests.
-- All 36 desktop/mobile browser cases pass, including telemetry opt-out, logo upload/retry, webhook changes, retention
-  settings and automatic cleanup progress/retry.
-- CLI HTTP journey includes private creation, six-target archive validation,
-  releases, install/execute/update/uninstall, review/activation and anonymous install.
-- curl/bash installer checks and isolated Cargo source installation passed.
-- Production backend and web images rebuilt successfully, including the current
-  telemetry/lifecycle code and periodic reconciliation. Disposable container checks
-  passed migrations, startup, catalog, authentication gate and both website modes.
-  These checks use no live IAM credentials.
-- All three distributable Cargo packages build with Cargo's temporary local registry.
-- Both preview websites were visually inspected; source provenance hashes pass.
+Rust workspace tests, strict Clippy, dependency policy, official SDK source hashes,
+CLI fixture journey and all 46 desktop/mobile browser tests passed. All six native
+release-candidate jobs passed. GitHub binaries were built at `c6a51bf`; subsequent
+changes affect the backend or test fixtures, not distributable crates. Main CI at
+`2172728` and `26f53a9` passed; their fixture correction is newer than the binary
+source commit. The final backend commit `7031dda` passed all 104 local server
+tests and strict Clippy; its hosted verification was still running at handoff.
 
-Cross-platform archive validation is not native execution on all six platforms.
-All six native release jobs now pass. GitHub `v0.1.0` and the core/client/CLI
-crates are published; both public installation methods passed on macOS ARM64.
+See [the resumed release record](../deploy/aws/release-2026-09-16-resumed.md) for
+operation IDs, deployment provenance and limitations. Human-owned
+[UNDERSTANDING.md](../UNDERSTANDING.md) remains unchanged.
 
-## Remaining work before the complete product is ready
+## Acceptance limits
 
-1. Resolve the implemented IAM contract differences in
-   [IAM-CONTRACT-REVIEW.md](IAM-CONTRACT-REVIEW.md), then wire public review/activation,
-   shared lifecycle phases, app-owned creation/attachment and test-only app management
-   to actual protected services. The local fixture exercises these flows but does
-   not prove live cross-service behavior.
-2. Implement the services' automatic-retention transport and legacy adoption.
-   Honeycomb now schedules durable app retirement, environment soft deletion and
-   expiry purge; missing protected service acknowledgments keep these jobs pending.
-3. Complete protected notification recipient discovery and live Postmark delivery.
-4. Provision IAM/Briefcase permissions, dedicated service and notification keys,
-   Postmark and deployment secrets; prepare the actual hosting/DNS and callback URLs.
-5. Publish the CLI binaries and crates, then run live browser/CLI/installer
-   acceptance across the requested domains and supported platforms. The repository
-   is now public on GitHub; hosted CI and all native candidate builds passed. CLI
-   releases and frontend assets are now published. AWS deployment and live acceptance
-   are tracked in `deploy/aws/README.md`.
-
-The actual IAM management API is deployed and its service reads pass; the earlier blanket "IAM API absent"
-assessment is superseded by the current contract review. SDK 1.10 is not yet in
-crates.io, so the exact unchanged official source is pinned in `vendor` with hashes.
-The production adapter keeps unsupported operations pending and exposes their errors.
-
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for checkpoint history and
-[../deploy/README.md](../deploy/README.md) for deployment/release preparation.
+The live shared-lifecycle pass does not establish every application-owned
+create/attach path, automatic retention/purge, notification delivery or migration
+of all legacy environments into Honeycomb's catalog. Legacy writer cutover remains
+disabled. The previously reported Browser 0.2.3 archive was not available locally,
+so its exact-byte upload retry was not performed. Fixtures and targeted wire tests
+cover additional cases; they are not presented as live acceptance.
