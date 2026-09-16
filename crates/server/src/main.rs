@@ -89,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
         .with_participants(participants);
         state.management = Arc::new(management);
     }
+    state.identity = Arc::new(
+        Iam::new(&iam_url, &state.app_id, &secret)?
+            .with_testing_context(state.db.clone(), state.management.clone()),
+    );
     let notifications = std::env::var("IAM_HONEYCOMB_NOTIFICATION_SIGNING_KEY")
         .ok()
         .filter(|v| !v.is_empty())

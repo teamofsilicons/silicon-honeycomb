@@ -298,6 +298,48 @@ async fn call(
     )
 }
 #[tokio::test]
+async fn invalid_webhook_subscriptions_are_rejected_before_creating_an_operation() {
+    let (s, _) = setup(true).await;
+    for scopes in [
+        json!([]),
+        json!(["membership", "membership"]),
+        json!(["unknown"]),
+    ] {
+        let mut body = input("invalid-webhook");
+        body["webhook_scope"] = scopes;
+        let (status, response) = call(
+            &s,
+            "POST",
+            "/api/v1/apps",
+            Some("admin"),
+            body,
+            "invalid-webhook-0001",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(response.to_string().contains("webhook_scope"));
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM operations WHERE resource='tos>invalid-webhook'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("invalid-webhook"),
+        "invalid-webhook-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
 async fn private_visibility_and_current_membership() {
     let (s, revoked) = setup(true).await;
     let (status, _) = call(

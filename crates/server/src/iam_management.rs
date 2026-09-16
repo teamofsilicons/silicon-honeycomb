@@ -251,6 +251,31 @@ fn production(environment: Option<&str>) -> Result<()> {
 }
 fn map_error(error: silicon_iam_client::Error) -> Error {
     match error {
+        silicon_iam_client::Error::Api(api)
+            if api.status == 422 && api.code == "validation_failed" =>
+        {
+            let mut message = "IAM rejected the configuration. Correct its fields and submit a new configuration revision; retrying the unchanged operation cannot fix validation errors.".to_owned();
+            if api
+                .details
+                .as_ref()
+                .and_then(|v| v["fields"].as_array())
+                .is_some_and(|fields| fields.iter().any(|field| field["field"] == "webhook_scope"))
+            {
+                message = "webhook_scope: select at least one category, without duplicates: membership, updates, trust or full. Submit the corrected configuration as a new revision.".into();
+            }
+            if let Some(id) = api
+                .request_id
+                .as_deref()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            {
+                message.push_str(&format!(" IAM request: {id}."));
+            }
+            Error::new(
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "validation_failed",
+                message,
+            )
+        }
         silicon_iam_client::Error::Api(api) if api.code == "step_up_required" => Error::new(
             axum::http::StatusCode::FORBIDDEN,
             "step_up_required",

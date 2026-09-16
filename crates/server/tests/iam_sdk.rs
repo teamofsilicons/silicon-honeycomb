@@ -1,24 +1,12 @@
 //! Contract checks through the pinned official IAM SDK, using a local HTTP service.
 use serde_json::{Value, json};
 use silicon_honeycomb_server::auth::{Iam, IdentityProvider};
-use silicon_iam_client::{Client, Credential};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_string_contains, header_exists, method, path},
 };
 fn adapter(server: &MockServer) -> Iam {
-    Iam {
-        client: Client::builder(&server.uri())
-            .unwrap()
-            .telemetry(false)
-            .credential(Credential::application(
-                "tos>honeycomb",
-                "fixture-app-secret",
-            ))
-            .build()
-            .unwrap(),
-        app_id: "tos>honeycomb".into(),
-    }
+    Iam::new(&server.uri(), "tos>honeycomb", "fixture-app-secret").unwrap()
 }
 #[tokio::test]
 async fn sdk_invalid_grants_are_authentication_failures_not_service_outages() {

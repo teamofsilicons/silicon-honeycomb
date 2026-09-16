@@ -260,3 +260,24 @@ async fn snapshot_requires_current_iam_confirmation_of_the_local_publication() {
         );
     }
 }
+
+#[tokio::test]
+async fn validation_failures_explain_correction_without_leaking_upstream_details() {
+    let server = MockServer::start().await;
+    let (adapter, _, config, id) = setup(&server).await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test/configuration"))
+        .respond_with(ResponseTemplate::new(422).set_body_json(json!({"error":{"code":"validation_failed","message":"private upstream diagnostic","request_id":"01a0a943-b40b-703c-92df-9f7017037f56","details":{"fields":[{"field":"webhook_scope","message":"private webhook secret"}]}}})))
+        .mount(&server).await;
+    let operation = json!({"operation_id":id,"app_id":"tos>sdk-test","configuration_revision":1,"expected_iam_revision":0,"configuration":config,"webhook_secret":"secret-test","visibility":"private"});
+    let error = adapter
+        .configure(&operation, "oat_actor", None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.0, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error.1.code, "validation_failed");
+    let message = error.1.message;
+    assert!(message.contains("webhook_scope"));
+    assert!(message.contains("01a0a943-b40b-703c-92df-9f7017037f56"));
+    assert!(!message.contains("private"));
+}

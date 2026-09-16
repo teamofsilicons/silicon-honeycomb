@@ -115,13 +115,20 @@ impl AppInput {
         if self.webhook_secret.len() < 32 {
             errors.push("webhook_secret: use at least 32 characters".into());
         }
-        if self
-            .webhook_scope
-            .iter()
-            .any(|s| !["membership", "updates", "trust", "full"].contains(&s.as_str()))
+        if self.webhook_scope.is_empty()
+            || self
+                .webhook_scope
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != self.webhook_scope.len()
+            || self
+                .webhook_scope
+                .iter()
+                .any(|s| !["membership", "updates", "trust", "full"].contains(&s.as_str()))
         {
             errors.push(
-                "webhook_scope: allowed categories are membership, updates, trust and full".into(),
+                "webhook_scope: select at least one category, without duplicates: membership, updates, trust or full".into(),
             );
         }
         if !self.obo_endpoints.is_empty() && self.base_url.is_none() {
