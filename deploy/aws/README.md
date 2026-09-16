@@ -29,7 +29,22 @@ updates. The operator handoff lives outside Git at
 python3 deploy/aws/deploy.py --image-tag <published-image-tag>
 ```
 
-The tool resolves immutable image digests and dispatches `start.sh` through SSM.
+The tool resolves immutable image digests, automatically provisions the shared
+Briefcase testing credential, and dispatches `start.sh` through SSM. Testing does
+not require an app owner to generate or copy a service token. The deployment tool
+reuses an existing credential from either secret store, creates one only when both
+are absent, and refuses conflicting existing credentials. It preserves unrelated
+runtime settings and never prints the credential. The deploying AWS identity needs
+read/write access to both service secrets; service runtime roles remain separate.
+Use `--briefcase-region` and `--briefcase-secret` for a different managed deployment.
+Provisioning secrets does not reload a running Briefcase service: its deployment
+must load the shared secret too. Ordinary environment creation never rotates or
+re-provisions this service credential.
+
+This automatic setup covers service authentication. Complete shared testing still
+requires the IAM lifecycle contract changes tracked in
+[`docs/IAM-CONTRACT-REVIEW.md`](../../docs/IAM-CONTRACT-REVIEW.md); the current
+unavailable IAM adapter must not report environments ready prematurely.
 Inspect the returned command ID with `aws ssm get-command-invocation` until it
 succeeds. It reads secrets on the host, recreates only Honeycomb containers, and
 preserves `/var/lib/silicon-honeycomb` data. The proxy uses a pinned Caddy image and

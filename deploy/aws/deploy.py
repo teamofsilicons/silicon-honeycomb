@@ -7,11 +7,15 @@ from pathlib import Path
 import shlex
 import subprocess
 
+from testing_credentials import ensure_testing_credentials
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--profile", default="silicon-production")
 parser.add_argument("--region", default="us-east-2")
 parser.add_argument("--stack", default="silicon-honeycomb-production")
 parser.add_argument("--image-tag", required=True)
+parser.add_argument("--briefcase-region", default="us-east-1")
+parser.add_argument("--briefcase-secret", default="silicon-briefcase/production")
 args = parser.parse_args()
 
 
@@ -48,8 +52,13 @@ values = {
 }
 commands.append(" ".join(f"{key}={shlex.quote(value)}" for key, value in values.items())
                 + " bash /etc/silicon-honeycomb/start.sh")
+testing_credentials = ensure_testing_credentials(
+    args.profile, args.region, outputs["RuntimeSecretArn"],
+    args.briefcase_region, args.briefcase_secret,
+)
 result = aws("ssm", "send-command", "--instance-ids", outputs["InstanceId"],
              "--document-name", "AWS-RunShellScript", "--comment", f"Honeycomb deployment {args.image_tag}",
              "--parameters", json.dumps({"commands": commands, "executionTimeout": ["900"]}))
 print(json.dumps({"command_id": result["Command"]["CommandId"], "instance_id": outputs["InstanceId"],
-                  "public_ip": outputs["PublicIp"], "images": values}, indent=2))
+                  "public_ip": outputs["PublicIp"], "images": values,
+                  "testing_credentials": testing_credentials}, indent=2))
