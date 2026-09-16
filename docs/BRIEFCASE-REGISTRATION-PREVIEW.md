@@ -93,4 +93,4 @@ original planned metadata before the first upload, with a separate operator audi
 record. The original bootstrap history is preserved; see the
 [registration status](BRIEFCASE-REGISTRATION-STATUS.md#final-archive-metadata-correction).
 
-Fresh credentials have been issued and authenticated against production IAM. They must be configured in the Briefcase service before its login/storage can work. The archive has not been uploaded, and a public catalog entry does not make its download available.
+Fresh credentials have been issued and authenticated against production IAM. They are now configured in the deployed Briefcase service. The archive has not been uploaded, and a public catalog entry does not make its download available.

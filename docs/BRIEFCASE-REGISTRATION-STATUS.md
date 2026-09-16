@@ -33,9 +33,9 @@ and `remote_archive_validated: false`.
 Planned public bytes URL:
 <https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment>
 
-The archive has **not** been uploaded. Briefcase still needs its fresh credentials
-configured, then the matching archive uploaded at the exact planned path with
-public link access enabled. Public catalog visibility does not make the missing
+The archive has **not** been uploaded. Fresh credentials are now configured in
+the deployed Briefcase service. The matching archive still needs uploading at the
+exact planned path with public link access enabled. Public catalog visibility does not make the missing
 archive downloadable. Honeycomb verifies downloaded bytes against the stored hash.
 
 ## Production verification
