@@ -43,21 +43,43 @@ External OBO scopes requested by Briefcase: none.
 | --- | --- | --- | --- |
 | `briefcase.entries.list` | `/api/v1/obo/entries/list` | false | 300 seconds |
 | `briefcase.entries.trash` | `/api/v1/obo/entries/trash` | false | 300 seconds |
-| `briefcase.files.create` | `/api/v1/obo/files` | false | 300 seconds |
+| `briefcase.files.create` | `/api/v1/obo/files` | false | 3600 seconds (60 minutes) |
 | `briefcase.files.read` | `/api/v1/obo/files/read` | false | 300 seconds |
 | `briefcase.folders.create` | `/api/v1/obo/folders/create` | false | 300 seconds |
 | `briefcase.invitations.create` | `/api/v1/obo/invitations` | true | 300 seconds |
 | `briefcase.link_access.update` | `/api/v1/obo/link-access` | true | 300 seconds |
 | `briefcase.uploads.cancel` | `/api/v1/obo/uploads/cancel` | false | 300 seconds |
-| `briefcase.uploads.commit` | `/api/v1/obo/uploads/commit` | false | 300 seconds |
-| `briefcase.uploads.reserve` | `/api/v1/obo/uploads/reserve` | false | 300 seconds |
+| `briefcase.uploads.commit` | `/api/v1/obo/uploads/commit` | false | 3600 seconds (60 minutes) |
+| `briefcase.uploads.reserve` | `/api/v1/obo/uploads/reserve` | false | 3600 seconds (60 minutes) |
 | `briefcase.uploads.status` | `/api/v1/obo/uploads/status` | false | 300 seconds |
 
 The `briefcase.files.create` metadata schema requires `content_type`, `name`, and `path`, each a string. Other endpoints have empty metadata definitions. All endpoints are enabled.
 
+Upload proof lifetime is 60 minutes for `briefcase.files.create`,
+`briefcase.uploads.reserve`, and `briefcase.uploads.commit`. Other endpoints keep
+their five-minute lifetime. This changes OBO proof validity, not upload reservation
+or transfer-capability expiry; proofs remain single-use.
+
 Provider review guidance:
 
 Describe why your application needs to invite organization members or make entries public. Briefcase limits each operation to the calling app directory and the represented member permissions.
+
+## Planned archive link
+
+- [Briefcase archive — planned, not uploaded](https://briefcase.teamofsilicons.com/org/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz)
+- Briefcase organization: `tos`
+- Exact storage path: `apps/tos>honeycomb/public/tos--briefcase-1.1.0.tar.gz`
+- [Direct public download — available after upload and link sharing](https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment)
+
+This matches Honeycomb's existing upload folder and filename. The URL can remain
+unchanged when the archive is uploaded at that exact path. It does not currently
+resolve to a verified release. Public download additionally requires effective
+public link access; the folder name `public` alone does not grant access.
+
+The future link is saved in the local release plan alongside the validated archive
+hash and size. The normal app registration payload has no archive URL field;
+Honeycomb currently creates release records after a successful Briefcase upload.
+No application or release record is being submitted as part of this draft edit.
 
 ## Release archive
 

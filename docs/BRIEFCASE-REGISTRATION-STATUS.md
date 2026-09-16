@@ -16,6 +16,9 @@ payload are prepared outside Git with owner-only permissions. The six-target
 
 The old Briefcase IAM identity and credentials are gone as requested. Following
 confirmed registration, its fresh credentials must be configured in the service.
+A planned permanent archive URL now points to Honeycomb's actual Briefcase folder
+and filename; it is not a live uploaded release. Upload OBO proofs for file creation,
+reservation and commit are prepared with a 60-minute lifetime.
 Archive upload and publication remain separate actions and have not been completed.
 
 ## Earlier backend maintenance
