@@ -29,6 +29,15 @@ pub trait Management: Send + Sync {
             "IAM production application verification is not configured",
         ))
     }
+    /// IAM resolves current immutable application links, including dependency imports.
+    async fn testing_application_environment_ids(
+        &self,
+        _application_authorization: &str,
+    ) -> Result<Vec<String>> {
+        Err(Error::unavailable(
+            "IAM application environment linkage discovery is not configured",
+        ))
+    }
     async fn application_lifecycle(
         &self,
         _operation: &Value,

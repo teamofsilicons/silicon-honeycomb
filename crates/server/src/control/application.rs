@@ -67,8 +67,26 @@ pub(crate) async fn coordinate(
 }
 pub(crate) async fn list(s: &State, h: &HeaderMap) -> Result<Json<Value>> {
     let authority = authenticate(s, h).await?;
-    let rows = sqlx::query("SELECT DISTINCT e.* FROM environments e LEFT JOIN environment_application_links l ON l.environment_id=e.id WHERE e.creator_application_id=? OR l.application_id=? ORDER BY e.created_at DESC,e.id")
-        .bind(&authority.identity.application_id).bind(&authority.identity.application_id).fetch_all(&s.db).await?;
+    // Current IAM links include apps imported only as dependencies. A listing link
+    // never confers ownership, root-key access, or authority over another app.
+    let discovered = s
+        .management
+        .testing_application_environment_ids(&authority.authorization)
+        .await;
+    let verified_ids = discovered.ok().and_then(|ids| {
+        let mut unique = std::collections::BTreeSet::new();
+        for id in ids {
+            let id = uuid::Uuid::parse_str(&id).ok()?.to_string();
+            if !unique.insert(id) {
+                return None;
+            }
+        }
+        Some(unique)
+    });
+    let discovery_complete = verified_ids.is_some();
+    let ids = json!(verified_ids.unwrap_or_default()).to_string();
+    let rows = sqlx::query("SELECT DISTINCT e.* FROM environments e LEFT JOIN environment_application_links l ON l.environment_id=e.id WHERE e.creator_application_id=? OR l.application_id=? OR e.id IN (SELECT value FROM json_each(?)) ORDER BY e.created_at DESC,e.id")
+        .bind(&authority.identity.application_id).bind(&authority.identity.application_id).bind(ids).fetch_all(&s.db).await?;
     let mut items = vec![];
     for row in rows {
         let mut value = environment_value(&row);
@@ -83,7 +101,13 @@ pub(crate) async fn list(s: &State, h: &HeaderMap) -> Result<Json<Value>> {
         value["services"] = json!(services.iter().map(|r|json!({"app_id":r.get::<String,_>("app_id"),"state":r.get::<String,_>("state"),"error":r.get::<Option<String>,_>("error")})).collect::<Vec<_>>());
         items.push(value);
     }
-    Ok(Json(json!({"items":items})))
+    let mut response = json!({"items":items,"linkage_discovery":if discovery_complete {"complete"} else {"pending"}});
+    if !discovery_complete {
+        response["linkage_error"] = json!(
+            "IAM application linkage discovery is pending; this list currently contains only locally verified links"
+        );
+    }
+    Ok(Json(response))
 }
 pub(crate) async fn link(
     s: &State,

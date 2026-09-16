@@ -59,6 +59,7 @@ struct Apps {
     recreated: AtomicBool,
     fail_attached: AtomicBool,
     recovery_ready: AtomicBool,
+    linked_ids: std::sync::Mutex<Option<Vec<String>>>,
 }
 #[async_trait]
 impl Management for Apps {
@@ -94,6 +95,17 @@ impl Management for Apps {
             organization_id: "00000000-0000-4000-8000-000000000010".into(),
             iam_revision: 1,
         })
+    }
+    async fn testing_application_environment_ids(
+        &self,
+        authorization: &str,
+    ) -> Result<Vec<String>> {
+        self.verify_testing_application(authorization).await?;
+        self.linked_ids
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| Error::unavailable("fixture sensitive upstream error"))
     }
     async fn recover_testing_application_credential(
         &self,
@@ -145,6 +157,7 @@ async fn setup() -> (State, Arc<Apps>) {
         recreated: AtomicBool::new(false),
         fail_attached: AtomicBool::new(false),
         recovery_ready: AtomicBool::new(false),
+        linked_ids: std::sync::Mutex::new(Some(vec![])),
     });
     let s = State {
         telemetry: Default::default(),
@@ -481,4 +494,84 @@ async fn held_additive_import_lease_never_delivers_credentials_while_environment
     assert_eq!(replay["operation_state"], "pending");
     assert_ne!(replay["credential_state"], "ready");
     assert!(replay.get("app_secret").is_none());
+}
+
+#[tokio::test]
+async fn iam_dependency_links_allow_listing_only_and_discovery_failures_are_explicit() {
+    let (s, apps) = setup().await;
+    let (_, created) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        "Basic owner-credential",
+        json!({"name":"Dependency testing"}),
+        "dependency-create01",
+    )
+    .await;
+    let id = created["environment_id"].as_str().unwrap();
+    // This app has no local ownership/attachment link; IAM attests dependency import.
+    *apps.linked_ids.lock().unwrap() = Some(vec![id.to_owned(), uuid::Uuid::new_v4().to_string()]);
+    let (_, linked) = call(
+        &s,
+        "GET",
+        "/api/v1/environments",
+        "Basic attached-credential",
+        json!({}),
+        "dependency-list01",
+    )
+    .await;
+    assert_eq!(linked["linkage_discovery"], "complete");
+    assert_eq!(linked["items"].as_array().unwrap().len(), 1);
+    assert_eq!(linked["items"][0]["environment_id"], id);
+    assert_eq!(linked["items"][0]["can_manage"], false);
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/key"),
+        "Basic attached-credential",
+        json!({}),
+        "dependency-key001",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/clean"),
+        "Basic attached-credential",
+        json!({}),
+        "dependency-clean1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    for ids in [
+        None,
+        Some(vec!["malformed-environment".into()]),
+        Some(vec![id.to_owned(), id.to_owned()]),
+    ] {
+        *apps.linked_ids.lock().unwrap() = ids;
+        let (_, linked) = call(
+            &s,
+            "GET",
+            "/api/v1/environments",
+            "Basic attached-credential",
+            json!({}),
+            "invalid-link-list01",
+        )
+        .await;
+        assert_eq!(linked["linkage_discovery"], "pending");
+        assert_eq!(linked["items"], json!([]));
+        assert!(!linked.to_string().contains("sensitive"));
+        let (_, owned) = call(
+            &s,
+            "GET",
+            "/api/v1/environments",
+            "Basic owner-credential",
+            json!({}),
+            "owner-link-list001",
+        )
+        .await;
+        assert_eq!(owned["linkage_discovery"], "pending");
+        assert_eq!(owned["items"][0]["can_manage"], true);
+    }
 }
