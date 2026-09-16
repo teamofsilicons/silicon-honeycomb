@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
             state.db.clone(),
             encryption_key,
         )?
+        .with_identity_app(&state.iam_app_id)?
         .with_participants(participants);
         state.management = Arc::new(management);
     }

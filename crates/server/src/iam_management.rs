@@ -1,4 +1,7 @@
-//! Adapter for the official IAM 1.10 management SDK. Unsupported contracts stay pending.
+//! Adapter for the official IAM management SDK.
+mod application;
+mod publication;
+mod testing;
 use crate::{
     error::{Error, Result},
     integration::Management,
@@ -13,6 +16,7 @@ use std::collections::BTreeSet;
 
 pub struct IamManagement {
     client: ManagementClient,
+    identity_app_id: Option<String>,
     participants: crate::participant_management::ParticipantRegistry,
     db: sqlx::SqlitePool,
     encryption_key: [u8; 32],
@@ -26,10 +30,19 @@ impl IamManagement {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             client: ManagementClient::new(base, SecretString::from(credential))?,
+            identity_app_id: None,
             participants: Default::default(),
             db,
             encryption_key,
         })
+    }
+    pub fn with_identity_app(mut self, app_id: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            honeycomb_core::valid_app_id(app_id),
+            "Invalid identity application ID"
+        );
+        self.identity_app_id = Some(app_id.to_owned());
+        Ok(self)
     }
     pub fn with_participants(
         mut self,
@@ -230,7 +243,7 @@ fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
 fn production(environment: Option<&str>) -> Result<()> {
     if environment.is_some() {
         Err(Error::unavailable(
-            "IAM 1.10 does not yet expose Honeycomb test-application configuration and credential operations",
+            "This IAM management operation is not available in a testing environment",
         ))
     } else {
         Ok(())
@@ -255,11 +268,97 @@ fn map_error(error: silicon_iam_client::Error) -> Error {
 }
 #[async_trait]
 impl Management for IamManagement {
+    async fn verify_testing_application(
+        &self,
+        authorization: &str,
+    ) -> Result<crate::integration::TestingApplicationIdentity> {
+        self.testing_verify_application(authorization).await
+    }
+    async fn testing_application_environment_ids(
+        &self,
+        authorization: &str,
+    ) -> Result<Vec<String>> {
+        self.testing_environment_ids(authorization).await
+    }
+    async fn application_lifecycle(
+        &self,
+        operation: &Value,
+        authorization: &str,
+        attachment_key: Option<&str>,
+    ) -> Result<Value> {
+        self.testing_apply_application(operation, authorization, attachment_key)
+            .await
+    }
+    async fn recover_testing_application_credential(
+        &self,
+        environment: &str,
+        authorization: &str,
+    ) -> Result<Value> {
+        self.testing_recover_credential(environment, authorization)
+            .await
+    }
+    async fn finalize_lifecycle(&self, operation: &Value) -> Result<Value> {
+        self.testing_finalize(operation).await
+    }
+    async fn publication_plan(
+        &self,
+        request: &Value,
+        actor: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        self.publication_plan_sdk(request, actor, environment).await
+    }
+    async fn review_decision(
+        &self,
+        operation: &Value,
+        actor: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        self.publication_decision_sdk(operation, actor, environment)
+            .await
+    }
+    async fn activate_publication(
+        &self,
+        operation: &Value,
+        actor: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        self.publication_activate_sdk(operation, actor, environment)
+            .await
+    }
+    async fn review_eligibility(
+        &self,
+        plan: &str,
+        provider: &str,
+        actor: &str,
+        environment: Option<&str>,
+    ) -> Result<bool> {
+        self.publication_eligibility_sdk(plan, provider, actor, environment)
+            .await
+    }
+    async fn review_notification_recipients(
+        &self,
+        plan: &str,
+        provider: &str,
+    ) -> Result<Vec<String>> {
+        self.publication_recipients_sdk(plan, provider).await
+    }
+    async fn notification_recipients(&self, org: &str) -> Result<Vec<String>> {
+        self.organization_recipients_sdk(org).await
+    }
     async fn service_lifecycle(&self, app: &str, operation: &Value, _actor: &str) -> Result<Value> {
         self.participants.apply(app, operation).await
     }
     async fn retention_lifecycle(&self, app: &str, operation: &Value) -> Result<Value> {
-        self.participants.apply(app, operation).await
+        if self.identity_app_id.as_deref() == Some(app) {
+            if operation["action"] == "retire-applications" {
+                self.testing_retire(operation).await
+            } else {
+                self.testing_apply(operation, None).await
+            }
+        } else {
+            self.participants.apply(app, operation).await
+        }
     }
     async fn scope_catalog(&self, org: &str, provider: Option<&str>) -> Result<Value> {
         self.client
@@ -268,7 +367,9 @@ impl Management for IamManagement {
             .map_err(map_error)
     }
     async fn configure(&self, o: &Value, actor: &str, environment: Option<&str>) -> Result<Value> {
-        production(environment)?;
+        if let Some(environment) = environment {
+            return self.testing_configure(o, actor, environment).await;
+        }
         let id = o["operation_id"]
             .as_str()
             .ok_or_else(|| Error::bad("Missing operation ID"))?;
@@ -287,7 +388,11 @@ impl Management for IamManagement {
         step_up: Option<&str>,
         environment: Option<&str>,
     ) -> Result<Value> {
-        production(environment)?;
+        if let Some(environment) = environment {
+            return self
+                .testing_rotate_secret(o, actor, step_up, environment)
+                .await;
+        }
         let id = o["operation_id"]
             .as_str()
             .ok_or_else(|| Error::bad("Missing operation ID"))?;
@@ -348,7 +453,9 @@ impl Management for IamManagement {
         actor: &str,
         environment: Option<&str>,
     ) -> Result<Value> {
-        production(environment)?;
+        if let Some(environment) = environment {
+            return self.testing_operation_result(id, actor, environment).await;
+        }
         let row = sqlx::query(
             "SELECT kind,app_id,encrypted_body FROM management_requests WHERE operation_id=?",
         )
@@ -372,7 +479,9 @@ impl Management for IamManagement {
         .await
     }
     async fn application_snapshot(&self, app: &str, environment: Option<&str>) -> Result<Value> {
-        production(environment)?;
+        if let Some(environment) = environment {
+            return self.testing_snapshot_plane(app, environment).await;
+        }
         self.snapshot(app).await
     }
     async fn application_state(
@@ -381,13 +490,13 @@ impl Management for IamManagement {
         _: &str,
         environment: Option<&str>,
     ) -> Result<Value> {
-        production(environment)?;
+        if let Some(environment) = environment {
+            return self.testing_snapshot(app, environment).await;
+        }
         self.snapshot(app).await
     }
-    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
-        Err(Error::unavailable(
-            "IAM 1.10 lifecycle requires a coordinated key/import/activation contract; see docs/IAM-CONTRACT-REVIEW.md",
-        ))
+    async fn lifecycle(&self, operation: &Value, actor: &str) -> Result<Value> {
+        self.testing_apply_user(operation, actor).await
     }
 }
 
