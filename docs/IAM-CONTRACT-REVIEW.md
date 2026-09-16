@@ -1,7 +1,7 @@
 # Current IAM integration review
 
-Reviewed deployed IAM code commit `c57b3a3` and rollout documentation commit
-`af194db` (2026-09-16), SDK 1.10.0, against Honeycomb.
+Reviewed deployed IAM code commit `ed9abe2` (2026-09-16), SDK 1.10.0,
+against Honeycomb. The original management rollout was `c57b3a3` / `af194db`.
 The current upstream source of truth is `silicon-iam/docs/HONEYCOMB_INTEGRATION.md`
 and its OpenAPI contract. This review supersedes the earlier assumption that IAM
 has no management API in `IAM-HANDOFF.md`.
@@ -10,14 +10,15 @@ has no management API in `IAM-HANDOFF.md`.
 
 ### Now: authenticated application creation
 
-1. Keep `self.identity.read` and `self.profile.read` effective on `tos>honeycomb`.
-   Add effective `self.membership.read`, then require renewed consent when users
-   sign in. Existing sessions must not gain undisclosed authority automatically.
+1. `self.identity.read`, `self.profile.read` and `self.membership.read` are now
+   effective on `tos>honeycomb` (IAM revision 3). Renew user consent when signing
+   in. Existing sessions must not gain undisclosed authority automatically.
 2. Ensure both organization-scoped and unscoped introspection disclose current
    `owner` / `admin` / `member` roles with that membership grant and consent.
-   Check `iam_private.list_current_application_authorizations`: its last inspected
-   definition checks retired `roles.read` (details below). Missing disclosure
-   correctly keeps Honeycomb's Create application button disabled.
+   Migration 0099 fixes `iam_private.list_current_application_authorizations`
+   to require consented membership access (details below). Verify this with a
+   fresh real actor session. Missing disclosure correctly keeps Honeycomb's
+   Create application button disabled.
 3. Exercise a real owner/admin actor through private application creation with
    the existing Honeycomb management service credential. Confirm that members,
    revoked memberships and service-only requests cannot perform that mutation.
@@ -90,11 +91,11 @@ registry dependency once available. No IAM source was edited or published here.
 
 ## Live rollout verification — 2026-09-16
 
-- `/readyz` returns 200; `/api/v1/version` reports
-  `c57b3a385fc6b0749f1cd9ae1e91e40169db531f`.
+- `/api/v1/version` now reports
+  `ed9abe2241fb8962c6036624d1946ab7c7f79068`.
 - An unauthenticated management catalog read returns 401. The provisioned
   service credential reads the catalog and `tos>honeycomb` with 200.
-- The authentication app is verified/public, with IAM revision 2 and
+- The authentication app is verified/public, with IAM revision 3 and
   configuration revision 0. Its identity UUID is
   `01a0a751-69c0-70b2-8456-96806349f999`.
 - The protected handoff is at
@@ -115,9 +116,9 @@ printing credentials or mutating applications.
 
 ### Required bootstrap grants
 
-The live app currently has only `self.identity.read` and `self.profile.read`.
-Before authenticated application management, add effective `self.membership.read`
-and require users to consent to it so role disclosure is available. The adapter
+The live app now has `self.identity.read`, `self.profile.read` and
+`self.membership.read`. Users must renew consent to receive membership disclosure;
+the live IAM consent screen now displays all three permissions. The adapter
 maps IAM's `owner`, `admin`, and `member` wire values to Honeycomb's existing
 `org_owner`, `org_admin`, and `org_member` API values. Unknown or absent roles
 grant no administrative authority.
@@ -130,13 +131,14 @@ Add `--require-ready` to the check above to fail until all six required identity
 membership and storage scopes are effective. This is a prerequisite check, not
 proof of user consent, resource authorization, or end-to-end storage success.
 
-Also confirm unscoped token introspection discloses roles under
-`self.membership.read`: the latest definition of
-`iam_private.list_current_application_authorizations` found in migration 0072
-still gates `org_role` on the retired `roles.read` scope, while the single-org
-function updated by migration 0093 uses `self.membership.read`. Honeycomb's
-website login does not pin an organization. This source discrepancy needs a
-live actor regression check/fix in IAM; Honeycomb must not infer missing roles.
+IAM commit `ed9abe2` adds migration 0099 to fix unscoped role disclosure. It
+requires `self.membership.read` in the issued token, current app approval and
+live user consent; retired `roles.read` cannot disclose roles. Its SQL regression
+tests cover old-token isolation, renewed consent and approval revocation. The
+new-app bootstrap also includes membership access, while existing identities
+must use the authorized configuration flow. Honeycomb's website login does not
+pin an organization, so a fresh real actor regression check remains necessary;
+Honeycomb must not infer missing roles or reuse earlier consent as a new grant.
 
 ## Remaining contract gaps and work
 
