@@ -1,6 +1,7 @@
 import { LogoField } from "./LogoField";
 import { telemetryEnabled, setTelemetry, setTelemetrySource, setTelemetryAuthenticated, diagnostic } from "./telemetry";
 import EnvironmentRetention from "./EnvironmentRetention";
+import SentRequests, { publicationStatus } from "./SentRequests";
 import WebhookSettings from "./WebhookSettings";
 import ScopePicker from "./ScopePicker";
 import {
@@ -156,6 +157,7 @@ export default function App() {
   const [selected, setSelected] = createSignal<AppRecord>();
   const [detailsTab, setDetailsTab] = createSignal("overview");
   const [reviewInbox, setReviewInbox] = createSignal<any[]>([]);
+  const [sentRevision, setSentRevision] = createSignal(0);
   const [selectedReview, setSelectedReview] = createSignal<any>();
   const [reviewDecision, setReviewDecision] = createSignal("approve");
   const [reviewReason, setReviewReason] = createSignal("");
@@ -562,6 +564,7 @@ export default function App() {
               Testing environments
             </button>
             <button class={view() === "review-requests" ? "active" : ""} onClick={()=>navigate("review-requests")}><Check size={18}/>Review requests</button>
+            <button class={view() === "sent-requests" ? "active" : ""} onClick={()=>navigate("sent-requests")}><ArrowUpRight size={18}/>Sent requests</button>
           </Show>
           <button
             class={view() === "docs" ? "active" : ""}
@@ -710,6 +713,9 @@ export default function App() {
                 <section class="page-heading"><div><span class="eyebrow">APPLICATION ACCESS</span><h1>Review requests.</h1><p>Review applications requesting your critical scopes. Honeycomb validation follows accepted provider decisions.</p></div></section>
                 <Show when={!reviewInbox().length}><p class="muted">There are no requests you can currently review. Provider reviews require current owner/admin access; Honeycomb validation requires explicit reviewer permission.</p></Show>
                 <For each={reviewInbox()}>{(item)=><button class="review-request-row" onClick={()=>void openReview(item)}><div><h2>{item.configuration?.name || item.app_id}</h2><p class="app-id">{item.app_id}</p><p>{item.provider} · {item.scopes.join(", ") || "Publication validation"}</p></div><Badge>{item.state}</Badge><ArrowUpRight size={17}/></button>}</For>
+              </Show>
+              <Show when={view() === "sent-requests" && isConsole()}>
+                <SentRequests revision={sentRevision()} open={app => { void select(app); setDetailsTab("release"); }} discuss={item => void openReview(item)} />
               </Show>
               <Show when={view() === "applications"}>
                 <section class="page-heading">
@@ -1133,7 +1139,7 @@ export default function App() {
       <Dialog
         open={!!selected()}
         title={selected()?.name || "Application"}
-        close={() => setSelected(undefined)}
+        close={() => { setSelected(undefined); setSentRevision(value => value + 1); }}
       >
         <Show when={selected()}>
           {(app) => (
@@ -1417,7 +1423,7 @@ export default function App() {
                       setPublication(
                         await request(endpoint(app().app_id) + "/publication"),
                       );
-                    }, "Publication request saved. Existing access stays unchanged until review and activation complete.");
+                    }, "Publication requested. Honeycomb will publish automatically once all required approvals pass.");
                   }}
                 >
                   <label>
@@ -1444,16 +1450,17 @@ export default function App() {
                 <For each={publication()?.items || []}>
                   {(p) => (
                     <section class="review-thread">
-                      <Badge>{p.state.replaceAll("_", " ")}</Badge>
+                      <Badge>{publicationStatus(p.state)}</Badge>
+                      <Show when={p.state === "awaiting_activation" || p.state === "activating"}><p class="muted">All approvals passed. Honeycomb is completing publication with IAM and release storage.</p></Show>
                       <Show when={p.error}><p class="muted">{p.error}</p></Show>
                       <Show when={p.activation?.error}><p class="field-error">{p.activation.error}</p></Show>
                       <For each={p.activation?.archives || []}>{(archive)=><p>Release {archive.version} · {archive.state}{archive.error ? ` · ${archive.error}` : ""}</p>}</For>
-                      <Show when={p.state==="awaiting_activation" || p.state==="activating"}><button class="button primary" disabled={busy() || (p.state==="activating" && !p.activation?.idempotency_key)} onClick={()=>void act(async()=>{
+                      <Show when={(p.state==="awaiting_activation" || p.state==="activating") && (p.error || p.activation?.error)}><button class="button primary" disabled={busy() || (p.state==="activating" && !p.activation?.idempotency_key)} onClick={()=>void act(async()=>{
                         const headers:Record<string,string>={"If-Match":String(p.revision)};if(p.activation?.idempotency_key)headers["Idempotency-Key"]=p.activation.idempotency_key;
                         const result=await request(`/api/v1/review-requests/${p.id}/activate`,{method:"POST",headers,body:"{}"});
                         setPublication(await request(endpoint(app().app_id)+"/publication"));setSelected(await request(endpoint(app().app_id)));await load();
                         setNotice(result.state==="accepted" ? "Application published." : "Publication is pending. Check IAM and archive progress above.");
-                      })}>{p.state==="activating" ? "Continue publication" : "Activate public release"}</button></Show>
+                      })}>Retry publication</button></Show>
                       <Show when={p.state === "awaiting_review_plan"}><button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{await request(`/api/v1/review-requests/${p.id}/plan`,{method:"POST",headers:{"If-Match":String(p.revision)},body:"{}"});setPublication(await request(endpoint(app().app_id)+"/publication"));})}>Retry review planning</button></Show>
                       <For each={p.gates || []}>{(gate)=><p>{gate.provider} · {gate.state} <button class="text-button" onClick={()=>void openReview({id:p.id,provider:gate.provider})}>Open discussion</button></p>}</For>
                       <For each={p.messages}>{(m) => <p>{m.message}</p>}</For>
@@ -1956,7 +1963,7 @@ export default function App() {
           </button>
         </form>
       </Dialog>
-      <Dialog open={!!selectedReview()} title="Application review" close={()=>setSelectedReview(undefined)}>
+      <Dialog open={!!selectedReview()} title="Application review" close={()=>{setSelectedReview(undefined);setSentRevision(value=>value+1);}}>
         <Show when={selectedReview()}>{(review)=><>
           <Show when={error()}><p class="field-error" role="alert">{error()}</p></Show>
           <h3>{review().configuration?.name || review().app_id}</h3><p class="app-id">{review().app_id} · Revision {review().revision}</p>
@@ -1968,7 +1975,8 @@ export default function App() {
           <Show when={review().can_decide}><h3>Review decision</h3><p class="muted">IAM verifies your current reviewer authority. Approval takes effect only after IAM accepts it. Denial requires an explanation.</p>
           <form class="review-form" onSubmit={(e)=>{e.preventDefault();void act(async()=>{
             const headers:Record<string,string>={"If-Match":String(review().revision)};if(review().decision?.idempotency_key) headers["Idempotency-Key"]=review().decision.idempotency_key;
-            await request(reviewEndpoint(review())+"/decisions",{method:"POST",headers,body:JSON.stringify({decision:reviewDecision(),reason:reviewReason()})});
+            const result = await request(reviewEndpoint(review())+"/decisions",{method:"POST",headers,body:JSON.stringify({decision:reviewDecision(),reason:reviewReason()})});
+            setNotice(result.publication_state === "published" ? "Approved and published." : result.publication_error || (result.publication_state === "activating" ? "Approved. Publication is completing automatically." : "Review decision saved."));
             setSelectedReview(await request(reviewEndpoint(review())));setReviewInbox((await request("/api/v1/review-requests")).items);
           });}}>
             <label>Decision<select value={reviewDecision()} disabled={!!review().decision} onChange={(e)=>setReviewDecision(e.currentTarget.value)}><option value="approve">Approve</option><option value="deny">Deny</option></select></label>

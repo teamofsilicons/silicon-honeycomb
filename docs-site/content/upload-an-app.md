@@ -45,3 +45,5 @@ Run your installed command's help and a representative operation. Test native bu
 
 ## 5. Request public distribution
 Follow [Publication and reviews](/publication/). Private registration, successful storage, and public approval are separate states. If your archive or logo upload reports missing delegated permissions, use [Troubleshooting](/troubleshooting/); the platform's Briefcase integration must be configured first.
+
+Publication errors list each unmet prerequisite separately. If the latest upload for the current application revision failed validation, the response includes the exact validator errors, for example `targets.windows-aarch64: required 64-bit target is missing`. The CLI upload uses the authenticated server validator so those errors remain available to later publication requests. `honeycomb validate` still works locally before uploading. If no upload reached the server, Honeycomb reports that no release has been uploaded successfully; it does not invent a validation result. IAM activation details appear only while activation is pending. A successful upload clears the saved failure, and failures from older application revisions are not shown.

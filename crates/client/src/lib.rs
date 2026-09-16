@@ -22,7 +22,7 @@ pub fn context_fingerprint(origin: &str, environment: Option<&str>) -> String {
     )))[..24]
         .to_owned()
 }
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use reqwest::{Method, Response};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -374,19 +374,17 @@ impl Client {
         Ok(serde_json::from_value(value["items"].clone())?)
     }
     pub async fn upload_release(&self, id: &str, path: &Path, m: &Mutation) -> Result<Value> {
-        let v = package::validate(path);
-        if !v.valid {
-            bail!("Archive validation failed:\n{}", v.errors.join("\n"));
+        // The authenticated upload uses the server's package validator, which retains
+        // exact failures for a later publication request in this app and context.
+        let file = tokio::fs::File::open(path).await?;
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        file.take(package::MAX_ARCHIVE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        if bytes.len() as u64 > package::MAX_ARCHIVE_BYTES {
+            bail!("Archive exceeds the maximum upload size");
         }
-        if v.manifest
-            .context("Missing manifest")?
-            .app_id
-            .as_deref()
-            .is_some_and(|app| app != id)
-        {
-            bail!("Archive app_id does not match {id}");
-        }
-        let bytes = tokio::fs::read(path).await?;
         let response = Self::check(
             self.request(Method::POST, self.url(&["apps", id, "releases"])?, Some(m))
                 .header("content-type", "application/gzip")

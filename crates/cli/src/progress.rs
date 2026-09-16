@@ -18,6 +18,7 @@ pub struct Progress {
     sender: Option<mpsc::Sender<Message>>,
     worker: Option<thread::JoinHandle<()>>,
     last_download: Mutex<Option<Instant>>,
+    completion: Mutex<Option<String>>,
 }
 impl Progress {
     pub fn new(enabled: bool, message: &str) -> Self {
@@ -28,6 +29,7 @@ impl Progress {
             sender: None,
             worker: None,
             last_download: Mutex::new(None),
+            completion: Mutex::new(None),
         };
         if enabled {
             eprintln!("{message}…");
@@ -125,17 +127,24 @@ impl Progress {
             }
         }
     }
+    pub fn completion(&self, message: String) {
+        *self.completion.lock().unwrap() = Some(message);
+    }
     pub fn finish(mut self, success: bool) {
         self.stop();
         if self.enabled {
-            eprintln!(
-                "{}",
-                if success {
-                    "Done."
-                } else {
-                    "Installation/update failed."
-                }
-            );
+            if success {
+                eprintln!(
+                    "{}",
+                    self.completion
+                        .lock()
+                        .unwrap()
+                        .as_deref()
+                        .unwrap_or("Done.")
+                );
+            } else {
+                eprintln!("Installation/update failed.");
+            }
         }
     }
     fn stop(&mut self) {

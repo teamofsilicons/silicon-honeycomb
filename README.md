@@ -202,8 +202,13 @@ honeycomb publication decide REQUEST_ID 'tos>provider' approve --revision 1 --re
 Provider administrators review their own critical scopes. IAM reviewers require
 IAM's explicit authority; Honeycomb validators act only after provider approvals
 are accepted. Denials require a reason. The console's Review requests page provides
-the same discussions and decisions. Publication remains pending until IAM accepts
-activation and archive access is reconciled.
+the incoming discussions and decisions; **Sent requests** separately lists the
+publication history of applications you manage, including completed requests.
+Submitting a publication request expresses intent to go public. The final
+required approval starts publication automatically, with public visibility only
+after IAM accepts activation and archive access is reconciled. If the authorizing
+manager's IAM session expires, signing in and opening Sent requests resumes the
+workflow without another publication confirmation.
 
 ## Approve webhooks and rotate signing material
 

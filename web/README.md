@@ -41,8 +41,26 @@ frontend's `/auth/callback`; cookies are host-only, HttpOnly, Secure and SameSit
 
 ## Repeatable browser tests
 
+Review requests is the incoming queue for eligible reviewers. Sent requests shows
+publication history for all applications the signed-in user manages, including
+completed and denied requests. Submitting a publication request authorizes
+publication of that revision after every required approval; there is no separate
+activation confirmation. IAM activation and archive sharing must complete before
+the catalog exposes the release publicly. Failed integration steps are retried.
+
+The backend encrypts an authorizing app manager's short-lived IAM access token to finish this
+workflow, rechecking permissions on every attempt. An expired or revoked token
+leaves the request approved and the application private. An application manager
+must sign in and open Sent requests (or the application's publication details) to
+renew authorization; publication then resumes without another confirmation.
+Saved authorization is removed on completion, denial, revision replacement, or
+after 24 hours. A reviewer without app-management authority cannot authorize
+publication. Once activation starts, its authorizing manager must resume it;
+review history always retains the original requester.
+
 ```sh
 npm ci
+npm run test:unit
 npx playwright install chromium
 npm run test:e2e
 ```

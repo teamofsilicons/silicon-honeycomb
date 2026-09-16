@@ -490,7 +490,7 @@ test("console uploads and activates an approved release visible in the anonymous
     await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toBeEnabled();
     await dialog.getByLabel("Tell reviewers about your application").fill("Please review this complete six-target release.");
     await dialog.getByRole("button", { name: "Request publication", exact: true }).click();
-    await expect(dialog).toContainText("awaiting validator");
+    await expect(dialog).toContainText("Awaiting Honeycomb approval");
     const publications = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/publication`)).json();
     // The independent validator uses an explicit test identity; the owner cannot self-approve.
     const login = await request.post("http://127.0.0.1:19180/api/v1/auth/login", {
@@ -502,10 +502,10 @@ test("console uploads and activates an approved release visible in the anonymous
     });
     expect(decision.ok()).toBe(true);
     await page.reload();
-    await page.getByRole("heading", { name, exact: true }).click();
-    await page.getByRole("button", { name: "Releases & publication" }).click();
-    await page.getByRole("button", { name: "Activate public release", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText("published");
+    await page.getByRole("button", { name: "Sent requests", exact: true }).click();
+    const sentRequest = page.locator("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
+    await expect(sentRequest).toContainText("Published", { timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Activate public release", exact: true })).toHaveCount(0);
     await page.goto(library);
     await page.getByRole("searchbox", { name: "Search applications" }).fill(name);
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();

@@ -91,6 +91,8 @@ def main():
                 if mode == 'corrupt':
                     assert process.returncode != 0 and 'integrity verification failed' in stderr, stderr
                     assert 'Done.' not in stderr
+                    assert 'Installed Successfully' not in stderr
+                    assert 'to access it.' not in stderr
                     assert not list((root / mode).rglob('installed.json'))
                 else:
                     assert process.returncode == 0, stderr
@@ -98,8 +100,21 @@ def main():
                     if mode == 'json':
                         assert stderr == '', stderr
                     else:
-                        for text in ['Finding the requested release', 'Downloading: 0%', 'Downloading: 100%', 'Verifying package', 'Unpacking and activating', 'Saving installation record', 'Done.']:
+                        for text in ['Finding the requested release', 'Downloading: 0%', 'Downloading: 100%', 'Verifying package', 'Unpacking and activating', 'Saving installation record', 'Installed Successfully', 'Run `honeycomb-progress-fixture` to access it.']:
                             assert text in stderr, (text, stderr)
+            # Completion uses the actual alias and preserves it on repeated installs.
+            release['sha256'] = hashlib.sha256(archive).hexdigest()
+            env['SILICON_HOME'] = str(root / 'aliased')
+            subprocess.run([str(CLI), 'config', 'set', 'auto_update', 'false'], env=env, capture_output=True, check=True)
+            command = [str(CLI), 'install', release['app_id'], '--alias', 'honeycomb-progress-fixture=honeycomb-chosen-alias']
+            for status in ['Installed Successfully', 'Already up to date.']:
+                result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+                assert result.returncode == 0, result.stderr
+                assert result.stderr.endswith(status + '\nRun `honeycomb-chosen-alias` to access it.\n'), result.stderr
+                json.loads(result.stdout)
+            result = subprocess.run([str(CLI), '--json', 'install', release['app_id']], env=env, capture_output=True, text=True, timeout=15)
+            assert result.returncode == 0 and result.stderr == '', result.stderr
+            assert json.loads(result.stdout)['status'] == 'already_up_to_date'
             server.shutdown()
     print('PASS: immediate progress before response, byte progress, install stages, JSON silence, corrupt-download failure')
 

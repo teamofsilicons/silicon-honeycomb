@@ -382,6 +382,9 @@ async fn main() -> anyhow::Result<()> {
             .bind(format!("fixture-import-{project}")).bind(format!("Import sandbox {project}"))
             .bind(state.encrypt("fixture-import-root-key-0000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("fixture-import-unused-hash-{project}")).execute(&state.db).await?;
     }
+    tokio::spawn(silicon_honeycomb_server::publication_worker::run(
+        state.clone(),
+    ));
     let app = silicon_honeycomb_server::api::router(state).route("/login", get(fixture_login));
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     println!(

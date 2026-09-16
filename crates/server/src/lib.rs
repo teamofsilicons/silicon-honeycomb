@@ -14,6 +14,7 @@ pub mod lifecycle;
 pub mod logos;
 pub mod notifications;
 pub mod participant_management;
+pub mod publication_worker;
 pub mod reconciliation;
 pub mod retention;
 pub mod retention_worker;

@@ -648,7 +648,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     if let Command::Daemon { once } = cli.command {
         loop {
             let config: Settings = read(&root.join("config.json"))?;
-            if config.auto_update {
+            if automatic_updates_enabled(config.auto_update) {
                 let started = std::time::Instant::now();
                 // Check packages even if the Honeycomb binary update server is unavailable.
                 let packages = update_packages(&root, cli, false).await;
@@ -1099,14 +1099,16 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
     }
-    if settings.auto_update {
+    if automatic_updates_enabled(settings.auto_update) {
         progress.stage("Checking scheduled updates");
     }
-    if settings.auto_update && update_packages(&root, cli, true).await.is_err() {
+    if automatic_updates_enabled(settings.auto_update)
+        && update_packages(&root, cli, true).await.is_err()
+    {
         eprintln!("Package update check deferred; run honeycomb update for details");
     }
     // Maintenance failures must not change the user's successful command result.
-    if settings.auto_update
+    if automatic_updates_enabled(settings.auto_update)
         && now() - settings.last_update_check >= 3600
         && let Err(e) = self_update(&root, false, None).await
     {
@@ -1153,6 +1155,9 @@ async fn install(
         if let Some(progress) = progress {
             progress.pause();
             show(&json!({"app_id":id,"version":release.version,"status":"already_up_to_date"}))?;
+            if let Some(previous) = previous {
+                progress.completion(installation_message(previous, "Already up to date."));
+            }
         }
         return Ok(());
     }
@@ -1192,9 +1197,25 @@ async fn install(
         show(
             &json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())}),
         )?;
+        progress.completion(installation_message(
+            &record,
+            if updating {
+                "Updated Successfully"
+            } else {
+                "Installed Successfully"
+            },
+        ));
     }
     Ok(())
 }
+fn installation_message(record: &Installed, status: &str) -> String {
+    let Some(command) = record.commands.keys().next() else {
+        return status.to_owned();
+    };
+    let alias = record.aliases.get(command).unwrap_or(command);
+    format!("{status}\nRun `{alias}` to access it.")
+}
+
 /// Resolve each package against its original origin and testing context. Never guess a
 /// missing test context or borrow credentials from production.
 async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) -> Result<()> {
@@ -1245,7 +1266,7 @@ async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<
         return Ok(());
     }
     let settings: Settings = read(&root.join("config.json"))?;
-    if !settings.auto_update {
+    if !automatic_updates_enabled(settings.auto_update) {
         return Ok(());
     }
     let selected = selected_context(cli, &settings, root)?;
@@ -1292,6 +1313,36 @@ async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<
     Ok(())
 }
 async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> Result<()> {
+    if !force
+        && !automatic_updates_enabled(read::<Settings>(&root.join("config.json"))?.auto_update)
+    {
+        return Ok(());
+    }
+    // current_exe can resolve a package manager's command link. Inspect the
+    // invocation too, before considering replacement of its pinned target.
+    let invocation = std::env::args_os().next().map(std::path::PathBuf::from);
+    let invoked_path = invocation.and_then(|path| {
+        if path.components().count() > 1 || path.is_absolute() {
+            Some(path)
+        } else {
+            std::env::var_os("PATH").and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|dir| dir.join(&path))
+                    .find(|p| p.is_file())
+            })
+        }
+    });
+    if invoked_path
+        .as_ref()
+        .is_some_and(|path| fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()))
+    {
+        if force {
+            bail!(
+                "Honeycomb was invoked through a managed command link; update it through its original package manager"
+            );
+        }
+        return Ok(());
+    }
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1335,6 +1386,22 @@ async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> R
         show(&json!({"updated":updated,"executable":executable}))?;
     }
     Ok(())
+}
+
+fn automatic_updates_enabled(preference: bool) -> bool {
+    auto_update_preference(
+        preference,
+        std::env::var("HONEYCOMB_AUTO_UPDATE").ok().as_deref(),
+    )
+}
+fn auto_update_preference(preference: bool, override_value: Option<&str>) -> bool {
+    preference
+        && !override_value.is_some_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
 }
 
 fn telemetry_enabled(preference: bool) -> bool {
@@ -1658,5 +1725,18 @@ mod tests {
             command: Command::Daemon { once: true },
         };
         update_packages(&root.0, &cli, false).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod auto_update_tests {
+    #[test]
+    fn process_opt_out_does_not_enable_a_disabled_preference() {
+        for value in ["0", "false", "OFF", " no "] {
+            assert!(!super::auto_update_preference(true, Some(value)));
+        }
+        assert!(super::auto_update_preference(true, None));
+        assert!(super::auto_update_preference(true, Some("true")));
+        assert!(!super::auto_update_preference(false, Some("true")));
     }
 }

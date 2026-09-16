@@ -63,4 +63,20 @@ mod unix {
             b"honeycomb 9.0.0\n"
         );
     }
+    #[tokio::test]
+    async fn managed_command_link_and_pinned_binary_survive_update() {
+        let directory = tempfile::tempdir().unwrap();
+        let pinned = directory.path().join("pinned-honeycomb");
+        let link = directory.path().join("honeycomb");
+        std::fs::write(&pinned, "pinned release").unwrap();
+        std::os::unix::fs::symlink(&pinned, &link).unwrap();
+        let bytes = archive(b"#!/bin/sh\nprintf 'honeycomb 9.0.0\\n'\n", false);
+        let checksum = hex::encode(Sha256::digest(&bytes));
+        let error = install_cli_release(&bytes, &checksum, "honeycomb 9.0.0", &link)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("managed command link"));
+        assert_eq!(std::fs::read_link(&link).unwrap(), pinned);
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "pinned release");
+    }
 }

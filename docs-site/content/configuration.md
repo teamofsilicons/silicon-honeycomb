@@ -25,6 +25,8 @@ honeycomb config set auto_update false
 honeycomb config set telemetry false
 honeycomb config set auto_update true
 ```
+Set `HONEYCOMB_AUTO_UPDATE=0` (also `false`, `off`, or `no`) to disable automatic CLI and package updates for one process, including `daemon --once`, without changing saved preferences. This is suitable for pinned distributions and fresh homes. An explicit `self-update` remains an explicit update request, but Honeycomb refuses to replace a command symlink; use the package manager that owns it.
+
 Boolean settings accept `true` or `false`. `HONEYCOMB_TELEMETRY=false` overrides diagnostics including scheduled checks. Website telemetry preferences are separate browser settings. See [Privacy and diagnostics](/privacy/).
 
 ## Global flags
