@@ -107,8 +107,10 @@ pub trait Management: Send + Sync {
             "IAM publication review planning is not yet available",
         ))
     }
-    async fn iam_scope_reviewer(
+    async fn review_eligibility(
         &self,
+        _plan_id: &str,
+        _provider: &str,
         _actor_token: &str,
         _environment: Option<&str>,
     ) -> Result<bool> {
@@ -124,7 +126,11 @@ pub trait Management: Send + Sync {
             "IAM protected scope decisions are not yet available",
         ))
     }
-    async fn review_notification_recipients(&self, _provider: &str) -> Result<Vec<String>> {
+    async fn review_notification_recipients(
+        &self,
+        _plan_id: &str,
+        _provider: &str,
+    ) -> Result<Vec<String>> {
         Err(Error::unavailable(
             "IAM scoped reviewer notification recipients are not yet available",
         ))

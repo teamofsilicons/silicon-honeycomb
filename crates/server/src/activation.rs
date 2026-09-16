@@ -344,7 +344,7 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
         .await?;
     sqlx::query("INSERT OR IGNORE INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.status',?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("publication:{publication}:published"))
-        .bind(json!({"app_id":app,"org_id":effective["org_id"],"state":"published"}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(json!({"request_id":publication,"app_id":app,"org_id":effective["org_id"],"state":"published"}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
 }

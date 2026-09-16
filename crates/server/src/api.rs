@@ -1278,7 +1278,7 @@ async fn request_publication(
     .await?;
     sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.status',?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("publication:{request}:requested"))
-        .bind(json!({"app_id":id,"org_id":app.org_id,"state":"awaiting_review_plan"}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(json!({"request_id":request,"app_id":id,"org_id":app.org_id,"state":"awaiting_review_plan"}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     let mut result = crate::reviews::plan(&s, &c, &request).await?;
     result["visibility"] = json!(app.visibility);
@@ -1387,10 +1387,10 @@ async fn message(
     let message_id = uuid::Uuid::new_v4().to_string();
     let mut tx = s.db.begin().await?;
     sqlx::query("INSERT INTO discussions(id,request_id,actor,provider,message,created_at,idempotency_key,request_hash) VALUES(?,?,?,?,?,?,?,?)")
-        .bind(&message_id).bind(request).bind(actor).bind(body.provider).bind(body.message).bind(now()).bind(key).bind(digest).execute(&mut *tx).await?;
+        .bind(&message_id).bind(&request).bind(actor).bind(body.provider).bind(body.message).bind(now()).bind(key).bind(digest).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.message',?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message_id}"))
-        .bind(json!({"app_id":id,"org_id":app.org_id,"review_providers":reviewers}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(json!({"request_id":request,"app_id":id,"org_id":app.org_id,"review_providers":reviewers}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":message_id})))
 }

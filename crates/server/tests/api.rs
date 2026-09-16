@@ -1887,11 +1887,21 @@ impl Management for ReviewManager {
     }
     async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         Ok(
-            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"iam","scopes":["directory.carbons.read"]},{"provider":"other>provider","scopes":["files.read"]}]}),
+            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"iam","scopes":["directory.carbons.read"]},{"provider":"other>provider","scopes":["obo:other>provider:files.read"]},{"provider":"honeycomb","scopes":[]}]}),
         )
     }
-    async fn iam_scope_reviewer(&self, token: &str, _: Option<&str>) -> Result<bool> {
-        Ok(token == "iam-reviewer")
+    async fn review_eligibility(
+        &self,
+        plan: &str,
+        provider: &str,
+        token: &str,
+        _: Option<&str>,
+    ) -> Result<bool> {
+        assert!(plan.starts_with("plan-"));
+        Ok(matches!(
+            (provider, token),
+            ("iam", "iam-reviewer") | ("honeycomb", "validator") | ("other>provider", "outsider")
+        ))
     }
     async fn notification_recipients(&self, org: &str) -> Result<Vec<String>> {
         assert_eq!(org, "tos");
@@ -1900,8 +1910,14 @@ impl Management for ReviewManager {
             "shared@example.com".into(),
         ])
     }
-    async fn review_notification_recipients(&self, provider: &str) -> Result<Vec<String>> {
+    async fn review_notification_recipients(
+        &self,
+        plan: &str,
+        provider: &str,
+    ) -> Result<Vec<String>> {
+        assert!(plan.starts_with("plan-"));
         let email = match provider {
+            "owners" => "requester@example.com",
             "other>provider" => "provider@example.com",
             "iam" => "iam-reviewer@example.com",
             "honeycomb" => "validator@example.com",
@@ -2457,8 +2473,16 @@ impl Management for PublicationManager {
     async fn publication_plan(&self, r: &Value, t: &str, e: Option<&str>) -> Result<Value> {
         ReviewManager::default().publication_plan(r, t, e).await
     }
-    async fn iam_scope_reviewer(&self, t: &str, _: Option<&str>) -> Result<bool> {
-        Ok(t == "iam-reviewer")
+    async fn review_eligibility(
+        &self,
+        plan: &str,
+        provider: &str,
+        token: &str,
+        env: Option<&str>,
+    ) -> Result<bool> {
+        ReviewManager::default()
+            .review_eligibility(plan, provider, token, env)
+            .await
     }
     async fn review_decision(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
         ReviewManager {
@@ -4609,4 +4633,226 @@ async fn configured_identity_clean_runs_identity_first_and_preserves_only_core_r
         "SELECT COUNT(*) FROM environment_services WHERE environment_id=? AND state='ready' AND generation=2",
     ).bind(id).fetch_one(&s.db).await.unwrap();
     assert_eq!(ready, 2);
+}
+
+struct PublicationContractManager {
+    gates: Value,
+    eligible: AtomicBool,
+    eligibility_calls: std::sync::Mutex<Vec<(String, String, String)>>,
+}
+#[async_trait]
+impl Management for PublicationContractManager {
+    async fn configure(&self, o: &Value, token: &str, env: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, token, env).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("unused"))
+    }
+    async fn publication_plan(
+        &self,
+        request: &Value,
+        token: &str,
+        env: Option<&str>,
+    ) -> Result<Value> {
+        let mut result = ReviewManager::default()
+            .publication_plan(request, token, env)
+            .await?;
+        result["gates"] = self.gates.clone();
+        Ok(result)
+    }
+    async fn review_eligibility(
+        &self,
+        plan: &str,
+        provider: &str,
+        token: &str,
+        _: Option<&str>,
+    ) -> Result<bool> {
+        self.eligibility_calls
+            .lock()
+            .unwrap()
+            .push((plan.into(), provider.into(), token.into()));
+        Ok(self.eligible.load(Ordering::SeqCst))
+    }
+    async fn review_decision(&self, request: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        assert!(
+            request["reason"].is_null(),
+            "Empty approval reason must be omitted/null for IAM"
+        );
+        let mut receipt = request.clone();
+        receipt["state"] = json!("accepted");
+        Ok(receipt)
+    }
+}
+#[tokio::test]
+async fn publication_plans_require_iam_validator_and_exact_qualified_scopes() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    let validator = json!({"provider":"honeycomb","scopes":[]});
+    let provider = json!({"provider":"other>provider","scopes":["obo:other>provider:files.read"]});
+    for gates in [
+        json!([]),
+        json!([provider.clone()]),
+        json!([validator.clone(), validator.clone()]),
+        json!([{"provider":"honeycomb","scopes":["self.identity.read"]}]),
+        json!([validator.clone(), {"provider":"other>provider","scopes":["files.read"]}]),
+        json!([validator.clone(), {"provider":"other>provider","scopes":["obo:unrelated>provider:files.read"]}]),
+        json!([validator.clone(), {"provider":"other>provider","scopes":[]}]),
+    ] {
+        sqlx::query("DELETE FROM review_gates WHERE request_id=?")
+            .bind(&id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE publication_requests SET plan_id=NULL WHERE id=?")
+            .bind(&id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+        s.management = Arc::new(PublicationContractManager {
+            gates,
+            eligible: AtomicBool::new(false),
+            eligibility_calls: Default::default(),
+        });
+        let (status, _) = call(
+            &s,
+            "POST",
+            &format!("/api/v1/review-requests/{id}/plan"),
+            Some("admin"),
+            Value::Null,
+            "contract-plan-retry-0001",
+            Some(1),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM review_gates WHERE request_id=?")
+            .bind(&id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "Rejected plans must not create local approvals or gates"
+        );
+    }
+    s.management = Arc::new(PublicationContractManager {
+        gates: json!([provider, validator]),
+        eligible: AtomicBool::new(false),
+        eligibility_calls: Default::default(),
+    });
+    let (status, result) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/plan"),
+        Some("admin"),
+        Value::Null,
+        "contract-plan-retry-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let gates: Vec<(String, String)> = sqlx::query_as(
+        "SELECT provider,scopes FROM review_gates WHERE request_id=? ORDER BY provider",
+    )
+    .bind(&id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        gates,
+        [
+            ("honeycomb".into(), "[]".into()),
+            (
+                "other>provider".into(),
+                "[\"obo:other>provider:files.read\"]".into()
+            )
+        ]
+    );
+}
+#[tokio::test]
+async fn publication_review_checks_live_plan_eligibility_and_iam_reason_limits() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    let manager = Arc::new(PublicationContractManager {
+        gates: json!([]),
+        eligible: AtomicBool::new(true),
+        eligibility_calls: Default::default(),
+    });
+    s.management = manager.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let path = format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions");
+    let (status, _) = call(
+        &s,
+        "POST",
+        &path,
+        Some("outsider"),
+        json!({"decision":"approve","reason":"x".repeat(2001)}),
+        "contract-reason-too-long-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(manager.eligibility_calls.lock().unwrap().is_empty());
+    manager.eligible.store(false, Ordering::SeqCst);
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/honeycomb/decisions"),
+        Some("validator"),
+        json!({"decision":"approve"}),
+        "contract-validator-revoked-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "Local validator flag cannot override IAM revocation"
+    );
+    assert_eq!(
+        manager.eligibility_calls.lock().unwrap().pop(),
+        Some((format!("plan-{id}"), "honeycomb".into(), "validator".into()))
+    );
+    let (status, _) = call(
+        &s,
+        "POST",
+        &path,
+        Some("outsider"),
+        json!({"decision":"approve"}),
+        "contract-authority-revoked-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM decisions WHERE request_id=?")
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    manager.eligible.store(true, Ordering::SeqCst);
+    let (status, result) = call(
+        &s,
+        "POST",
+        &path,
+        Some("outsider"),
+        json!({"decision":"approve"}),
+        "contract-authority-revoked-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["state"], "accepted");
+    assert_eq!(
+        *manager.eligibility_calls.lock().unwrap(),
+        vec![
+            (
+                format!("plan-{id}"),
+                "other>provider".into(),
+                "outsider".into()
+            );
+            2
+        ]
+    );
 }

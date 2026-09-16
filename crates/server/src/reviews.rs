@@ -87,14 +87,17 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
         let provider = gate["provider"]
             .as_str()
             .ok_or_else(|| Error::unavailable("Invalid review provider"))?;
-        if provider == "honeycomb" || required.contains_key(provider) {
+        if required.contains_key(provider) {
             return Err(Error::unavailable("Duplicate or invalid review provider"));
         }
         let scopes: Vec<String> = serde_json::from_value(gate["scopes"].clone())
             .map_err(|_| Error::unavailable("Invalid review scopes"))?;
-        if scopes.is_empty() || scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len() {
+        if (provider == "honeycomb" && !scopes.is_empty())
+            || (provider != "honeycomb" && scopes.is_empty())
+            || scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len()
+        {
             return Err(Error::unavailable(
-                "Review scopes must be distinct and nonempty",
+                "Review scopes must be distinct; only the validator gate has no scopes",
             ));
         }
         for scope in &scopes {
@@ -106,8 +109,12 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
                 configuration["app_scope"]["external"]
                     .as_array()
                     .is_some_and(|a| {
-                        a.iter()
-                            .any(|v| v["app_id"] == provider && v["endpoint_id"] == *scope)
+                        a.iter().any(|v| {
+                            v["app_id"] == provider
+                                && v["endpoint_id"].as_str().is_some_and(|endpoint| {
+                                    *scope == format!("obo:{provider}:{endpoint}")
+                                })
+                        })
                     })
             };
             if !declared {
@@ -118,12 +125,14 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
         }
         required.insert(provider.into(), scopes);
     }
-    let state = if required.is_empty() {
+    if !required.contains_key("honeycomb") {
+        return Err(Error::unavailable("IAM omitted the validator review gate"));
+    }
+    let state = if required.len() == 1 {
         "awaiting_validator"
     } else {
         "awaiting_scope_review"
     };
-    required.insert("honeycomb".into(), vec![]);
     let mut tx = s.db.begin().await?;
     let updated=sqlx::query("UPDATE publication_requests SET plan_id=?,state=?,error=NULL,config_snapshot=? WHERE id=? AND plan_id IS NULL AND revision=(SELECT revision FROM applications WHERE plane=? AND app_id=?)")
         .bind(plan_id).bind(state).bind(configuration.to_string()).bind(id).bind(&c.plane).bind(&app.app_id).execute(&mut *tx).await?;
@@ -142,7 +151,7 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
         if provider != "honeycomb" || state == "awaiting_validator" {
             sqlx::query("INSERT OR IGNORE INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.review',?,?)")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("review:{id}:{provider}"))
-                .bind(json!({"app_id":app.app_id,"review_provider":provider}).to_string()).bind(now()).execute(&mut *tx).await?;
+                .bind(json!({"request_id":id,"app_id":app.app_id,"review_provider":provider}).to_string()).bind(now()).execute(&mut *tx).await?;
         }
         if provider != "iam" && provider != "honeycomb" {
             let config: Option<String> = sqlx::query_scalar(
@@ -165,25 +174,19 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
     tx.commit().await?;
     Ok(json!({"id":id,"state":state,"plan_id":plan_id}))
 }
-async fn can_review(s: &State, c: &Context, provider: &str) -> Result<bool> {
-    let identity = c.identity()?;
-    if provider == "honeycomb" {
-        return Ok(identity.validator);
-    }
-    if provider == "iam" {
-        return s
-            .management
-            .iam_scope_reviewer(c.token.as_deref().unwrap(), c.environment.as_deref())
-            .await;
-    }
-    let org: Option<String> = sqlx::query_scalar(
-        "SELECT org_id FROM applications WHERE plane=? AND app_id=? AND effective_revision>0",
-    )
-    .bind(&c.plane)
-    .bind(provider)
-    .fetch_optional(&s.db)
-    .await?;
-    Ok(org.as_ref().is_some_and(|org| identity.admin(org)))
+async fn can_review(s: &State, c: &Context, request: &SqliteRow, provider: &str) -> Result<bool> {
+    c.identity()?;
+    let Some(plan) = request.get::<Option<String>, _>("plan_id") else {
+        return Ok(false);
+    };
+    s.management
+        .review_eligibility(
+            &plan,
+            provider,
+            c.token.as_deref().ok_or_else(Error::unauthorized)?,
+            c.environment.as_deref(),
+        )
+        .await
 }
 pub async fn inbox(S(s): S<State>, h: HeaderMap) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
@@ -194,11 +197,16 @@ pub async fn inbox(S(s): S<State>, h: HeaderMap) -> Result<Json<Value>> {
     let mut authority = BTreeMap::new();
     for row in rows {
         let provider: String = row.get("provider");
-        let authorized = if let Some(value) = authority.get(&provider) {
+        let authorized = if let Some(value) =
+            authority.get(&(row.get::<Option<String>, _>("plan_id"), provider.clone()))
+        {
             *value
         } else {
-            let value = can_review(&s, &c, &provider).await?;
-            authority.insert(provider.clone(), value);
+            let value = can_review(&s, &c, &row, &provider).await?;
+            authority.insert(
+                (row.get::<Option<String>, _>("plan_id"), provider.clone()),
+                value,
+            );
             value
         };
         if !authorized
@@ -226,15 +234,15 @@ pub async fn decide(
     let expected = revision(&h)?;
     let c = context(&s, &h).await?;
     if !["approve", "deny"].contains(&body.decision.as_str())
-        || body.reason.len() > 10000
+        || body.reason.chars().count() > 2000
         || (body.decision == "deny" && body.reason.trim().is_empty())
     {
         return Err(Error::bad(
-            "Use approve or deny; denial requires a reason of 1–10000 characters",
+            "Use approve or deny; denial requires a reason of 1–2000 characters",
         ));
     }
     let row = request(&s, &c, &id).await?;
-    if !can_review(&s, &c, &provider).await? {
+    if !can_review(&s, &c, &row, &provider).await? {
         return Err(Error::forbidden());
     }
     let app_id: String = row.get("app_id");
@@ -292,7 +300,7 @@ pub async fn decide(
         let op = uuid::Uuid::new_v4().to_string();
         let scopes: Value = serde_json::from_str(&gate.get::<String, _>("scopes"))
             .map_err(|e| anyhow::anyhow!(e))?;
-        let operation = json!({"operation_id":op,"request_id":id,"plan_id":plan_id,"app_id":app_id,"configuration_revision":expected,"provider":provider,"scopes":scopes,"decision":body.decision,"reason":body.reason});
+        let operation = json!({"operation_id":op,"request_id":id,"plan_id":plan_id,"app_id":app_id,"configuration_revision":expected,"provider":provider,"scopes":scopes,"decision":body.decision,"reason":if body.reason.trim().is_empty(){None}else{Some(&body.reason)}});
         sqlx::query("INSERT INTO decisions(id,request_id,actor,provider,scopes,decision,reason,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(&op).bind(&id).bind(&c.identity()?.principal_id).bind(&provider).bind(scopes.to_string()).bind(&body.decision).bind(&body.reason).bind(now()).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,request_json,created_at) VALUES(?,?,?,?,'review.decision',?,?,?,?,?)").bind(&op).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind(&app_id).bind(digest).bind(expected).bind(operation.to_string()).bind(now()).execute(&mut *tx).await?;
         sqlx::query("UPDATE review_gates SET decision_id=? WHERE request_id=? AND provider=? AND decision_id IS NULL").bind(&op).bind(&id).bind(&provider).execute(&mut *tx).await?;
@@ -381,11 +389,11 @@ pub async fn decide(
                 .await?;
         sqlx::query("INSERT OR IGNORE INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.status',?,?)")
             .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("review-decision:{op}"))
-            .bind(json!({"app_id":app_id,"org_id":org,"state":state}).to_string()).bind(now()).execute(&mut *tx).await?;
+            .bind(json!({"request_id":id,"app_id":app_id,"org_id":org,"review_providers":[provider],"state":state}).to_string()).bind(now()).execute(&mut *tx).await?;
         if state == "awaiting_validator" {
             sqlx::query("INSERT OR IGNORE INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.review',?,?)")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("review:{id}:honeycomb"))
-                .bind(json!({"app_id":app_id,"review_provider":"honeycomb"}).to_string()).bind(now()).execute(&mut *tx).await?;
+                .bind(json!({"request_id":id,"app_id":app_id,"review_provider":"honeycomb"}).to_string()).bind(now()).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         return Ok((
@@ -422,7 +430,8 @@ async fn discussion_access(s: &State, c: &Context, id: &str, provider: &str) -> 
             .await?;
     let providers_ready:bool=sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM review_gates WHERE request_id=? AND provider!='honeycomb' AND state!='approved')").bind(id).fetch_one(&s.db).await?;
     if !c.identity()?.admin(&org)
-        && (!can_review(s, c, provider).await? || (provider == "honeycomb" && !providers_ready))
+        && (!can_review(s, c, &row, provider).await?
+            || (provider == "honeycomb" && !providers_ready))
     {
         return Err(Error::forbidden());
     }
@@ -446,7 +455,7 @@ pub async fn detail(
     let messages:Vec<Value>=messages.iter().map(|m|json!({"id":m.get::<String,_>("id"),"actor":m.get::<String,_>("actor"),"message":m.get::<String,_>("message")})).collect();
     let mut result = json!({"id":id,"provider":provider,"app_id":row.get::<String,_>("app_id"),"revision":row.get::<i64,_>("revision"),"configuration":serde_json::from_str::<Value>(&row.get::<String,_>("config_snapshot")).unwrap_or(Value::Null),"state":gate.get::<String,_>("state"),"scopes":serde_json::from_str::<Value>(&gate.get::<String,_>("scopes")).unwrap_or(Value::Null),"messages":messages});
     result["can_decide"] = json!(
-        can_review(&s, &c, &provider).await?
+        can_review(&s, &c, &row, &provider).await?
             && (provider != "honeycomb" || row.get::<String, _>("state") == "awaiting_validator")
     );
     if let Some(decision_id) = gate.get::<Option<String>, _>("decision_id") {
@@ -496,7 +505,7 @@ pub async fn message(
             .await?;
     sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.message',?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message}"))
-        .bind(json!({"app_id":app_id,"org_id":org,"review_providers":[provider]}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(json!({"request_id":id,"app_id":app_id,"org_id":org,"review_providers":[provider]}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":message})))
 }
