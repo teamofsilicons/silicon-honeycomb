@@ -37,3 +37,21 @@ Run SQL using the migrator credential privately loaded from Secrets Manager on t
 host; never print the password or put it in shell arguments. Replace only the final
 `ROLLBACK;` with `COMMIT;` for the already-authorized, verified execution. This is
 not a general application deletion endpoint or a recurring reset procedure.
+
+## Applied result
+
+SSM execution `6f0ef7ba-2c83-40bc-9342-62736333ef21` committed successfully.
+Production inventory now contains only `tos>honeycomb`; its UUID, IAM revision 4,
+credential version 1, verified status, credentials, grants, and management service
+connection were preserved. `tos>briefcase` now returns 404 from IAM management.
+The existing Honeycomb CLI session still authenticates as the `tos` owner.
+
+Ten application records and their principals/dependencies were removed. Audit and
+authentication event rows were preserved with original removed IDs in metadata;
+Carbon, organization, membership records and 35 testing environment records remain.
+The separate testing database was not reset. Old production app credentials no
+longer authenticate; their running services require new registration/configuration.
+
+The new Briefcase registration is prepared separately. The user requested explicit
+confirmation before submission, so no new application has been created or archive
+uploaded. Review `docs/BRIEFCASE-REGISTRATION-PREVIEW.md` before confirmation.

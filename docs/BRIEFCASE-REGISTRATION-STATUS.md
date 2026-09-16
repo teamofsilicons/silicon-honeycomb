@@ -1,32 +1,26 @@
 # Briefcase registration status — 2026-09-16
 
-The operator preview confirmed that IAM already contains `tos>briefcase`, immutable
-ID `01a070db-89b4-7542-83f1-4fad5cbce625`, IAM revision 9, configuration revision 0,
-and credential version 1. No Honeycomb app existed at the start of this work.
+**Awaiting the user's explicit confirmation before submitting a new registration.**
+See [the complete registration preview](BRIEFCASE-REGISTRATION-PREVIEW.md).
 
-**No adoption or application creation was executed.** The user clarified that the
-new Briefcase app must not link to the existing IAM app. The import plan is
-cancelled. Clarification is pending on whether the new app should be Honeycomb-only
-or should receive a separate, fresh IAM identity. Do not apply the legacy import
-command to Briefcase without a new instruction superseding this decision.
+The user rejected adoption and requested a completely new app with fresh IAM
+credentials. They then explicitly requested removing every existing production IAM
+app except Honeycomb directly from the database, freeing `tos>briefcase` for reuse.
+That reset completed successfully; see [operator evidence](../deploy/operator/README.md).
+Honeycomb's identity and management connection were preserved and verified live.
 
-## Completed infrastructure work
+No new Briefcase record has been created in IAM or Honeycomb, and no application
+secret has been issued. The new webhook signing secret and normal registration
+payload are prepared outside Git with owner-only permissions. The six-target
+`briefcase-1.1.0.tar.gz` archive was found and passed Honeycomb validation.
 
-- `beb9c63` adds compatibility for explicitly imported revision-zero IAM records,
-  a privileged import tool with backup/audit/identity preconditions, and tests.
-- Local server tests, strict workspace Clippy, formatting, dependency verification,
-  and Python import tests passed.
-- AWS deployment `482946e1-e129-4fbc-9012-ba0ec253501c` succeeded on
-  `i-06986627793021fb2`. Backend image:
-  `sha256:30f17b8ec535e7560cea6897792b67feb68356d5d01a2cea8e12457846e0ee42`.
-- Preview/backup SSM command `22896753-2023-473c-a2bc-11a89fde874f` succeeded.
-  Consistent backup: `/var/lib/silicon-honeycomb/backups/20260916T024022Z`.
-- The preview staged the operator script and catalog metadata on the host but did
-  not write an application record. No IAM mutation or credential rotation occurred.
+The old Briefcase IAM identity and credentials are gone as requested. Following
+confirmed registration, its fresh credentials must be configured in the service.
+Archive upload and publication remain separate actions and have not been completed.
 
-The current registration/download/publication implementation expects an IAM-backed
-application. Supporting an application with no IAM identity requires explicit
-product behavior, not an invented accepted IAM revision in the database.
+## Earlier backend maintenance
 
-The user has prepared a Briefcase `.tar.gz`; its local path has not been supplied
-and its contents have not been validated in this task.
+`beb9c63` added audited legacy revision-zero adoption support, with passing server,
+Clippy, formatting, dependency and Python import checks. Deployment
+`482946e1-e129-4fbc-9012-ba0ec253501c` succeeded on Honeycomb's AWS host. That adoption
+path was never applied to Briefcase and is not used for this new registration.
