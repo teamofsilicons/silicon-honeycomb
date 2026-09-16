@@ -16,9 +16,10 @@ has no management API in `IAM-HANDOFF.md`.
 2. Ensure both organization-scoped and unscoped introspection disclose current
    `owner` / `admin` / `member` roles with that membership grant and consent.
    Migration 0099 fixes `iam_private.list_current_application_authorizations`
-   to require consented membership access (details below). Verify this with a
-   fresh real actor session. Missing disclosure correctly keeps Honeycomb's
-   Create application button disabled.
+   to require consented membership access (details below). A fresh production
+   Carbon sign-in now enables Create application for `tos`; an authorized draft
+   save and read after a full page reload both passed. Missing disclosure still
+   correctly keeps Honeycomb's Create application button disabled.
 3. Exercise a real owner/admin actor through private application creation with
    the existing Honeycomb management service credential. Confirm that members,
    revoked memberships and service-only requests cannot perform that mutation.
@@ -137,8 +138,11 @@ live user consent; retired `roles.read` cannot disclose roles. Its SQL regressio
 tests cover old-token isolation, renewed consent and approval revocation. The
 new-app bootstrap also includes membership access, while existing identities
 must use the authorized configuration flow. Honeycomb's website login does not
-pin an organization, so a fresh real actor regression check remains necessary;
-Honeycomb must not infer missing roles or reuse earlier consent as a new grant.
+pin an organization. Renewed production consent for `tos` now passes the owner/
+admin UI gate and backend draft write/read authorization. The saved verification
+draft is `honeycomb-e2e-20260916` (Honeycomb E2E verification); it has not been
+submitted as an IAM application. Honeycomb never infers missing roles or reuses
+earlier consent as a new grant.
 
 ## Remaining contract gaps and work
 
