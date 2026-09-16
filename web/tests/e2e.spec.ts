@@ -10,7 +10,7 @@ test("webhook approval and signing-secret rotation use transient verification an
     headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
     data: { org_id: "tos", local_app_id: handle, name,
       description: "This application exercises isolated webhook configuration and verified signing key rotation for the Silicon ecosystem. ".repeat(7),
-      webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
+      webhook_scope: ["membership"], webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
   });
   expect(created.ok()).toBe(true);
   await page.reload();

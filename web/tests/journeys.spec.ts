@@ -462,7 +462,7 @@ test("console uploads and activates an approved release visible in the anonymous
       headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
       data: { org_id: "tos", local_app_id: handle, name,
         description: "This release exercises uploading, review, activation and public discovery in the Silicon ecosystem. ".repeat(7),
-        webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
+        webhook_scope: ["membership"], webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
     });
     expect(create.ok()).toBe(true);
     const targets: Record<string, unknown> = {};

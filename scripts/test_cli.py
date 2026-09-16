@@ -80,7 +80,7 @@ def main():
             app_id = 'tos>cli-e2e'
             app = {'org_id': 'tos', 'local_app_id': 'cli-e2e', 'name': 'CLI integration',
                    'description': 'This application exercises the complete local Honeycomb release installation workflow. ' * 7,
-                   'webhook_url': 'https://example.com/webhook/', 'webhook_secret': 'test-signing-secret-000000000000000000'}
+                   'webhook_scope': ['membership'], 'webhook_url': 'https://example.com/webhook/', 'webhook_secret': 'test-signing-secret-000000000000000000'}
             app['logo_url'] = logo['logo_url']
             config = root / 'application.json'
             config.write_text(json.dumps(app))
