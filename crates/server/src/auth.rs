@@ -62,6 +62,13 @@ fn mutation(key: &str) -> Result<Mutation> {
 }
 fn iam_error(e: silicon_iam_client::Error) -> Error {
     match e {
+        silicon_iam_client::Error::Api(a) if a.status == 400 && a.code == "invalid_grant" => {
+            Error::new(
+                axum::http::StatusCode::UNAUTHORIZED,
+                "invalid_grant",
+                "The IAM login token is invalid, expired, already used, or issued for another application. Obtain a new Honeycomb short-lived token and run honeycomb login <slt>.",
+            )
+        }
         silicon_iam_client::Error::Api(a) if a.status == 401 => Error::unauthorized(),
         silicon_iam_client::Error::Api(a) if a.status == 403 => Error::forbidden(),
         _ => Error::unavailable(

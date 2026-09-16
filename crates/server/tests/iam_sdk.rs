@@ -20,6 +20,41 @@ fn adapter(server: &MockServer) -> Iam {
         app_id: "tos>honeycomb".into(),
     }
 }
+#[tokio::test]
+async fn sdk_invalid_grants_are_authentication_failures_not_service_outages() {
+    let server = MockServer::start().await;
+    let iam = adapter(&server);
+    for (code, expected_status, expected_code) in [
+        ("invalid_grant", 401, "invalid_grant"),
+        ("invalid_client", 503, "integration_unavailable"),
+        ("unexpected_failure", 503, "integration_unavailable"),
+    ] {
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/app-auth/tokens"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": {"code":code,"message":"upstream-sensitive-text","details":null},
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        for error in [
+            iam.login("invalid-slt", "sdk-invalid-login-0001", None)
+                .await
+                .unwrap_err(),
+            iam.refresh("invalid-refresh", "sdk-invalid-refresh-0001", None)
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.0.as_u16(), expected_status);
+            assert_eq!(error.1.code, expected_code);
+            assert!(!error.1.message.contains("upstream-sensitive-text"));
+            if code == "invalid_grant" {
+                assert!(error.1.message.contains("new Honeycomb short-lived token"));
+            }
+        }
+    }
+}
 fn snapshot(role: Option<&str>) -> Value {
     json!({"active":true,"principal_id":"11111111-1111-1111-1111-111111111111","client_id":"tos>honeycomb","actor_type":"carbon","authorizations":[{"principal_id":"11111111-1111-1111-1111-111111111111","organization_id":"22222222-2222-2222-2222-222222222222","org_id":"tos","membership_id":"33333333-3333-3333-3333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"tos>honeycomb","testing_environment_id":null,"scopes":["self.identity.read","self.membership.read"],"org_role":role,"tags":null}]})
 }
