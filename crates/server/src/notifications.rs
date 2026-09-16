@@ -183,7 +183,29 @@ async fn render(s: &State, id: &str, kind: &str, payload: &Value) -> Result<Emai
             ),
         )
     } else {
-        let recipients = if let Some(provider) = payload["review_provider"].as_str() {
+        let recipients = if let Some(providers) = payload.get("review_providers") {
+            let providers: Vec<String> = serde_json::from_value(providers.clone())
+                .map_err(|_| Error::bad("Notification has invalid review providers"))?;
+            let org = payload["org_id"]
+                .as_str()
+                .ok_or_else(|| Error::bad("Notification has no organization"))?;
+            let mut recipients = s.management.notification_recipients(org).await?;
+            for provider in providers
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+            {
+                recipients.extend(
+                    s.management
+                        .review_notification_recipients(&provider)
+                        .await?,
+                );
+            }
+            // One discussion event delivers once even when an administrator is
+            // both a requester and a provider reviewer.
+            recipients.sort_by_key(|email| email.to_ascii_lowercase());
+            recipients.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+            recipients
+        } else if let Some(provider) = payload["review_provider"].as_str() {
             s.management
                 .review_notification_recipients(provider)
                 .await?

@@ -1892,6 +1892,22 @@ impl Management for ReviewManager {
     async fn iam_scope_reviewer(&self, token: &str, _: Option<&str>) -> Result<bool> {
         Ok(token == "iam-reviewer")
     }
+    async fn notification_recipients(&self, org: &str) -> Result<Vec<String>> {
+        assert_eq!(org, "tos");
+        Ok(vec![
+            "requester@example.com".into(),
+            "shared@example.com".into(),
+        ])
+    }
+    async fn review_notification_recipients(&self, provider: &str) -> Result<Vec<String>> {
+        let email = match provider {
+            "other>provider" => "provider@example.com",
+            "iam" => "iam-reviewer@example.com",
+            "honeycomb" => "validator@example.com",
+            _ => panic!("Notification sent to an unrelated provider"),
+        };
+        Ok(vec![email.into(), "SHARED@example.com".into()])
+    }
     async fn review_decision(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         if !self.accept.load(Ordering::SeqCst) {
             return Err(Error::unavailable("Decision pending"));
@@ -1929,6 +1945,165 @@ async fn review_application(s: &State) -> String {
     assert_eq!(status, StatusCode::ACCEPTED, "{result}");
     result["id"].as_str().unwrap().into()
 }
+#[tokio::test]
+async fn console_discussions_validate_gates_and_notify_participants_once() {
+    use silicon_honeycomb_server::notifications::dispatch_once;
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    // Isolate delivery of discussion replies from the initial request emails.
+    sqlx::query("DELETE FROM outbox")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let path = "/api/v1/apps/tos%3Ereview-app/publication/messages";
+    for (actor, provider, expected) in [
+        ("admin", "unrelated>provider", StatusCode::NOT_FOUND),
+        ("member", "other>provider", StatusCode::FORBIDDEN),
+        ("outsider", "other>provider", StatusCode::FORBIDDEN),
+    ] {
+        let (status, _) = call(
+            &s,
+            "POST",
+            path,
+            Some(actor),
+            json!({"provider":provider,"message":"This must not be saved."}),
+            "invalid-discussion-0001",
+            None,
+        )
+        .await;
+        assert_eq!(status, expected);
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM discussions WHERE idempotency_key IS NOT NULL")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbox")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let body = json!({"provider":"other>provider","message":"Private details stay in the authenticated discussion."});
+    let (status, first) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        body.clone(),
+        "discussion-targeted-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, replay) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        body,
+        "discussion-targeted-0001",
+        None,
+    )
+    .await;
+    assert_eq!(first["id"], replay["id"]);
+    let (status, _) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        json!({"provider":"iam","message":"Different target"}),
+        "discussion-targeted-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let mailbox = Mailbox::default();
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    assert!(!dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    {
+        let emails = mailbox.0.lock().unwrap();
+        assert_eq!(emails.len(), 1);
+        let recipients: Vec<_> = emails[0]
+            .recipients
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        assert_eq!(
+            recipients,
+            [
+                "provider@example.com",
+                "requester@example.com",
+                "shared@example.com"
+            ]
+        );
+        assert!(!emails[0].text.contains("Private details"));
+    }
+    let provider_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/messages");
+    let provider_body = json!({"message":"Private provider response"});
+    let (status, reply) = call(
+        &s,
+        "POST",
+        &provider_path,
+        Some("outsider"),
+        provider_body.clone(),
+        "discussion-provider-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, replay) = call(
+        &s,
+        "POST",
+        &provider_path,
+        Some("outsider"),
+        provider_body,
+        "discussion-provider-0001",
+        None,
+    )
+    .await;
+    assert_eq!(reply["id"], replay["id"]);
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    assert!(!dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    {
+        let emails = mailbox.0.lock().unwrap();
+        assert_eq!(emails.len(), 2);
+        assert_eq!(emails[0].recipients, emails[1].recipients);
+        assert!(!emails[1].text.contains("Private provider response"));
+    }
+    // General replies reach all participating scope reviewers, with validators
+    // joining only when the provider reviews have been accepted.
+    for (providers_ready, expected_recipients) in [(false, 4), (true, 5)] {
+        if providers_ready {
+            sqlx::query("UPDATE review_gates SET state='approved' WHERE request_id=? AND provider!='honeycomb'")
+                .bind(&id).execute(&s.db).await.unwrap();
+        }
+        let (status, _) = call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({"message":"General update"}),
+            &format!("discussion-general-{providers_ready}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+        assert!(!dispatch_once(&s, Some(&mailbox)).await.unwrap());
+        let emails = mailbox.0.lock().unwrap();
+        let recipients = &emails.last().unwrap().recipients;
+        assert_eq!(recipients.len(), expected_recipients);
+        assert_eq!(
+            recipients.iter().any(|v| v == "validator@example.com"),
+            providers_ready
+        );
+        assert!(recipients.iter().any(|v| v == "iam-reviewer@example.com"));
+    }
+}
+
 #[tokio::test]
 async fn review_authority_discussions_and_provider_before_validator_order_are_enforced() {
     let (mut s, _) = setup(true).await;

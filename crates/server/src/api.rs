@@ -1347,6 +1347,36 @@ async fn message(
     }
     let request:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane=? AND app_id=? ORDER BY revision DESC LIMIT 1").bind(&c.plane).bind(&id).fetch_optional(&s.db).await?;
     let request = request.ok_or_else(Error::missing)?;
+    // A targeted reply must belong to the accepted review plan. General replies
+    // are visible to all gates, but validators only participate after scope review.
+    let gates: Vec<String> = sqlx::query_scalar(
+        "SELECT provider FROM review_gates WHERE request_id=? ORDER BY provider",
+    )
+    .bind(&request)
+    .fetch_all(&s.db)
+    .await?;
+    if body
+        .provider
+        .as_ref()
+        .is_some_and(|provider| !gates.contains(provider))
+    {
+        return Err(Error::missing());
+    }
+    let providers_ready: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS(SELECT 1 FROM review_gates WHERE request_id=? AND provider!='honeycomb' AND state!='approved')",
+    )
+    .bind(&request)
+    .fetch_one(&s.db)
+    .await?;
+    let reviewers: Vec<String> = gates
+        .into_iter()
+        .filter(|provider| {
+            body.provider
+                .as_ref()
+                .is_none_or(|target| target == provider)
+        })
+        .filter(|provider| provider != "honeycomb" || providers_ready)
+        .collect();
     let digest = hash(&json!({"message":body.message,"provider":body.provider}));
     let actor = &c.identity()?.principal_id;
     if let Some(row) = sqlx::query("SELECT id,request_hash FROM discussions WHERE request_id=? AND actor=? AND idempotency_key=?")
@@ -1360,7 +1390,7 @@ async fn message(
         .bind(&message_id).bind(request).bind(actor).bind(body.provider).bind(body.message).bind(now()).bind(key).bind(digest).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.message',?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message_id}"))
-        .bind(json!({"app_id":id,"org_id":app.org_id}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(json!({"app_id":id,"org_id":app.org_id,"review_providers":reviewers}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":message_id})))
 }

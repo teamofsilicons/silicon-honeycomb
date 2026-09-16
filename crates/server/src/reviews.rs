@@ -495,10 +495,8 @@ pub async fn message(
             .fetch_one(&mut *tx)
             .await?;
     sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.message',?,?)")
-        .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message}")).bind(json!({"app_id":app_id,"org_id":org}).to_string()).bind(now()).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,'publication.message',?,?)")
-        .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message}:reviewers"))
-        .bind(json!({"app_id":app_id,"review_provider":provider}).to_string()).bind(now()).execute(&mut *tx).await?;
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("discussion:{message}"))
+        .bind(json!({"app_id":app_id,"org_id":org,"review_providers":[provider]}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":message})))
 }
