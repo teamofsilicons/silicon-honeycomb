@@ -417,6 +417,51 @@ struct Session {
     #[serde(default)]
     expires_at: i64,
 }
+/// Private because the selected environment key grants test root authority.
+#[derive(Serialize, Deserialize)]
+struct InstallContext {
+    api: String,
+    testing_key: Option<String>,
+}
+impl InstallContext {
+    fn client(&self, telemetry: bool) -> Result<Client> {
+        let client = Client::new(&self.api)?.with_telemetry(telemetry);
+        match &self.testing_key {
+            Some(key) => client.with_environment(key),
+            None => Ok(client),
+        }
+    }
+    fn directory(&self, root: &Path) -> PathBuf {
+        root.join("contexts")
+            .join(honeycomb_client::context_fingerprint(
+                &self.api,
+                self.testing_key.as_deref(),
+            ))
+    }
+}
+fn selected_context(cli: &Cli, settings: &Settings, root: &Path) -> Result<InstallContext> {
+    let testing_key = if let Some(test) = &cli.test {
+        let keys: BTreeMap<String, String> = read(&root.join("environments.json"))?;
+        Some(keys.get(test).cloned().unwrap_or_else(|| test.clone()))
+    } else {
+        None
+    };
+    let context = InstallContext {
+        api: cli.api.as_deref().unwrap_or(&settings.api).to_owned(),
+        testing_key,
+    };
+    context.client(false)?;
+    Ok(context)
+}
+fn shell_environment(root: &Path, context: &InstallContext) -> String {
+    let path = format!(
+        "{}:{}",
+        root.join("system/bin").display(),
+        context.directory(root).join("bin").display()
+    );
+    let quoted = path.replace('\'', "'\\''");
+    format!("export PATH='{quoted}':\"$PATH\"")
+}
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -551,17 +596,8 @@ async fn execute(cli: &Cli) -> Result<()> {
                 show(&json!({"home":home,"data_directory":home.join(".honeycomb/dir")}))?;
             }
             Config::Env => {
-                let fingerprint = honeycomb_client::context_fingerprint(&settings.api, None);
-                let path = format!(
-                    "{}:{}",
-                    root.join("system/bin").display(),
-                    root.join("contexts")
-                        .join(fingerprint)
-                        .join("bin")
-                        .display()
-                );
-                let quoted = path.replace('\'', "'\\''");
-                println!("export PATH='{quoted}':\"$PATH\"");
+                let context = selected_context(cli, &settings, &root)?;
+                println!("{}", shell_environment(&root, &context));
             }
             Config::Show => show(
                 &json!({"home":root.parent().and_then(Path::parent),"data_directory":root,"settings":settings}),
@@ -601,7 +637,9 @@ async fn execute(cli: &Cli) -> Result<()> {
             let config: Settings = read(&root.join("config.json"))?;
             if config.auto_update {
                 let started = std::time::Instant::now();
-                let result = self_update(&root, false).await;
+                // Check packages even if the Honeycomb binary update server is unavailable.
+                let packages = update_packages(&root, cli, false).await;
+                let result = self_update(&root, false).await.and(packages);
                 record_command(
                     cli,
                     "daemon",
@@ -610,8 +648,8 @@ async fn execute(cli: &Cli) -> Result<()> {
                     result.is_ok(),
                 )
                 .await;
-                if let Err(e) = result {
-                    eprintln!("Honeycomb update check: {e}");
+                if result.is_err() {
+                    eprintln!("Honeycomb maintenance deferred; run honeycomb update for details");
                 }
             }
             if once {
@@ -620,20 +658,9 @@ async fn execute(cli: &Cli) -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     }
-    let mut client = Client::new(cli.api.as_deref().unwrap_or(&settings.api))?
-        .with_telemetry(telemetry_enabled(settings.telemetry));
-    let origin = cli.api.as_deref().unwrap_or(&settings.api);
-    let selected_key = if let Some(test) = &cli.test {
-        let keys: BTreeMap<String, String> = read(&root.join("environments.json"))?;
-        Some(keys.get(test).cloned().unwrap_or_else(|| test.clone()))
-    } else {
-        None
-    };
-    if let Some(key) = &selected_key {
-        client = client.with_environment(key)?;
-    }
-    let plane = honeycomb_client::context_fingerprint(origin, selected_key.as_deref());
-    let plane_dir = root.join("contexts").join(&plane);
+    let context = selected_context(cli, &settings, &root)?;
+    let mut client = context.client(telemetry_enabled(settings.telemetry))?;
+    let plane_dir = context.directory(&root);
     fs::create_dir_all(&plane_dir)?;
     let session_path = plane_dir.join("session.json");
     let mut session: Session = read(&session_path)?;
@@ -1016,11 +1043,14 @@ async fn execute(cli: &Cli) -> Result<()> {
                 version.as_deref(),
                 Some(alias.iter().cloned().collect()),
                 false,
+                false,
             )
-            .await?
+            .await?;
+            write_private(&plane_dir.join("context.json"), &context)?;
         }
         Command::Update { app_id } => {
-            install(&client, &plane_dir, app_id, None, None, true).await?
+            install(&client, &plane_dir, app_id, None, None, true, false).await?;
+            write_private(&plane_dir.join("context.json"), &context)?;
         }
         Command::Uninstall { app_id } => {
             let lock = fs::OpenOptions::new()
@@ -1047,6 +1077,9 @@ async fn execute(cli: &Cli) -> Result<()> {
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
     }
+    if settings.auto_update && update_packages(&root, cli, true).await.is_err() {
+        eprintln!("Package update check deferred; run honeycomb update for details");
+    }
     // Maintenance failures must not change the user's successful command result.
     if settings.auto_update
         && now() - settings.last_update_check >= 3600
@@ -1063,6 +1096,7 @@ async fn install(
     version: Option<&str>,
     aliases: Option<BTreeMap<String, String>>,
     updating: bool,
+    quiet: bool,
 ) -> Result<()> {
     if !honeycomb_client::valid_app_id(id) {
         bail!("Expected an org>app identifier; quote it in your shell");
@@ -1085,15 +1119,20 @@ async fn install(
         .find(|r| version.is_none_or(|v| v == r.version))
         .context("Requested release is unavailable")?;
     if previous.is_some_and(|p| p.version == release.version && p.sha256 == release.sha256) {
-        show(&json!({"app_id":id,"version":release.version,"status":"already_up_to_date"}))?;
+        if !quiet {
+            show(&json!({"app_id":id,"version":release.version,"status":"already_up_to_date"}))?;
+        }
         return Ok(());
     }
     let aliases = aliases
         .or_else(|| previous.map(|p| p.aliases.clone()))
         .unwrap_or_default();
     let stage = root.join(format!("download-{}.tar.gz", uuid::Uuid::new_v4()));
-    client.download(id, release, &stage).await?;
-    let result = installer::install_archive(&stage, root, &aliases, previous);
+    let result = async {
+        client.download(id, release, &stage).await?;
+        installer::install_archive(&stage, root, &aliases, previous)
+    }
+    .await;
     let _ = fs::remove_file(&stage);
     let record = result?;
     let first = record
@@ -1104,9 +1143,107 @@ async fn install(
         .clone();
     records.insert(id.into(), record.clone());
     write_private(&root.join("installed.json"), &records)?;
-    show(
-        &json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())}),
-    )?;
+    if !quiet {
+        show(
+            &json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())}),
+        )?;
+    }
+    Ok(())
+}
+/// Resolve each package against its original origin and testing context. Never guess a
+/// missing test context or borrow credentials from production.
+async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) -> Result<()> {
+    let directory = context.directory(root);
+    let records: BTreeMap<String, Installed> = read(&directory.join("installed.json"))?;
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut client = context.client(telemetry)?;
+    let session_path = directory.join("session.json");
+    let mut session: Session = read(&session_path)?;
+    if session.access_token.is_some() && session.expires_at <= now() + 30 {
+        let refresh = session
+            .refresh_token
+            .as_ref()
+            .context("Package update requires renewed login")?;
+        let tokens = client.refresh(refresh, &Mutation::new()).await?;
+        session = Session {
+            access_token: tokens["access_token"].as_str().map(str::to_owned),
+            refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
+            expires_at: now() + tokens["expires_in"].as_i64().unwrap_or(0),
+        };
+        write_private(&session_path, &session)?;
+    }
+    if let Some(token) = session.access_token {
+        client = client.with_token(token);
+    }
+    let mut failed = false;
+    for id in records.keys() {
+        // Failure for one package must not prevent other installed packages updating.
+        failed |= install(&client, &directory, id, None, None, true, true)
+            .await
+            .is_err();
+    }
+    if failed {
+        bail!("One or more package updates failed; existing installations were retained");
+    }
+    Ok(())
+}
+async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<()> {
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join("package-update.lock"))?;
+    if lock.try_lock_exclusive().is_err() {
+        return Ok(());
+    }
+    let settings: Settings = read(&root.join("config.json"))?;
+    if !settings.auto_update {
+        return Ok(());
+    }
+    let selected = selected_context(cli, &settings, root)?;
+    let mut contexts = BTreeMap::new();
+    contexts.insert(selected.directory(root), selected);
+    if !selected_only && cli.api.is_none() && cli.test.is_none() {
+        let entries = match fs::read_dir(root.join("contexts")) {
+            Ok(entries) => Some(entries),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries.into_iter().flatten() {
+            let path = entry?.path();
+            let metadata = path.join("context.json");
+            if !metadata.exists() {
+                continue;
+            }
+            let context: InstallContext = serde_json::from_slice(&fs::read(metadata)?)?;
+            if context.directory(root) != path {
+                bail!("Installed package context does not match its directory");
+            }
+            contexts.insert(path, context);
+        }
+    }
+    let mut failed = false;
+    for (directory, context) in contexts {
+        let checked: i64 = read(&directory.join("last-package-update.json"))?;
+        if now() - checked < 3600 {
+            continue;
+        }
+        let records: BTreeMap<String, Installed> = read(&directory.join("installed.json"))?;
+        if records.is_empty() {
+            continue;
+        }
+        write_private(&directory.join("last-package-update.json"), &now())?;
+        failed |= update_context(root, &context, telemetry_enabled(settings.telemetry))
+            .await
+            .is_err();
+    }
+
+    if failed {
+        bail!("Package maintenance needs attention");
+    }
     Ok(())
 }
 async fn self_update(root: &Path, force: bool) -> Result<()> {
@@ -1199,4 +1336,261 @@ async fn record_command(cli: &Cli, source: &str, event: &str, duration: u64, suc
         Ok(())
     }
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("honeycomb-cli-test-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn fixture(root: &Path, version: &str) -> PathBuf {
+        let mut targets = serde_json::Map::new();
+        for target in package::REQUIRED_TARGETS {
+            let dir = root.join(format!("targets/{target}/bin"));
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("app");
+            fs::write(&path, format!("payload {version}")).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            targets.insert(
+                target.into(),
+                json!({"root":format!("targets/{target}"),"executables":{"app":"bin/app"}}),
+            );
+        }
+        fs::write(root.join("honeycomb.yaml"), json!({"format_version":1,"app_id":"fixture>package","version":version,"bin":{"honeycomb-fixture-command":"app"},"targets":targets}).to_string()).unwrap();
+        package::pack(root, None).unwrap()
+    }
+    async fn release_server(
+        archive: &Path,
+        corrupt: bool,
+        key: Option<&str>,
+        token: &str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let sha = package::sha256(archive).unwrap();
+        let bytes = fs::read(archive).unwrap();
+        let release = json!({"items":[{"app_id":"fixture>package","version":"1.1.0","sha256":sha,"size":bytes.len(),"created_at":1}]}).to_string().into_bytes();
+        let key = key.map(str::to_owned);
+        let token = token.to_owned();
+        let task = tokio::spawn(async move {
+            for step in 0..2 {
+                let (mut stream, _) =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let count = stream.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&chunk[..count]);
+                    if request.windows(4).any(|x| x == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap().to_lowercase();
+                assert!(
+                    request.contains(&format!("authorization: bearer {}", token.to_lowercase()))
+                );
+                if let Some(key) = &key {
+                    assert!(request.contains(&format!(
+                        "x-testing-environment-key: {}",
+                        key.to_lowercase()
+                    )));
+                } else {
+                    assert!(!request.contains("x-testing-environment-key:"));
+                }
+                assert!(request.contains(if step == 0 {
+                    "/releases "
+                } else {
+                    "/download?version=1.1.0 "
+                }));
+                let body = if step == 0 {
+                    release.clone()
+                } else if corrupt {
+                    b"corrupted archive".to_vec()
+                } else {
+                    bytes.clone()
+                };
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nContent-Type: application/json\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            }
+        });
+        (origin, task)
+    }
+    fn seed(root: &Path, context: &InstallContext, archive: &Path, token: &str) -> Installed {
+        let directory = context.directory(root);
+        fs::create_dir_all(&directory).unwrap();
+        let aliases = BTreeMap::from([(
+            "honeycomb-fixture-command".into(),
+            "honeycomb-fixture-alias".into(),
+        )]);
+        let record = installer::install_archive(archive, &directory, &aliases, None).unwrap();
+        write_private(
+            &directory.join("installed.json"),
+            &BTreeMap::from([(record.app_id.clone(), record.clone())]),
+        )
+        .unwrap();
+        write_private(&directory.join("context.json"), context).unwrap();
+        write_private(
+            &directory.join("session.json"),
+            &Session {
+                access_token: Some(token.into()),
+                refresh_token: None,
+                expires_at: now() + 3600,
+            },
+        )
+        .unwrap();
+        record
+    }
+    #[test]
+    fn shell_path_resolves_api_and_saved_environment_without_exposing_key() {
+        let root = Scratch::new();
+        let key = "T".repeat(32);
+        write_private(
+            &root.0.join("environments.json"),
+            &BTreeMap::from([("test-env", &key)]),
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from([
+            "honeycomb",
+            "--api",
+            "http://localhost:8777",
+            "--test",
+            "test-env",
+            "config",
+            "env",
+        ])
+        .unwrap();
+        let context = selected_context(&cli, &Settings::default(), &root.0).unwrap();
+        assert_eq!(context.testing_key.as_deref(), Some(key.as_str()));
+        assert_eq!(context.api, "http://localhost:8777");
+        let output = shell_environment(&root.0, &context);
+        assert!(
+            output.contains(
+                &context
+                    .directory(&root.0)
+                    .join("bin")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+        assert!(!output.contains(&key));
+        let production = InstallContext {
+            api: context.api.clone(),
+            testing_key: None,
+        };
+        assert_ne!(context.directory(&root.0), production.directory(&root.0));
+        let invalid =
+            Cli::try_parse_from(["honeycomb", "--test", "invalid", "config", "env"]).unwrap();
+        assert!(selected_context(&invalid, &Settings::default(), &root.0).is_err());
+    }
+    #[tokio::test]
+    async fn daemon_updates_all_saved_contexts_and_preserves_failed_installation() {
+        let root = Scratch::new();
+        let source = Scratch::new();
+        let old = fixture(&source.0, "1.0.0");
+        let new = fixture(&source.0, "1.1.0");
+        let key = "T".repeat(32);
+        let (production_origin, production_server) =
+            release_server(&new, false, None, "production-token").await;
+        let (testing_origin, testing_server) =
+            release_server(&new, true, Some(&key), "testing-token").await;
+        let production = InstallContext {
+            api: production_origin,
+            testing_key: None,
+        };
+        let testing = InstallContext {
+            api: testing_origin,
+            testing_key: Some(key.clone()),
+        };
+        let before_prod = seed(&root.0, &production, &old, "production-token");
+        let before_test = seed(&root.0, &testing, &old, "testing-token");
+        let registry_path = testing.directory(&root.0).join("installed.json");
+        let registry_before = fs::read(&registry_path).unwrap();
+        let command_before = fs::read(&before_test.commands["honeycomb-fixture-command"]).unwrap();
+        let cli = Cli {
+            api: None,
+            test: None,
+            json: false,
+            idempotency_key: None,
+            command: Command::Daemon { once: true },
+        };
+        let error = update_packages(&root.0, &cli, false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains(&key));
+        assert!(!error.contains("token"));
+        production_server.await.unwrap();
+        testing_server.await.unwrap();
+        let after: BTreeMap<String, Installed> =
+            read(&production.directory(&root.0).join("installed.json")).unwrap();
+        assert_eq!(after["fixture>package"].version, "1.1.0");
+        assert_eq!(after["fixture>package"].aliases, before_prod.aliases);
+        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+        assert_eq!(
+            fs::read(&before_test.commands["honeycomb-fixture-command"]).unwrap(),
+            command_before
+        );
+        assert!(fs::read_dir(testing.directory(&root.0)).unwrap().all(|e| {
+            !e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("download-")
+        }));
+        // No second request is made within the hourly interval, including for failures.
+        update_packages(&root.0, &cli, false).await.unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(testing.directory(&root.0).join("context.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+    #[tokio::test]
+    async fn disabled_updater_makes_no_requests() {
+        let root = Scratch::new();
+        write_private(
+            &root.0.join("config.json"),
+            &Settings {
+                auto_update: false,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        let cli = Cli {
+            api: Some("http://127.0.0.1:1".into()),
+            test: None,
+            json: false,
+            idempotency_key: None,
+            command: Command::Daemon { once: true },
+        };
+        update_packages(&root.0, &cli, false).await.unwrap();
+    }
 }
