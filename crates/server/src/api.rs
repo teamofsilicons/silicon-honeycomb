@@ -962,7 +962,7 @@ async fn upload_release(
     .await
     .map_err(|e| anyhow::anyhow!(e))?
     .map_err(|e| Error::bad(e.to_string()))?;
-    if manifest.app_id != id {
+    if manifest.app_id.as_deref().is_some_and(|app| app != id) {
         return Err(Error::bad(
             "Archive app_id differs from the application being released",
         ));

@@ -62,8 +62,13 @@ test("registration validates the first archive and retries its upload without re
     await form.getByRole("heading", { name: "First CLI release" }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `/tmp/honeycomb-registration-form-${info.project.name}.png` });
     await form.getByRole("button", { name: "Create private application" }).click();
-    await expect(form.getByRole("alert")).toContainText("The archive must use app_id");
+    await expect(form.getByRole("alert")).toContainText("The archive app_id must match");
     expect(creates).toBe(0);
+    // The same payload can omit its identity and use the selected application.
+    writeFileSync(join(root, "honeycomb.yaml"), JSON.stringify({ format_version: 1, version: "1.0.0", bin: { greet: "app" }, targets }));
+    const optionalArchive = join(root, "release-without-app-id.tar.gz");
+    execFileSync(cli, ["pack", root, "--output", optionalArchive], { env });
+    await form.getByLabel("First CLI archive").setInputFiles(optionalArchive);
     await form.getByLabel("Application handle").fill(handle);
     await form.getByRole("button", { name: "Create private application" }).click();
     const detail = page.getByRole("dialog", { name, exact: true });

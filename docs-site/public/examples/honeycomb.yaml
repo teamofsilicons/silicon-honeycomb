@@ -1,5 +1,5 @@
 format_version: 1
-app_id: my-org>my-app
+# app_id: my-org>my-app  # Optional
 version: 1.0.0
 bin:
   my-app: main

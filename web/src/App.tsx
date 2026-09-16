@@ -63,6 +63,7 @@ function Dialog(props: {
       ref={dialog}
       aria-label={props.title}
       onCancel={(e) => {
+        if (e.target !== e.currentTarget) return;
         e.preventDefault();
         props.close();
       }}
@@ -416,8 +417,8 @@ export default function App() {
           method: "POST", headers: { "Content-Type": "application/gzip" }, body: archive,
         });
         if (!validation.valid) throw new Error(validation.errors.join("\n"));
-        if (validation.manifest?.app_id !== appId)
-          throw new Error(`The archive must use app_id ${appId} in honeycomb.yaml. Update it and run honeycomb pack again.`);
+        if (validation.manifest?.app_id != null && validation.manifest.app_id !== appId)
+          throw new Error(`The archive app_id must match ${appId}. Correct or omit app_id in honeycomb.yaml, then run honeycomb pack again.`);
       }
       for (const field of Object.keys(payload))
         if (field.startsWith("draft_")) delete payload[field];

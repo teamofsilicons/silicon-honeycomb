@@ -105,7 +105,7 @@ def main():
                     path = package / 'targets' / target / 'bin' / 'greet'
                     path.write_text(f'#!/bin/sh\nprintf "hello-{version}\\n"\n')
                     path.chmod(0o755)
-                manifest = {'format_version': 1, 'app_id': app_id, 'version': version,
+                manifest = {'format_version': 1, 'version': version,
                             'bin': {'honeycomb-e2e-greet': 'app'}, 'targets': targets}
                 (package / 'honeycomb.yaml').write_text(json.dumps(manifest))
                 assert run('validate', str(package))['valid']

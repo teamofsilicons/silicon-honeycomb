@@ -377,7 +377,12 @@ impl Client {
         if !v.valid {
             bail!("Archive validation failed:\n{}", v.errors.join("\n"));
         }
-        if v.manifest.context("Missing manifest")?.app_id != id {
+        if v.manifest
+            .context("Missing manifest")?
+            .app_id
+            .as_deref()
+            .is_some_and(|app| app != id)
+        {
             bail!("Archive app_id does not match {id}");
         }
         let bytes = tokio::fs::read(path).await?;
@@ -424,10 +429,9 @@ impl Client {
         file.sync_all()?;
         let verified = package::validate(destination);
         if !verified.valid
-            || verified
-                .manifest
-                .as_ref()
-                .is_none_or(|m| m.app_id != id || m.version != release.version)
+            || verified.manifest.as_ref().is_none_or(|m| {
+                m.app_id.as_deref().is_some_and(|app| app != id) || m.version != release.version
+            })
         {
             let _ = std::fs::remove_file(destination);
             bail!(

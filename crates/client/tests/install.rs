@@ -29,6 +29,55 @@ fn fixture(root: &std::path::Path, version: &str) -> std::path::PathBuf {
     package::pack(root, None).unwrap()
 }
 #[test]
+fn optional_identity_uses_selected_app_and_preserves_ownership() {
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let archive = fixture(src.path(), "1.0.0");
+    assert!(
+        installer::install_archive_for("tos>other", &archive, dest.path(), &BTreeMap::new(), None)
+            .is_err()
+    );
+    let path = src.path().join("honeycomb.yaml");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("app_id");
+    fs::write(&path, manifest.to_string()).unwrap();
+    let archive = package::pack(src.path(), Some(&src.path().join("optional.tar.gz"))).unwrap();
+    assert!(installer::install_archive(&archive, dest.path(), &BTreeMap::new(), None).is_err());
+    assert!(
+        installer::install_archive_for("../unsafe", &archive, dest.path(), &BTreeMap::new(), None)
+            .is_err()
+    );
+    let installed = installer::install_archive_for(
+        "tos>selected",
+        &archive,
+        dest.path(),
+        &BTreeMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(installed.app_id, "tos>selected");
+    assert!(
+        installed.directory.starts_with(
+            dest.path()
+                .canonicalize()
+                .unwrap()
+                .join("packages/tos/selected")
+        )
+    );
+    assert!(
+        installer::install_archive_for(
+            "tos>other",
+            &archive,
+            dest.path(),
+            &BTreeMap::new(),
+            Some(&installed)
+        )
+        .is_err()
+    );
+    installer::uninstall(&installed, dest.path()).unwrap();
+}
+#[test]
 fn install_update_execute_and_uninstall() {
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();

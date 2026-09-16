@@ -37,6 +37,29 @@ fn round_trip_all_targets_and_aliases() {
     );
 }
 #[test]
+fn optional_identity_round_trips_and_uses_command_filename() {
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    let path = root.path().join("honeycomb.yaml");
+    let mut manifest: serde_json::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("app_id");
+    fs::write(&path, manifest.to_string()).unwrap();
+    let archive = pack(root.path(), None).unwrap();
+    assert_eq!(archive.file_name().unwrap(), "hello-1.0.0.tar.gz");
+    let unpacked = tempfile::tempdir().unwrap();
+    assert!(unpack(&archive, unpacked.path()).unwrap().app_id.is_none());
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        fs::read(unpacked.path().join("honeycomb.yaml")).unwrap()
+    );
+    for invalid in ["", "not-qualified", "../unsafe"] {
+        manifest["app_id"] = invalid.into();
+        fs::write(&path, manifest.to_string()).unwrap();
+        assert!(!validate_dir(root.path()).valid);
+    }
+}
+#[test]
 fn aggregates_missing_targets_and_invalid_metadata() {
     let d = tempfile::tempdir().unwrap();
     fs::write(

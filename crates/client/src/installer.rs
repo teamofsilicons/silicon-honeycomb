@@ -26,18 +26,52 @@ pub fn install_archive(
     aliases: &BTreeMap<String, String>,
     previous: Option<&Installed>,
 ) -> Result<Installed> {
+    install_archive_with_identity(archive, state_dir, aliases, previous, None)
+}
+
+/// Install using the application selected by the caller's verified release record.
+/// An optional manifest ID must match this identity; updates must retain ownership.
+pub fn install_archive_for(
+    app_id: &str,
+    archive: &Path,
+    state_dir: &Path,
+    aliases: &BTreeMap<String, String>,
+    previous: Option<&Installed>,
+) -> Result<Installed> {
+    install_archive_with_identity(archive, state_dir, aliases, previous, Some(app_id))
+}
+
+fn install_archive_with_identity(
+    archive: &Path,
+    state_dir: &Path,
+    aliases: &BTreeMap<String, String>,
+    previous: Option<&Installed>,
+    requested_app_id: Option<&str>,
+) -> Result<Installed> {
     let expected_sha = package::sha256(archive)?;
     fs::create_dir_all(state_dir)?;
     let state_dir = state_dir.canonicalize()?;
     let stage = tempfile::tempdir_in(&state_dir)?;
     let m = package::unpack(archive, stage.path())?;
+    let app_id = requested_app_id
+        .or(m.app_id.as_deref())
+        .or_else(|| previous.map(|p| p.app_id.as_str()))
+        .context(
+            "Archive omits app_id; use install_archive_for with the selected application ID",
+        )?;
+    if !honeycomb_core::valid_app_id(app_id) {
+        bail!("Invalid installation application ID");
+    }
+    if m.app_id.as_deref().is_some_and(|id| id != app_id) {
+        bail!("Archive app_id differs from the selected application");
+    }
     let target = package::current_target()?;
     let payload = m
         .targets
         .get(target)
-        .with_context(|| format!("{} has no payload for {target}", m.app_id))?;
+        .with_context(|| format!("{app_id} has no payload for {target}"))?;
     if let Some(p) = previous
-        && p.app_id != m.app_id
+        && p.app_id != app_id
     {
         bail!("The existing installation belongs to a different application");
     }
@@ -96,7 +130,7 @@ pub fn install_archive(
     }
     let directory = state_dir
         .join("packages")
-        .join(m.app_id.replace('>', "/"))
+        .join(app_id.replace('>', "/"))
         .join(format!("{}-{}", m.version, &expected_sha[..12]));
     if directory.exists() {
         bail!(
@@ -162,7 +196,7 @@ pub fn install_archive(
         }
     }
     Ok(Installed {
-        app_id: m.app_id,
+        app_id: app_id.to_owned(),
         version: m.version,
         target: target.into(),
         directory,

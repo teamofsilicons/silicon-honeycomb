@@ -1130,7 +1130,7 @@ async fn install(
     let stage = root.join(format!("download-{}.tar.gz", uuid::Uuid::new_v4()));
     let result = async {
         client.download(id, release, &stage).await?;
-        installer::install_archive(&stage, root, &aliases, previous)
+        installer::install_archive_for(id, &stage, root, &aliases, previous)
     }
     .await;
     let _ = fs::remove_file(&stage);

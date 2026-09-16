@@ -16,7 +16,7 @@ Request a fresh Honeycomb token and exchange it promptly, once. Use the URL retu
 You need a current owner/admin role in a shared organization and effective membership disclosure. Verify `self.membership.read`, renew IAM consent by signing in again, and check that you selected the right organization. `honeycomb login status --json` shows the CLI's current live authority; the website has its own session.
 
 ## “Missing required target” or archive mismatch
-Build all six required native targets, populate their executable mappings, and make non-Windows files executable. Keep `honeycomb.yaml` at the archive root. Ensure its `app_id` exactly matches the application's permanent identifier. Run `honeycomb validate` before upload. See [Package format](/package-format/).
+Build all six required native targets, populate their executable mappings, and make non-Windows files executable. Keep `honeycomb.yaml` at the archive root. If `app_id` is present, ensure it exactly matches the application's permanent identifier; otherwise omit it. Run `honeycomb validate` before upload. See [Package format](/package-format/).
 
 ## Upload or private download fails with delegated access errors
 Check the platform's four Briefcase OBO grants, `self.tags.read`, membership/identity disclosure, current user consent, and the resource organization's selection. Effective management scopes alone do not renew an existing token. An IAM/Briefcase integration problem cannot be fixed by repeatedly creating the app.

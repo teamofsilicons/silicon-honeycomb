@@ -2,7 +2,8 @@
 # Optional targets: linux-i686, linux-armv7hf, windows-i686; add only with complete payload mappings.
 format_version: 1
 
-app_id: "your-org>your-app"
+# Optional: restrict this archive to one registered application.
+# app_id: "your-org>your-app"
 
 version: "1.0.0"
 

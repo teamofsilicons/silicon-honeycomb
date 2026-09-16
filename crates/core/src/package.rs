@@ -27,7 +27,8 @@ pub const MAX_ENTRIES: usize = 50_000;
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub format_version: u32,
-    pub app_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
     pub version: String,
     pub bin: BTreeMap<String, String>,
     pub targets: BTreeMap<String, Target>,
@@ -122,7 +123,10 @@ pub fn validate_dir(root: &Path) -> Validation {
     if m.format_version != 1 {
         errors.push("format_version: only version 1 is supported".into());
     }
-    if !crate::valid_app_id(&m.app_id) {
+    if m.app_id
+        .as_deref()
+        .is_some_and(|id| !crate::valid_app_id(id))
+    {
         errors.push("app_id: expected org>app using lowercase handles".into());
     }
     if semver::Version::parse(&m.version).is_err() {
@@ -357,7 +361,10 @@ pub fn pack(root: &Path, output: Option<&Path>) -> Result<PathBuf> {
     let m = validation.manifest.context("manifest missing")?;
     let default = root.join(format!(
         "{}-{}.tar.gz",
-        m.app_id.split('>').next_back().unwrap(),
+        m.app_id
+            .as_deref()
+            .and_then(|id| id.split('>').next_back())
+            .unwrap_or_else(|| m.bin.keys().next().unwrap()),
         m.version
     ));
     let output = output.unwrap_or(&default);

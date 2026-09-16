@@ -4,7 +4,7 @@ honeycomb apps get 'my-org>my-app' --json
 honeycomb --idempotency-key my-release-upload-0001 releases upload 'my-org>my-app' my-app-1.0.0.tar.gz --revision 1
 honeycomb releases list 'my-org>my-app'
 ```
-Use the application's current configuration revision. The CLI validates the archive locally; the server validates again and confirms the manifest's `app_id` matches the route. Briefcase stores the bytes, while Honeycomb records version, SHA-256, size, and creation time.
+Use the application's current configuration revision. The CLI validates the archive locally; the server validates again and uses the selected application's identity; an optional manifest `app_id` must match it. Briefcase stores the bytes, while Honeycomb records version, SHA-256, size, and creation time.
 
 A semantic version identifies immutable release bytes. Publish `1.0.1` for changed bytes rather than replacing `1.0.0`. Clients verify the recorded hash, byte length, manifest identity, and version before installation.
 

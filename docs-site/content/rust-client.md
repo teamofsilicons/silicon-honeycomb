@@ -88,6 +88,6 @@ The environment root key must be exactly 32 alphanumeric characters. The SDK sen
 | Generic transport | `get<T>`, `mutate<T>` |
 
 ## Local installation functions
-`installer::install_archive(archive, state_dir, aliases, previous)` validates and stages an archive, checks command collisions, and returns an `Installed` record. Your application owns the installation registry and concurrency lock. Pass the previous record for an update; do not overwrite another package's command. `installer::uninstall(record, state_dir)` removes only owned installation artifacts.
+`installer::install_archive_for(app_id, archive, state_dir, aliases, previous)` installs an archive under the selected application ID. It validates and stages the payload, checks command collisions, and returns an `Installed` record. Your application owns the installation registry and concurrency lock. Pass the previous record for an update; do not overwrite another package's command. `installer::uninstall(record, state_dir)` removes only owned installation artifacts. The existing `install_archive` helper still works when the manifest declares `app_id` or a previous installation supplies it.
 
 `Client::download` verifies hash, size, identity, and version and requires a destination that does not already exist. The `maintenance` module provides CLI release/update and service-registration helpers. A Rust library cannot replace a compiled dependency inside your running application; update dependency versions through your own build/release process.

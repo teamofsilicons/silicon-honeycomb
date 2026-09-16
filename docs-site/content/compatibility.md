@@ -1,5 +1,5 @@
 ## Current contract
-The current HTTP major is **v1**. The CLI, Rust client, and website clients are **0.1.0**. Package manifests use **format_version: 1**. Each uploaded application independently uses semantic versions for its releases.
+The current HTTP major is **v1**. The CLI and Rust client are **0.2.0**. Website clients use HTTP v1. Package manifests use **format_version: 1**. Each uploaded application independently uses semantic versions for its releases.
 
 Call `GET /api/contracts` to discover supported versions. Responses identify `Honeycomb-API-Version` and `Honeycomb-Contract-State`. Existing raw callers may omit negotiation headers and use the version in their URL.
 
@@ -24,3 +24,5 @@ Active contracts never retire automatically. Operators must first deploy a repla
 A deprecated contract can retire only after **seven full days after both deprecation and its most recent qualifying request**. Valid version-matched traffic extends that interval, including authentication failures and declared clients needing upgrades. Health checks and unversioned discovery do not keep it alive. Retired contracts do not reactivate when another request arrives.
 
 The current release implements only v1, so v1 remains active. Contract lifecycle accounting is essential server state and is independent of optional diagnostics.
+
+In 0.2.0, `Manifest.app_id` is `Option<String>`. Manifests may omit `app_id`; an explicit value must match the selected application. Use `installer::install_archive_for` to supply the selected identity when installing an archive without it. Existing manifests remain valid, but older CLIs require the field.

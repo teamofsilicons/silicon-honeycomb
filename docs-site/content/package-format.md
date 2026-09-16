@@ -14,7 +14,7 @@ my-app/
 ## Complete manifest
 ```yaml
 format_version: 1
-app_id: my-org>my-app
+# app_id: my-org>my-app  # Optional
 version: 1.0.0
 bin:
   my-app: main
@@ -44,13 +44,13 @@ targets:
     executables:
       main: my-app
 ```
-[Download this manifest](/examples/honeycomb.yaml). Replace the application ID and payload names with your own.
+[Download this manifest](/examples/honeycomb.yaml). Replace the command and payload names with your own.
 
 ## Field reference
 | Field | Meaning |
 | --- | --- |
 | `format_version` | Must be `1`. |
-| `app_id` | Exact permanent `org>app` identity registered in Honeycomb. |
+| `app_id` | Optional permanent `org>app` identity. If present, it must match the application selected for upload or installation. If omitted, the selected application and its release record provide the identity. |
 | `version` | Semantic release version, for example `1.0.0`. |
 | `bin` | Public command name → logical executable identifier. At least one command is required. |
 | `targets` | Target ID → root directory and executable mappings. |
@@ -80,3 +80,5 @@ honeycomb validate my-app
 honeycomb pack my-app --output my-app-1.0.0.tar.gz
 ```
 Package runtime assets inside the appropriate target root. Do not include credentials, source working trees, or installer scripts that mutate the host. The installer selects a target, validates and stages its payload, then activates owned commands. It does not run package lifecycle scripts.
+
+Without `--output`, the archive is named `<app-handle>-<version>.tar.gz` when `app_id` is set. Otherwise Honeycomb uses the alphabetically first command in `bin`, for example `my-app-1.0.0.tar.gz`. The archive bytes are preserved during upload.
