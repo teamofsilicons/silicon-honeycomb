@@ -4482,3 +4482,130 @@ async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() 
             .is_err()
     );
 }
+
+struct ConfiguredIdentityServices {
+    db: sqlx::SqlitePool,
+    identity: String,
+    coordinator: String,
+    calls: std::sync::Mutex<Vec<String>>,
+}
+impl ConfiguredIdentityServices {
+    fn receipt(request: &Value) -> Value {
+        json!({"state":"completed","operation_id":request["operation_id"],"environment_id":request["environment_id"],"app_id":request["app_id"],"environment_revision":request["environment_revision"],"generation":request["generation"],"key_version":request["key_version"]})
+    }
+}
+#[async_trait]
+impl Management for ConfiguredIdentityServices {
+    async fn configure(&self, request: &Value, token: &str, env: Option<&str>) -> Result<Value> {
+        Manager { accept: true }
+            .configure(request, token, env)
+            .await
+    }
+    async fn lifecycle(&self, request: &Value, _: &str) -> Result<Value> {
+        assert_eq!(request["app_id"], self.identity);
+        // The coordinator sorts before the identity lexically. Its local work
+        // must still wait until the configured identity has been contacted.
+        let local_state: String = sqlx::query_scalar(
+            "SELECT state FROM environment_services WHERE environment_id=? AND app_id=?",
+        )
+        .bind(request["environment_id"].as_str().unwrap())
+        .bind(&self.coordinator)
+        .fetch_one(&self.db)
+        .await?;
+        assert_eq!(local_state, "pending");
+        self.calls.lock().unwrap().push(self.identity.clone());
+        Ok(Self::receipt(request))
+    }
+    async fn service_lifecycle(&self, app: &str, request: &Value, _: &str) -> Result<Value> {
+        assert_ne!(app, self.identity, "Identity must use its management route");
+        assert_ne!(app, self.coordinator, "Coordinator must apply locally");
+        assert_eq!(request["app_id"], app);
+        self.calls.lock().unwrap().push(app.into());
+        Ok(Self::receipt(request))
+    }
+}
+async fn configured_identity_environment() -> (State, Arc<ConfiguredIdentityServices>, Value) {
+    let (mut s, _) = setup(true).await;
+    s.iam_app_id = "vendor>identity".into();
+    s.app_id = "vendor>coordinator".into();
+    let services = Arc::new(ConfiguredIdentityServices {
+        db: s.db.clone(),
+        identity: s.iam_app_id.clone(),
+        coordinator: s.app_id.clone(),
+        calls: Default::default(),
+    });
+    s.management = services.clone();
+    let (status, env) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        Some("member"),
+        json!({"org_id":"tos","name":"Configured service roles"}),
+        "configured-identity-create-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{env}");
+    assert_eq!(env["state"], "ready", "{env}");
+    (s, services, env)
+}
+#[tokio::test]
+async fn configured_identity_environment_creation_uses_service_roles() {
+    let (s, services, env) = configured_identity_environment().await;
+    let participants: Vec<String> = sqlx::query_scalar(
+        "SELECT app_id FROM environment_services WHERE environment_id=? ORDER BY app_id",
+    )
+    .bind(env["environment_id"].as_str().unwrap())
+    .fetch_all(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(participants, ["vendor>coordinator", "vendor>identity"]);
+    assert_eq!(*services.calls.lock().unwrap(), ["vendor>identity"]);
+}
+#[tokio::test]
+async fn configured_identity_clean_runs_identity_first_and_preserves_only_core_roles() {
+    let (s, services, env) = configured_identity_environment().await;
+    let id = env["environment_id"].as_str().unwrap();
+    // Old product handles are ordinary participants when another identity and
+    // coordinator are configured. They must not acquire implicit core status.
+    for app in ["aaa>participant", "tos>iam", "tos>honeycomb"] {
+        sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,?,1,'{}','ready',?,1)")
+            .bind(id).bind(app).bind(env["operation_id"].as_str().unwrap())
+            .execute(&s.db).await.unwrap();
+    }
+    services.calls.lock().unwrap().clear();
+    let (status, result) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/actions/clean"),
+        Some("member"),
+        Value::Null,
+        "configured-identity-clean-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{result}");
+    assert_eq!(result["state"], "ready", "{result}");
+    assert_eq!(result["generation"], 2);
+    assert_eq!(
+        *services.calls.lock().unwrap(),
+        [
+            "vendor>identity",
+            "aaa>participant",
+            "tos>honeycomb",
+            "tos>iam"
+        ]
+    );
+    let participants: Vec<String> = sqlx::query_scalar(
+        "SELECT app_id FROM environment_services WHERE environment_id=? ORDER BY app_id",
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(participants, ["vendor>coordinator", "vendor>identity"]);
+    let ready: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM environment_services WHERE environment_id=? AND state='ready' AND generation=2",
+    ).bind(id).fetch_one(&s.db).await.unwrap();
+    assert_eq!(ready, 2);
+}
