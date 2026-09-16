@@ -100,6 +100,13 @@ async fn import_inner(
             .to_string(),
     ));
     let mut tx = s.db.begin().await?;
+    let configuring: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND state='pending' AND kind IN ('configure','secret.rotate'))")
+        .bind(&id).fetch_one(&mut *tx).await?;
+    if configuring {
+        return Err(Error::conflict(
+            "Finish pending test application configuration or credential operations before importing applications",
+        ));
+    }
     if let Some(op)=sqlx::query("SELECT id,request_hash,state FROM operations WHERE plane='production' AND actor=? AND idempotency_key=?")
         .bind(&actor).bind(operation_key).fetch_optional(&mut *tx).await? {
         if op.get::<String,_>("request_hash")!=digest {return Err(Error::conflict("Idempotency key already used for different input"));}
@@ -210,7 +217,7 @@ async fn import_inner(
                     "An existing test-only application cannot be replaced by an import",
                 ));
             }
-            let snapshot = json!({"app_id":app,"org_id":source.get::<String,_>("org_id"),"source_revision":source.get::<i64,_>("effective_revision"),"configuration_revision":local.unwrap_or(0)+1,"configuration":configuration,"visibility":"private","selected_release":selected});
+            let snapshot = json!({"app_id":app,"org_id":source.get::<String,_>("org_id"),"source_revision":source.get::<i64,_>("effective_revision"),"source_iam_revision":source.get::<i64,_>("iam_revision"),"source_visibility":source.get::<String,_>("visibility"),"configuration_revision":local.unwrap_or(0)+1,"configuration":configuration,"visibility":"private","selected_release":selected});
             changes.insert(app.clone(), snapshot.clone());
             snapshot
         };
@@ -248,7 +255,13 @@ async fn import_inner(
     let imports: Vec<Value> = changes.values().cloned().collect();
     // IAM prepares all isolated authentication records before application services.
     let mut participants = changes;
-    participants.insert(s.iam_app_id.clone(), json!({"imports":imports}));
+    let graph: Vec<Value> = visited.values().cloned().collect();
+    let refresh_app_ids: Vec<String> = if body.refresh {
+        participants.keys().cloned().collect()
+    } else {
+        vec![]
+    };
+    participants.insert(s.iam_app_id.clone(), json!({"imports":imports,"graph":graph,"root_app_id":body.app_id,"refresh_app_ids":refresh_app_ids}));
     participants
         .entry(s.app_id.clone())
         .or_insert_with(|| json!({}));

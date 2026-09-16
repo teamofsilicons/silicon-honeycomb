@@ -21,6 +21,13 @@ pub struct TestingApplicationAuthority {
 
 #[async_trait]
 pub trait Management: Send + Sync {
+    /// Called only after all participant receipts have completed. Integrations that
+    /// return a finalization requirement must explicitly activate their runtime.
+    async fn finalize_lifecycle(&self, _operation: &Value) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM shared testing activation is not configured",
+        ))
+    }
     async fn verify_testing_application(
         &self,
         _application_authorization: &str,

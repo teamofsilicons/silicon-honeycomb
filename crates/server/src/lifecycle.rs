@@ -135,7 +135,12 @@ async fn coordinate_inner(
             "retire" => "retire-applications",
             other => other,
         };
-        let request = json!({"retired_apps":retired_apps,"reason":if automatic {"inactivity"} else {"requested"},"operation_id":operation_id,"action":service_action,"environment_id":id,"org_id":environment.get::<String,_>("org_id"),"environment_revision":revision,"generation":generation,"key_version":key_version,"testing_key":s.decrypt(&environment.get::<String,_>("encrypted_key"))?,"app_id":app,"snapshot":serde_json::from_str::<Value>(&service.get::<String,_>("snapshot")).map_err(|e|anyhow::anyhow!(e))?});
+        let mut request = json!({"retired_apps":retired_apps,"reason":if automatic {"inactivity"} else {"requested"},"operation_id":operation_id,"action":service_action,"environment_id":id,"org_id":environment.get::<String,_>("org_id"),"name":environment.get::<String,_>("name"),"description":environment.get::<String,_>("description"),"environment_revision":revision,"generation":generation,"key_version":key_version,"testing_key":s.decrypt(&environment.get::<String,_>("encrypted_key"))?,"app_id":app,"snapshot":serde_json::from_str::<Value>(&service.get::<String,_>("snapshot")).map_err(|e|anyhow::anyhow!(e))?});
+        if app == s.iam_app_id
+            && let Some(previous) = details["previous_encrypted_key"].as_str()
+        {
+            request["authority_testing_key"] = json!(s.decrypt(previous)?);
+        }
         let result = if app == s.app_id {
             apply_local(s,id,action,operation_id,lease).await.map(|_|json!({"state":"completed","operation_id":operation_id,"environment_id":id,"app_id":app,"environment_revision":revision,"generation":generation,"key_version":key_version,"retired_apps":retired_apps}))
         } else if !automatic && app == s.iam_app_id {
@@ -158,8 +163,10 @@ async fn coordinate_inner(
                 .await
         };
         let mut stored_receipt = None;
+        let mut finalization_required = false;
         let error=match result {
             Ok(receipt) if receipt["state"]=="completed" && receipt["operation_id"]==operation_id && receipt["environment_id"]==id && receipt["app_id"]==app && receipt["environment_revision"]==revision && receipt["generation"]==generation && receipt["key_version"]==key_version && (action!="retire" || receipt["retired_apps"]==retired_apps) => {
+                finalization_required = app == s.iam_app_id && receipt["requires_finalization"] == true;
                 if action=="import" && app==s.iam_app_id {
                     match accepted_imports(&request["snapshot"]["imports"], &receipt["imports"]) {
                         Ok(imports)=>{
@@ -180,8 +187,8 @@ async fn coordinate_inner(
             Err(e)=>Some(if application.is_some() {"Application lifecycle request failed; retry after checking IAM authority and participant readiness".to_owned()} else {e.1.message}),
         };
         let failed = error.is_some();
-        let written=sqlx::query("UPDATE environment_services SET state=?,error=?,generation=?,receipt=? WHERE environment_id=? AND app_id=? AND operation_id=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
-            .bind(if failed{"failed"}else{"ready"}).bind(error).bind(generation).bind(stored_receipt).bind(id).bind(&app).bind(operation_id).bind(operation_id).bind(lease).bind(now()).execute(&s.db).await?;
+        let written=sqlx::query("UPDATE environment_services SET state=?,error=?,generation=?,receipt=?,finalization_required=? WHERE environment_id=? AND app_id=? AND operation_id=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
+            .bind(if failed{"failed"}else{"ready"}).bind(error).bind(generation).bind(stored_receipt).bind(finalization_required).bind(id).bind(&app).bind(operation_id).bind(operation_id).bind(lease).bind(now()).execute(&s.db).await?;
         if written.rows_affected() != 1 {
             return Err(Error::conflict("Lifecycle coordinator lease expired"));
         }
@@ -203,6 +210,43 @@ async fn coordinate_inner(
         return Ok(
             json!({"operation_id":operation_id,"environment_id":id,"state":environment.get::<String,_>("state"),"revision":revision,"generation":generation,"operation_state":"pending","error":error}),
         );
+    }
+    let finalization = sqlx::query("SELECT snapshot FROM environment_services WHERE environment_id=? AND app_id=? AND operation_id=? AND finalization_required=1")
+        .bind(id).bind(&s.iam_app_id).bind(operation_id).fetch_optional(&s.db).await?;
+    if let Some(finalization) = finalization {
+        let request = json!({"operation_id":operation_id,"action":action,"environment_id":id,"app_id":s.iam_app_id,"environment_revision":revision,"generation":generation,"key_version":key_version,"snapshot":serde_json::from_str::<Value>(&finalization.get::<String,_>("snapshot")).map_err(|e|anyhow::anyhow!(e))?});
+        let receipt = s.management.finalize_lifecycle(&request).await;
+        let confirmed = receipt.as_ref().is_ok_and(|r| {
+            r["state"] == "completed"
+                && [
+                    "operation_id",
+                    "environment_id",
+                    "app_id",
+                    "environment_revision",
+                    "generation",
+                    "key_version",
+                ]
+                .iter()
+                .all(|f| r[*f] == request[*f])
+        });
+        if !confirmed {
+            let error = "IAM activation is pending after participant preparation; retry the same lifecycle operation";
+            sqlx::query("UPDATE operations SET error=? WHERE id=? AND lease_token=?")
+                .bind(error)
+                .bind(operation_id)
+                .bind(lease)
+                .execute(&s.db)
+                .await?;
+            return Ok(
+                json!({"operation_id":operation_id,"environment_id":id,"state":environment.get::<String,_>("state"),"revision":revision,"generation":generation,"operation_state":"pending","error":error}),
+            );
+        }
+        let saved = sqlx::query("UPDATE environment_services SET finalization_required=0 WHERE environment_id=? AND app_id=? AND operation_id=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)").bind(id).bind(&s.iam_app_id).bind(operation_id).bind(operation_id).bind(lease).bind(now()).execute(&s.db).await?;
+        if saved.rows_affected() != 1 {
+            return Err(Error::conflict(
+                "Lifecycle coordinator lease expired during IAM activation",
+            ));
+        }
     }
     let final_state = match action {
         "delete" => "deleted",
@@ -290,6 +334,13 @@ async fn coordinate_inner(
         }
     }
     if action == "purge" {
+        // Completed purge must also erase encrypted historical root material.
+        sqlx::query("DELETE FROM iam_testing_phases WHERE environment_id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE operations SET request_json=json_remove(request_json,'$.previous_encrypted_key') WHERE plane='production' AND resource=? AND request_json IS NOT NULL")
+            .bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE environments SET encrypted_key='',key_hash=?,name='Purged environment',description='' WHERE id=?").bind(format!("purged:{id}")).bind(id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM environment_services WHERE environment_id=?")
             .bind(id)
