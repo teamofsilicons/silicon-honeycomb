@@ -26,8 +26,8 @@ not a successful archive upload or remote package validation.
 ## Release and remaining service work
 
 Release `1.1.0` is cataloged with the validated local archive's exact SHA-256
-`ccee3f85e257e61faa826f65dfff7b42d7964471cd3ea127d69b0f161281019e`
-and size 20,711,083 bytes. Its storage reference explicitly records `pending_upload`
+`a2a1fce14171d3b03f0c8a5942f17c69079b15ebad9b783d680e0ce05b85ccb0`
+and size 20,715,240 bytes. Its storage reference explicitly records `pending_upload`
 and `remote_archive_validated: false`.
 
 Planned public bytes URL:
@@ -73,3 +73,22 @@ credentials remained separate and continued authenticating.
 The earlier user-authorized removal of old IAM applications is documented in
 [the reset evidence](../deploy/operator/README.md). The earlier legacy adoption
 implementation (`beb9c63`) was never used for Briefcase.
+
+## Final archive metadata correction
+
+Before the first upload, the archive was rebuilt to include merged upstream
+manuals. The released Honeycomb CLI validated all six targets again. The pending
+release metadata now uses the final hash and size above. No upload or remote
+validation was performed, and the planned public URL is unchanged.
+
+The original bootstrap recorded SHA-256
+`ccee3f85e257e61faa826f65dfff7b42d7964471cd3ea127d69b0f161281019e`
+and 20,711,083 bytes. That original creation audit is preserved. A separate accepted
+operator operation records both old and new metadata, and the storage reference
+retains replacement history with `pending_upload` and
+`remote_archive_validated: false`.
+
+- Conditional update SSM: `3b13a7b0-4d65-4bcf-913f-4d4aef02cd86`.
+- Metadata correction operation: `cfc92eec-c88e-4f44-9cf9-6a4fb732db88`.
+- Consistent SQLite backup (integrity check passed): Honeycomb host
+  `/var/lib/silicon-honeycomb/backups/briefcase-archive-metadata-20260916T034425Z/honeycomb.db`.

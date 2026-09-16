@@ -84,8 +84,13 @@ the normal registration/upload request. It does not assert that an upload occurr
 
 - File: `/Users/codanium/Documents/silicon/silicon-briefcase/dist/briefcase-1.1.0.tar.gz`
 - Version: `1.1.0`
-- Bytes: 20711083
-- SHA-256: `ccee3f85e257e61faa826f65dfff7b42d7964471cd3ea127d69b0f161281019e`
+- Bytes: 20715240
+- SHA-256: `a2a1fce14171d3b03f0c8a5942f17c69079b15ebad9b783d680e0ce05b85ccb0`
 - Honeycomb validation: passed for Linux, macOS and Windows on x86_64 and aarch64.
+
+This final rebuild includes merged upstream manuals. Its hash and size replaced the
+original planned metadata before the first upload, with a separate operator audit
+record. The original bootstrap history is preserved; see the
+[registration status](BRIEFCASE-REGISTRATION-STATUS.md#final-archive-metadata-correction).
 
 Fresh credentials have been issued and authenticated against production IAM. They must be configured in the Briefcase service before its login/storage can work. The archive has not been uploaded, and a public catalog entry does not make its download available.
