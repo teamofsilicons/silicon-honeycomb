@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let required = [
         "self.identity.read",
         "self.membership.read",
+        "self.tags.read",
         "obo:tos>briefcase:briefcase.uploads.reserve",
         "obo:tos>briefcase:briefcase.uploads.commit",
         "obo:tos>briefcase:briefcase.files.read",

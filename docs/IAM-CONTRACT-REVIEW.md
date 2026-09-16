@@ -32,6 +32,12 @@ has no management API in `IAM-HANDOFF.md`.
 
 ### After Briefcase setup
 
+Add `self.tags.read` to Honeycomb's declared/effective IAM scopes and renew user
+consent. Briefcase rejects a delegated authorization snapshot with undisclosed
+tags, and IAM migration 0093 only discloses tags when the issuer token, issuer
+approval, audience approval, and user consent permit it. The earlier four-scope
+storage checklist omitted this additional disclosure requirement.
+
 Add external scopes on provider `tos>briefcase`: `briefcase.uploads.reserve`,
 `briefcase.uploads.commit`, `briefcase.files.read`, and
 `briefcase.link_access.update`. Obtain the required provider approval and user
@@ -124,12 +130,12 @@ maps IAM's `owner`, `admin`, and `member` wire values to Honeycomb's existing
 `org_owner`, `org_admin`, and `org_member` API values. Unknown or absent roles
 grant no administrative authority.
 
-Archive/logo operations also require the four external scopes on `tos>briefcase`:
+Archive/logo operations also require `self.tags.read` and the four external scopes on `tos>briefcase`:
 `briefcase.uploads.reserve`, `briefcase.uploads.commit`, `briefcase.files.read`,
 and `briefcase.link_access.update`. The last grants public link sharing and needs
 the provider's approval. No external scopes are currently effective.
-Add `--require-ready` to the check above to fail until all six required identity,
-membership and storage scopes are effective. This is a prerequisite check, not
+Add `--require-ready` to the check above to fail until all seven required identity,
+membership, tags and storage scopes are effective. This is a prerequisite check, not
 proof of user consent, resource authorization, or end-to-end storage success.
 
 IAM commit `ed9abe2` adds migration 0099 to fix unscoped role disclosure. It
