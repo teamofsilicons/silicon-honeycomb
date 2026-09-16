@@ -28,18 +28,33 @@ async fn main() -> anyhow::Result<()> {
         .iter()
         .filter_map(|scope| scope["scope"].as_str())
         .collect();
-    let required = [
+    let storage_app = std::env::var("BRIEFCASE_APP_ID").context("BRIEFCASE_APP_ID is required")?;
+    ensure!(
+        honeycomb_core::valid_app_id(&storage_app),
+        "Invalid storage application ID"
+    );
+    let mut required: Vec<String> = [
         "self.identity.read",
+        "self.profile.read",
         "self.membership.read",
         "self.tags.read",
-        "obo:tos>briefcase:briefcase.uploads.reserve",
-        "obo:tos>briefcase:briefcase.uploads.commit",
-        "obo:tos>briefcase:briefcase.files.read",
-        "obo:tos>briefcase:briefcase.link_access.update",
-    ];
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    required.extend(
+        [
+            "briefcase.uploads.reserve",
+            "briefcase.uploads.commit",
+            "briefcase.files.read",
+            "briefcase.link_access.update",
+        ]
+        .into_iter()
+        .map(|endpoint| format!("obo:{storage_app}:{endpoint}")),
+    );
     let missing: Vec<_> = required
         .into_iter()
-        .filter(|scope| !effective.contains(scope))
+        .filter(|scope| !effective.contains(scope.as_str()))
         .collect();
     println!(
         "{}",

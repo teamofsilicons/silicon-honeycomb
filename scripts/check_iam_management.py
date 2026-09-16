@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--require-ready", action="store_true", help="Fail if required effective scopes are missing")
     args = parser.parse_args()
     env = os.environ.copy()
-    allowed = {"IAM_BASE_URL", "HONEYCOMB_APP_ID", "IAM_HONEYCOMB_SERVICE_CREDENTIAL"}
+    allowed = {"IAM_BASE_URL", "HONEYCOMB_APP_ID", "IAM_HONEYCOMB_SERVICE_CREDENTIAL", "BRIEFCASE_APP_ID"}
     for line in args.handoff.read_text().splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue

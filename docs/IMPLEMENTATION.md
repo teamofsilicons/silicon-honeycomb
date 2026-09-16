@@ -12,6 +12,21 @@ Source of requirements: human-owned `../UNDERSTANDING.md` (never edited by agent
 3. Library and authenticated console on the requested domains.
 4. Backend, CLI, installer and browser end-to-end verification.
 
+## Current integration checkpoint — 2026-09-16
+
+The backend, CLI, library, console and docs have been published. Latest backend
+rollout evidence is in `deploy/aws/release-2026-09-16-configured-identities.md`.
+Official IAM SDK 1.11.0 integration is now being completed locally for publication
+and shared testing. The storage error diagnosis fix is tested and committed;
+its deployment is pending. All required Briefcase scopes are effective in IAM.
+Live uploads remain blocked by IAM's old proof-lifetime database constraint until
+its prepared migration is deployed. Public review also requires an explicitly
+assigned validator. See [IAM-CONTRACT-REVIEW.md](IAM-CONTRACT-REVIEW.md) for current
+contracts, checks and remaining acceptance work.
+
+The checkpoint notes below are historical; earlier statements about unavailable
+SDK contracts or unpublished artifacts describe those earlier checkpoints.
+
 ## Integration findings
 
 - Registry SDK: 1.9.0. Local official IAM commit `7abd575` adds SDK 1.10.0;
