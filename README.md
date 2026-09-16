@@ -53,7 +53,7 @@ IAM and Briefcase; it is excluded from the production image.
 
 ## Install the CLI
 
-CLI 0.2.1 is published as six native release binaries and on crates.io.
+CLI 0.2.2 is published as six native release binaries and on crates.io.
 
 ```sh
 printf "Starting Honeycomb installer…\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"

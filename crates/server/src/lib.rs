@@ -3,6 +3,7 @@ pub mod activation;
 pub mod api;
 pub mod auth;
 pub mod catalog;
+pub mod cli_release;
 pub mod contracts;
 pub mod control;
 pub mod error;

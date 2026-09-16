@@ -11,17 +11,17 @@ The default binary lives in `~/.honeycomb/dir/system/bin`. Bash, Zsh (including 
 ## Cargo and Windows
 Install Rust and its platform build prerequisites, then run:
 ```sh
-cargo install silicon-honeycomb-cli --version '=0.2.1' --locked
+cargo install silicon-honeycomb-cli --version '=0.2.2' --locked
 honeycomb --version
 honeycomb service install
 ```
 The command is `honeycomb`; the crate is `silicon-honeycomb-cli`. Cargo places the binary in its configured bin directory, usually `~/.cargo/bin`; make sure that directory is on PATH. Cargo installation supports Windows, Linux, and macOS. Native release downloads also include Windows x86_64 and aarch64.
 
-[Release archives and checksums](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.2.1) are available for all six required targets. The Bash installer itself is for macOS/Linux.
+[Release archives and checksums](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.2.2) are available for all six required targets. The Bash installer itself is for macOS/Linux.
 
 ## Choose a version or installation home
 ```sh
-printf "Starting Honeycomb installer…\n"; HONEYCOMB_VERSION=0.2.1 /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
+printf "Starting Honeycomb installer…\n"; HONEYCOMB_VERSION=0.2.2 /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
 ```
 | Variable | Effect |
 | --- | --- |
@@ -49,3 +49,8 @@ cd silicon-honeycomb
 cargo install --path crates/cli --locked
 ```
 The workspace currently requires Rust 1.98 or newer. [Troubleshooting](/troubleshooting/) covers PATH and network errors.
+
+## Latest Honeycomb CLI release
+`GET https://backend.honeycomb.teamofsilicons.com/api/v1/cli/latest` returns the latest published stable Honeycomb CLI version, release page, and archive/checksum URLs for all six platforms. No login is required. Discovery uses GitHub’s latest release and requires all native assets to be uploaded; drafts, prereleases and incomplete releases are never advertised. Results may be cached for up to five minutes.
+
+`honeycomb self-update` and the hourly CLI worker use this endpoint, then verify the downloaded checksum and executable version before activation. This endpoint is for Honeycomb itself, independent of application releases.

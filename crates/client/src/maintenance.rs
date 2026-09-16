@@ -31,23 +31,22 @@ pub async fn update_cli_with_progress(
         }))
         .build()?;
     let metadata = bounded(
-        http.get("https://crates.io/api/v1/crates/silicon-honeycomb-cli")
+        http.get("https://backend.honeycomb.teamofsilicons.com/api/v1/cli/latest")
             .send()
             .await?,
         1024 * 1024,
     )
     .await?;
     let metadata: serde_json::Value = serde_json::from_slice(&metadata)?;
-    let latest = metadata["crate"]["max_stable_version"]
+    let latest = metadata["version"]
         .as_str()
-        .or_else(|| metadata["crate"]["max_version"].as_str())
-        .context("Registry returned no published version")?;
+        .context("Latest-release endpoint returned no published version")?;
     let version = semver::Version::parse(latest)?;
     if version <= semver::Version::parse(env!("CARGO_PKG_VERSION"))? {
         return Ok(false);
     }
     if !version.pre.is_empty() {
-        bail!("The latest registry version is a prerelease; automatic update deferred");
+        bail!("The latest CLI version is a prerelease; automatic update deferred");
     }
     let target = crate::package::current_target().context("No prebuilt CLI for this platform")?;
     let asset = format!("honeycomb-{target}.tar.gz");

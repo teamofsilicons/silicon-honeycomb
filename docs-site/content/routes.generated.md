@@ -3,6 +3,7 @@
 | `GET` | `/health` | [`health`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `GET` | `/api/contracts` | [`discovery`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `GET` | `/api/v1/contract` | [`discovery`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
+| `GET` | `/api/v1/cli/latest` | [`latest`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `GET` | `/api/v1/iam` | [`iam`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `POST` | `/api/v1/auth/login` | [`login`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `POST` | `/api/v1/auth/refresh` | [`refresh`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |

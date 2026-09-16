@@ -23,6 +23,7 @@ pub fn router(state: State) -> Router {
         .route("/health", get(health))
         .route("/api/contracts", get(super::contracts::discovery))
         .route("/api/v1/contract", get(super::contracts::discovery))
+        .route("/api/v1/cli/latest", get(super::cli_release::latest))
         .route("/api/v1/iam", get(iam))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh))
