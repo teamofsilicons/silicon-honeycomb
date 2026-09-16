@@ -8,18 +8,84 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 
 TOKEN = "BRIEFCASE_HONEYCOMB_SERVICE_TOKEN"
+REGISTRY = "HONEYCOMB_LIFECYCLE_PARTICIPANTS"
 
 
-def desired_credentials(honeycomb, briefcase):
+def https_origin(value, name, allow_path=False):
+    """Use only an explicitly configured service URL, never a derived domain."""
+    try:
+        if not isinstance(value, str) or any(c.isspace() for c in value):
+            raise ValueError()
+        parsed = urlsplit(value)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment
+                or (not allow_path and parsed.path not in ("", "/"))):
+            raise ValueError()
+        parsed.port  # Reject malformed ports even when no request is being made.
+        return "https://" + parsed.netloc
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must contain an explicit HTTPS service URL") from None
+
+
+def valid_app_id(value):
+    return isinstance(value, str) and re.fullmatch(
+        r"[a-z0-9][a-z0-9-]{0,63}>[a-z0-9][a-z0-9-]{0,63}", value
+    ) is not None
+
+
+def desired_credentials(honeycomb, briefcase, briefcase_public_base_url=None):
     """Return updated copies without rotating an existing service credential."""
     honeycomb = copy.deepcopy(honeycomb)
     briefcase = copy.deepcopy(briefcase)
     backend = honeycomb["backend"]
+    app_id = briefcase.get("BRIEFCASE_IAM_APP_ID")
+    if not valid_app_id(app_id):
+        raise ValueError("BRIEFCASE_IAM_APP_ID must contain the configured application identity")
+    runtime_url = briefcase.get("BRIEFCASE_PUBLIC_BASE_URL")
+    if runtime_url is not None and briefcase_public_base_url is not None:
+        if https_origin(runtime_url, "BRIEFCASE_PUBLIC_BASE_URL", True) != https_origin(
+                briefcase_public_base_url, "briefcase_public_base_url", True):
+            raise ValueError("Configured Briefcase API origins differ; refusing to overwrite")
+    base = https_origin(runtime_url if runtime_url is not None else briefcase_public_base_url,
+                        "BRIEFCASE_PUBLIC_BASE_URL", True)
+    https_origin(briefcase.get("BRIEFCASE_HONEYCOMB_BASE_URL"), "BRIEFCASE_HONEYCOMB_BASE_URL")
+    if backend.get("BRIEFCASE_APP_ID", app_id) != app_id:
+        raise ValueError("Configured Briefcase identities differ; refusing to overwrite")
+    if ("BRIEFCASE_BASE_URL" in backend
+            and https_origin(backend["BRIEFCASE_BASE_URL"], "BRIEFCASE_BASE_URL") != base):
+        raise ValueError("Configured Briefcase destinations differ; refusing to overwrite")
+
+    try:
+        entries = json.loads(backend.get(REGISTRY, "[]"))
+    except (TypeError, ValueError):
+        raise ValueError("Invalid lifecycle participant registry") from None
+    if not isinstance(entries, list):
+        raise ValueError("Invalid lifecycle participant registry")
+    registered = set()
+    existing = None
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != {"app_id", "base_url", "token_env"}
+                or not valid_app_id(entry["app_id"])
+                or entry["app_id"] in registered
+                or not isinstance(entry["token_env"], str)
+                or not re.fullmatch(r"[A-Z_][A-Z0-9_]{0,127}", entry["token_env"])):
+            raise ValueError("Invalid or duplicate lifecycle participant entry")
+        registered.add(entry["app_id"])
+        origin = https_origin(entry["base_url"], "Lifecycle participant base_url")
+        if entry["app_id"] == app_id:
+            if origin != base or entry["token_env"] != TOKEN:
+                raise ValueError("Briefcase lifecycle participant configuration differs; refusing to overwrite")
+            existing = entry
+        elif entry["token_env"] == TOKEN:
+            raise ValueError("Briefcase lifecycle credential is assigned to another identity")
+
     tokens = [value for value in (backend.get(TOKEN), briefcase.get(TOKEN)) if value]
     for token in tokens:
         if not isinstance(token, str) or len(token) < 32 or not all(33 <= ord(c) <= 126 for c in token):
@@ -28,14 +94,18 @@ def desired_credentials(honeycomb, briefcase):
         raise ValueError("Testing service credentials differ; refusing to overwrite either service")
     token = tokens[0] if tokens else secrets.token_urlsafe(48)
     backend[TOKEN] = briefcase[TOKEN] = token
-    backend.setdefault("BRIEFCASE_BASE_URL", "https://backend.briefcase.teamofsilicons.com")
-    briefcase.setdefault("BRIEFCASE_HONEYCOMB_BASE_URL", "https://backend.honeycomb.teamofsilicons.com/")
+    backend.setdefault("BRIEFCASE_BASE_URL", base)
+    backend.setdefault("BRIEFCASE_APP_ID", app_id)
+    if existing is None:
+        entries.append({"app_id": app_id, "base_url": base, "token_env": TOKEN})
+        backend[REGISTRY] = json.dumps(entries, separators=(",", ":"))
     return honeycomb, briefcase
 
 
 def ensure_testing_credentials(profile, honeycomb_region, honeycomb_secret,
                                briefcase_region="us-east-1",
-                               briefcase_secret="silicon-briefcase/production"):
+                               briefcase_secret="silicon-briefcase/production",
+                               briefcase_public_base_url=None):
     def aws(region, *command):
         result = subprocess.run(
             ["aws", "--profile", profile, "--region", region, "secretsmanager",
@@ -69,7 +139,7 @@ def ensure_testing_credentials(profile, honeycomb_region, honeycomb_secret,
 
     hc_version, hc = read(honeycomb_region, honeycomb_secret)
     bc_version, bc = read(briefcase_region, briefcase_secret)
-    next_hc, next_bc = desired_credentials(hc, bc)
+    next_hc, next_bc = desired_credentials(hc, bc, briefcase_public_base_url)
     # Briefcase first: if the second write fails, retry reuses its credential.
     changed_bc = write_if_changed(briefcase_region, briefcase_secret, bc_version, bc, next_bc)
     changed_hc = write_if_changed(honeycomb_region, honeycomb_secret, hc_version, hc, next_hc)
