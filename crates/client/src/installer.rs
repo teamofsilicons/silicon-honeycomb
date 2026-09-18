@@ -173,6 +173,9 @@ fn install_archive_with_identity(
         if !package::safe_command(command) || !destinations.insert(command.to_lowercase()) {
             bail!("Alias {command} is unsafe or collides with another command");
         }
+        // The logical name is what the user types and what --alias names; Windows only adds
+        // the .cmd suffix to the file on disk.
+        let name = command.clone();
         #[cfg(windows)]
         let command = format!("{command}.cmd");
         let destination = bin.join(command.as_str());
@@ -190,7 +193,7 @@ fn install_archive_with_identity(
         if !owned && let Some(existing) = first_on_path(command.as_str(), &destination) {
             let found = existing_version(&existing);
             conflicts.push(PathConflict {
-                command: command.to_string(),
+                command: name,
                 original: original.clone(),
                 existing,
                 satisfied: match (&found, &required) {
