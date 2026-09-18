@@ -107,14 +107,16 @@ def main():
             env['SILICON_HOME'] = str(root / 'aliased')
             subprocess.run([str(CLI), 'config', 'set', 'auto_update', 'false'], env=env, capture_output=True, check=True)
             command = [str(CLI), 'install', release['app_id'], '--alias', 'honeycomb-progress-fixture=honeycomb-chosen-alias']
-            for status in ['Installed Successfully', 'Already up to date.']:
+            for status in ['Installed Successfully', 'Dependency resolved.']:
                 result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
                 assert result.returncode == 0, result.stderr
                 assert result.stderr.endswith(status + '\nRun `honeycomb-chosen-alias` to access it.\n'), result.stderr
                 json.loads(result.stdout)
             result = subprocess.run([str(CLI), '--json', 'install', release['app_id']], env=env, capture_output=True, text=True, timeout=15)
             assert result.returncode == 0 and result.stderr == '', result.stderr
-            assert json.loads(result.stdout)['status'] == 'already_up_to_date'
+            resolved = json.loads(result.stdout)
+            assert resolved['status'] == 'dependency_resolved', resolved
+            assert resolved['bin_directory'] and resolved['help_command'], resolved
             server.shutdown()
     print('PASS: immediate progress before response, byte progress, install stages, JSON silence, corrupt-download failure')
 

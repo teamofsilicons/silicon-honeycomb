@@ -75,6 +75,10 @@ impl Progress {
         }
         progress
     }
+    /// True when a person is watching and can answer a question.
+    pub fn interactive(&self) -> bool {
+        self.terminal
+    }
     pub fn stage(&self, message: &str) {
         if !self.enabled {
             return;
