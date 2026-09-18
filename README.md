@@ -132,6 +132,13 @@ honeycomb logout
 honeycomb report "What happened and how to reproduce it" --pr https://github.com/teamofsilicons/silicon-honeycomb/pull/123
 ```
 
+A command of the same name already on PATH is compared rather than refused. A version
+new enough for the package is reported as resolved and left alone; an older one is named
+against what the package requires and you are asked whether to rewrite it, which uninstall
+undoes. Pass `--rewrite-existing` to answer in advance, as unattended callers and `--json`
+must, or `--alias` to install alongside. A command owned by another package in Honeycomb's
+own bin directory is still a collision that needs `--alias`.
+
 Set `SILICON_HOME` or `honeycomb config home /existing/directory` to choose local
 storage. Run `honeycomb config env` for the PATH entries. Installations and sessions
 are isolated by API origin and test key. `--test <saved-id-or-key>` selects an
