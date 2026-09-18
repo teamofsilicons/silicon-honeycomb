@@ -323,7 +323,15 @@ Once honeycomb gives the final go, the app would be published for public.
 
 # Command collision
 
-In case of command collision a command exists already for the installed command, it would ask for setting an alias for the new installation, which would set the alias, it should also be possible to set an alias at the time of installation. 
+A command that already exists inside Honeycomb's own bin directory and belongs to another package is a real collision: ask for an alias for the new installation, which would set the alias, and it should also be possible to set an alias at the time of installation.
+
+A command of the same name found elsewhere on PATH is a dependency question, not an ownership conflict, because Honeycomb never owned that file. Read the version already serving that command - from its package path when it is a Honeycomb launcher, otherwise by asking the executable itself with `--version`. Then:
+
+- If the version already there is new enough for the package being installed, report the dependency as resolved, install into Honeycomb's own bin directory, and leave the other installation alone.
+- If it is older, do not fail with a bare collision and do not guess. Say what is on the system and what the package needs - "You have dm 0.7.0 on your system at /path/to/dm; this package needs dm 0.9.2 to continue" - and ask "Shall we rewrite with the version required by the runtime?". On yes, rewrite that command where it already sits and keep the file it displaced, so uninstall puts the system back as it was. On no, stop and change nothing.
+- If the version cannot be read at all, say so and ask the same question.
+
+Nothing unattended can answer a question. Without a terminal, or under `--json`, the install stops and names the two ways to answer in advance: `--rewrite-existing` to accept the rewrite, or `--alias` to install alongside. Reinstalling a package already present at the required version reports dependency resolved rather than an error.
 
 # honeycomb install
 

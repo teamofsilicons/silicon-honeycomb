@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -76,6 +76,9 @@ enum Command {
         version: Option<String>,
         #[arg(long,value_parser=parse_alias)]
         alias: Vec<(String, String)>,
+        /// Answer yes in advance to rewriting an older command this package requires.
+        #[arg(long)]
+        rewrite_existing: bool,
     },
     /// Update an installed app to its latest release, preserving aliases.
     Update { app_id: String },
@@ -1048,6 +1051,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             app_id,
             version,
             alias,
+            rewrite_existing,
         } => {
             install(
                 &client,
@@ -1055,7 +1059,10 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 app_id,
                 version.as_deref(),
                 Some(alias.iter().cloned().collect()),
-                false,
+                InstallOptions {
+                    updating: false,
+                    rewrite_existing: *rewrite_existing,
+                },
                 Some(progress),
             )
             .await?;
@@ -1068,7 +1075,10 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 app_id,
                 None,
                 None,
-                true,
+                InstallOptions {
+                    updating: true,
+                    ..InstallOptions::default()
+                },
                 Some(progress),
             )
             .await?;
@@ -1116,13 +1126,21 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     }
     Ok(())
 }
+/// How one install call should behave.
+#[derive(Clone, Copy, Default)]
+struct InstallOptions {
+    /// Called from `honeycomb update`, which reports staleness rather than resolution.
+    updating: bool,
+    /// Yes, answered in advance, to rewriting an older command this package requires.
+    rewrite_existing: bool,
+}
 async fn install(
     client: &Client,
     root: &Path,
     id: &str,
     version: Option<&str>,
     aliases: Option<BTreeMap<String, String>>,
-    updating: bool,
+    options: InstallOptions,
     progress: Option<&Progress>,
 ) -> Result<()> {
     if !honeycomb_client::valid_app_id(id) {
@@ -1140,7 +1158,7 @@ async fn install(
     lock.lock_exclusive()?;
     let mut records: BTreeMap<String, Installed> = read(&root.join("installed.json"))?;
     let previous = records.get(id);
-    if updating && previous.is_none() {
+    if options.updating && previous.is_none() {
         bail!("{id} is not installed; run honeycomb install '{id}' first");
     }
     if let Some(progress) = progress {
@@ -1154,9 +1172,20 @@ async fn install(
     if previous.is_some_and(|p| p.version == release.version && p.sha256 == release.sha256) {
         if let Some(progress) = progress {
             progress.pause();
-            show(&json!({"app_id":id,"version":release.version,"status":"already_up_to_date"}))?;
+            // `update` reports staleness; `install` reports that the requirement is met.
+            let (status, completion) = if options.updating {
+                ("already_up_to_date", "Already up to date.")
+            } else {
+                ("dependency_resolved", "Dependency resolved.")
+            };
+            // Callers still need the command map, so answer as fully as a fresh install does.
+            let mut result = json!({"app_id":id,"version":release.version,"status":status,"bin_directory":root.join("bin")});
+            if let Some(first) = previous.and_then(|p| p.commands.values().next()) {
+                result["help_command"] = json!(format!("{} --help", first.display()));
+            }
+            show(&result)?;
             if let Some(previous) = previous {
-                progress.completion(installation_message(previous, "Already up to date."));
+                progress.completion(installation_message(previous, completion));
             }
         }
         return Ok(());
@@ -1176,7 +1205,27 @@ async fn install(
         if let Some(progress) = progress {
             progress.stage("Unpacking and activating commands");
         }
-        installer::install_archive_for(id, &stage, root, &aliases, previous)
+        match installer::install_archive_resolving(id, &stage, root, &aliases, previous, false) {
+            // The system already provides these commands, but older than this package needs.
+            Err(e) => match e.downcast::<installer::UnresolvedCommands>() {
+                Ok(unresolved) => {
+                    if !confirm_rewrite(&unresolved, options.rewrite_existing, progress)? {
+                        bail!(
+                            "Stopped. {} was left as it is",
+                            unresolved
+                                .0
+                                .iter()
+                                .map(|c| c.command.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                    installer::install_archive_resolving(id, &stage, root, &aliases, previous, true)
+                }
+                Err(e) => Err(e),
+            },
+            installed => installed,
+        }
     }
     .await;
     let _ = fs::remove_file(&stage);
@@ -1194,12 +1243,17 @@ async fn install(
     write_private(&root.join("installed.json"), &records)?;
     if let Some(progress) = progress {
         progress.pause();
-        show(
-            &json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())}),
-        )?;
+        let mut result = json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())});
+        if !record.resolved.is_empty() {
+            result["resolved"] = json!(record.resolved);
+        }
+        if !record.rewritten.is_empty() {
+            result["rewritten"] = json!(record.rewritten);
+        }
+        show(&result)?;
         progress.completion(installation_message(
             &record,
-            if updating {
+            if options.updating {
                 "Updated Successfully"
             } else {
                 "Installed Successfully"
@@ -1207,6 +1261,34 @@ async fn install(
         ));
     }
     Ok(())
+}
+/// Name the version already installed and ask before replacing it. Automation answers ahead
+/// of time with --rewrite-existing; anything unattended stops rather than guessing.
+fn confirm_rewrite(
+    unresolved: &installer::UnresolvedCommands,
+    rewrite_existing: bool,
+    progress: Option<&Progress>,
+) -> Result<bool> {
+    if rewrite_existing {
+        return Ok(true);
+    }
+    if !progress.is_some_and(|p| p.interactive()) || !std::io::stdin().is_terminal() {
+        bail!(
+            "{unresolved}. Re-run with --rewrite-existing to replace it with the required version, or with --alias to install alongside it"
+        );
+    }
+    if let Some(progress) = progress {
+        progress.pause();
+    }
+    eprintln!("{unresolved}.");
+    eprint!("Shall we rewrite with the version required by the runtime? [y/N] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 fn installation_message(record: &Installed, status: &str) -> String {
     let Some(command) = record.commands.keys().next() else {
@@ -1246,9 +1328,20 @@ async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) 
     let mut failed = false;
     for id in records.keys() {
         // Failure for one package must not prevent other installed packages updating.
-        failed |= install(&client, &directory, id, None, None, true, None)
-            .await
-            .is_err();
+        failed |= install(
+            &client,
+            &directory,
+            id,
+            None,
+            None,
+            InstallOptions {
+                updating: true,
+                ..InstallOptions::default()
+            },
+            None,
+        )
+        .await
+        .is_err();
     }
     if failed {
         bail!("One or more package updates failed; existing installations were retained");

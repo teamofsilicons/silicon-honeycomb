@@ -28,7 +28,10 @@ Registration may succeed before the archive upload fails. Reopen that applicatio
 Read the latest app, review, draft, or environment record. Review concurrent edits before constructing a new logical mutation with its new revision and key. Never change the body or revision under an already-used idempotency key.
 
 ## Command collision during installation
-Use `--alias original=new-name`. Honeycomb will not replace a command owned by another package or found elsewhere on PATH. Update preserves recorded aliases.
+Use `--alias original=new-name`. Honeycomb will not replace a command owned by another package in its own bin directory. Update preserves recorded aliases.
+
+## A command on PATH is older than the package needs
+Honeycomb reads the version already serving that command and reports what it found: `You have dm 0.7.0 on your system at /path/to/dm; this package needs dm 0.9.2 to continue`. Answer the prompt to rewrite that command where it sits; uninstall restores the file it displaced. A command already new enough is reported as resolved and left alone. Unattended runs and `--json` cannot be prompted, so they stop: pass `--rewrite-existing` to accept the rewrite in advance, or `--alias` to install alongside.
 
 ## Pending forever
 Inspect `honeycomb operations get OPERATION_ID` or the environment's service progress. Fix the named integration before retrying. Some lifecycle/publication contracts remain incomplete. Health checks and local tests do not turn a pending remote operation into an accepted one.

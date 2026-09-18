@@ -16,13 +16,14 @@ honeycomb installed
 honeycomb update 'my-org>my-app'
 honeycomb uninstall 'my-org>my-app'
 ```
-Omit `--version` to select the current release. The installer checks the payload and activates only your host platform. It refuses command collisions instead of overwriting another installation.
+Omit `--version` to select the current release. The installer checks the payload and activates only your host platform. It refuses to overwrite a command owned by another package in its own bin directory.
 
 ## Resolve a command collision
 ```sh
 honeycomb install 'my-org>my-app' --alias my-app=my-org-app
+honeycomb install 'my-org>my-app' --rewrite-existing
 ```
-The left side must be a command declared by the package. Updates preserve aliases. Uninstall removes only files and launchers owned by that installation. [Local configuration](/configuration/) explains storage and PATH contexts.
+When the same command already exists elsewhere on PATH, Honeycomb compares versions instead of failing. A version new enough for the package is reported as resolved and left untouched. An older one is named against what the package requires and you are asked whether to rewrite it; uninstall restores whatever a rewrite displaced. Use `--rewrite-existing` to answer yes in advance, which is what unattended callers and `--json` need. The left side of `--alias` must be a command declared by the package. Updates preserve aliases. Uninstall removes only files and launchers owned by that installation. [Local configuration](/configuration/) explains storage and PATH contexts.
 
 ## Reviews, stars, and reports
 ```sh
