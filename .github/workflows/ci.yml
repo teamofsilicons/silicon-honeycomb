@@ -43,6 +43,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: cargo +1.98.0 build -p silicon-honeycomb-cli --locked
+      - run: npm run test:unit
+        working-directory: web
       - run: npm run test:e2e
         working-directory: web
       - uses: actions/upload-artifact@v7.0.1

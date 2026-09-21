@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -76,6 +76,9 @@ enum Command {
         version: Option<String>,
         #[arg(long,value_parser=parse_alias)]
         alias: Vec<(String, String)>,
+        /// Answer yes in advance to rewriting an older command this package requires.
+        #[arg(long)]
+        rewrite_existing: bool,
     },
     /// Update an installed app to its latest release, preserving aliases.
     Update { app_id: String },
@@ -648,7 +651,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     if let Command::Daemon { once } = cli.command {
         loop {
             let config: Settings = read(&root.join("config.json"))?;
-            if config.auto_update {
+            if automatic_updates_enabled(config.auto_update) {
                 let started = std::time::Instant::now();
                 // Check packages even if the Honeycomb binary update server is unavailable.
                 let packages = update_packages(&root, cli, false).await;
@@ -1048,6 +1051,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             app_id,
             version,
             alias,
+            rewrite_existing,
         } => {
             install(
                 &client,
@@ -1055,7 +1059,10 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 app_id,
                 version.as_deref(),
                 Some(alias.iter().cloned().collect()),
-                false,
+                InstallOptions {
+                    updating: false,
+                    rewrite_existing: *rewrite_existing,
+                },
                 Some(progress),
             )
             .await?;
@@ -1068,7 +1075,10 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 app_id,
                 None,
                 None,
-                true,
+                InstallOptions {
+                    updating: true,
+                    ..InstallOptions::default()
+                },
                 Some(progress),
             )
             .await?;
@@ -1099,14 +1109,16 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
     }
-    if settings.auto_update {
+    if automatic_updates_enabled(settings.auto_update) {
         progress.stage("Checking scheduled updates");
     }
-    if settings.auto_update && update_packages(&root, cli, true).await.is_err() {
+    if automatic_updates_enabled(settings.auto_update)
+        && update_packages(&root, cli, true).await.is_err()
+    {
         eprintln!("Package update check deferred; run honeycomb update for details");
     }
     // Maintenance failures must not change the user's successful command result.
-    if settings.auto_update
+    if automatic_updates_enabled(settings.auto_update)
         && now() - settings.last_update_check >= 3600
         && let Err(e) = self_update(&root, false, None).await
     {
@@ -1114,13 +1126,21 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     }
     Ok(())
 }
+/// How one install call should behave.
+#[derive(Clone, Copy, Default)]
+struct InstallOptions {
+    /// Called from `honeycomb update`, which reports staleness rather than resolution.
+    updating: bool,
+    /// Yes, answered in advance, to rewriting an older command this package requires.
+    rewrite_existing: bool,
+}
 async fn install(
     client: &Client,
     root: &Path,
     id: &str,
     version: Option<&str>,
     aliases: Option<BTreeMap<String, String>>,
-    updating: bool,
+    options: InstallOptions,
     progress: Option<&Progress>,
 ) -> Result<()> {
     if !honeycomb_client::valid_app_id(id) {
@@ -1138,7 +1158,7 @@ async fn install(
     lock.lock_exclusive()?;
     let mut records: BTreeMap<String, Installed> = read(&root.join("installed.json"))?;
     let previous = records.get(id);
-    if updating && previous.is_none() {
+    if options.updating && previous.is_none() {
         bail!("{id} is not installed; run honeycomb install '{id}' first");
     }
     if let Some(progress) = progress {
@@ -1152,7 +1172,21 @@ async fn install(
     if previous.is_some_and(|p| p.version == release.version && p.sha256 == release.sha256) {
         if let Some(progress) = progress {
             progress.pause();
-            show(&json!({"app_id":id,"version":release.version,"status":"already_up_to_date"}))?;
+            // `update` reports staleness; `install` reports that the requirement is met.
+            let (status, completion) = if options.updating {
+                ("already_up_to_date", "Already up to date.")
+            } else {
+                ("dependency_resolved", "Dependency resolved.")
+            };
+            // Callers still need the command map, so answer as fully as a fresh install does.
+            let mut result = json!({"app_id":id,"version":release.version,"status":status,"bin_directory":root.join("bin")});
+            if let Some(first) = previous.and_then(|p| p.commands.values().next()) {
+                result["help_command"] = json!(format!("{} --help", first.display()));
+            }
+            show(&result)?;
+            if let Some(previous) = previous {
+                progress.completion(installation_message(previous, completion));
+            }
         }
         return Ok(());
     }
@@ -1171,7 +1205,27 @@ async fn install(
         if let Some(progress) = progress {
             progress.stage("Unpacking and activating commands");
         }
-        installer::install_archive_for(id, &stage, root, &aliases, previous)
+        match installer::install_archive_resolving(id, &stage, root, &aliases, previous, false) {
+            // The system already provides these commands, but older than this package needs.
+            Err(e) => match e.downcast::<installer::UnresolvedCommands>() {
+                Ok(unresolved) => {
+                    if !confirm_rewrite(&unresolved, options.rewrite_existing, progress)? {
+                        bail!(
+                            "Stopped. {} was left as it is",
+                            unresolved
+                                .0
+                                .iter()
+                                .map(|c| c.command.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                    installer::install_archive_resolving(id, &stage, root, &aliases, previous, true)
+                }
+                Err(e) => Err(e),
+            },
+            installed => installed,
+        }
     }
     .await;
     let _ = fs::remove_file(&stage);
@@ -1189,12 +1243,61 @@ async fn install(
     write_private(&root.join("installed.json"), &records)?;
     if let Some(progress) = progress {
         progress.pause();
-        show(
-            &json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())}),
-        )?;
+        let mut result = json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())});
+        if !record.resolved.is_empty() {
+            result["resolved"] = json!(record.resolved);
+        }
+        if !record.rewritten.is_empty() {
+            result["rewritten"] = json!(record.rewritten);
+        }
+        show(&result)?;
+        progress.completion(installation_message(
+            &record,
+            if options.updating {
+                "Updated Successfully"
+            } else {
+                "Installed Successfully"
+            },
+        ));
     }
     Ok(())
 }
+/// Name the version already installed and ask before replacing it. Automation answers ahead
+/// of time with --rewrite-existing; anything unattended stops rather than guessing.
+fn confirm_rewrite(
+    unresolved: &installer::UnresolvedCommands,
+    rewrite_existing: bool,
+    progress: Option<&Progress>,
+) -> Result<bool> {
+    if rewrite_existing {
+        return Ok(true);
+    }
+    if !progress.is_some_and(|p| p.interactive()) || !std::io::stdin().is_terminal() {
+        bail!(
+            "{unresolved}. Re-run with --rewrite-existing to replace it with the required version, or with --alias to install alongside it"
+        );
+    }
+    if let Some(progress) = progress {
+        progress.pause();
+    }
+    eprintln!("{unresolved}.");
+    eprint!("Shall we rewrite with the version required by the runtime? [y/N] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+fn installation_message(record: &Installed, status: &str) -> String {
+    let Some(command) = record.commands.keys().next() else {
+        return status.to_owned();
+    };
+    let alias = record.aliases.get(command).unwrap_or(command);
+    format!("{status}\nRun `{alias}` to access it.")
+}
+
 /// Resolve each package against its original origin and testing context. Never guess a
 /// missing test context or borrow credentials from production.
 async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) -> Result<()> {
@@ -1225,9 +1328,20 @@ async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) 
     let mut failed = false;
     for id in records.keys() {
         // Failure for one package must not prevent other installed packages updating.
-        failed |= install(&client, &directory, id, None, None, true, None)
-            .await
-            .is_err();
+        failed |= install(
+            &client,
+            &directory,
+            id,
+            None,
+            None,
+            InstallOptions {
+                updating: true,
+                ..InstallOptions::default()
+            },
+            None,
+        )
+        .await
+        .is_err();
     }
     if failed {
         bail!("One or more package updates failed; existing installations were retained");
@@ -1245,7 +1359,7 @@ async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<
         return Ok(());
     }
     let settings: Settings = read(&root.join("config.json"))?;
-    if !settings.auto_update {
+    if !automatic_updates_enabled(settings.auto_update) {
         return Ok(());
     }
     let selected = selected_context(cli, &settings, root)?;
@@ -1292,6 +1406,36 @@ async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<
     Ok(())
 }
 async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> Result<()> {
+    if !force
+        && !automatic_updates_enabled(read::<Settings>(&root.join("config.json"))?.auto_update)
+    {
+        return Ok(());
+    }
+    // current_exe can resolve a package manager's command link. Inspect the
+    // invocation too, before considering replacement of its pinned target.
+    let invocation = std::env::args_os().next().map(std::path::PathBuf::from);
+    let invoked_path = invocation.and_then(|path| {
+        if path.components().count() > 1 || path.is_absolute() {
+            Some(path)
+        } else {
+            std::env::var_os("PATH").and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|dir| dir.join(&path))
+                    .find(|p| p.is_file())
+            })
+        }
+    });
+    if invoked_path
+        .as_ref()
+        .is_some_and(|path| fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()))
+    {
+        if force {
+            bail!(
+                "Honeycomb was invoked through a managed command link; update it through its original package manager"
+            );
+        }
+        return Ok(());
+    }
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1335,6 +1479,22 @@ async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> R
         show(&json!({"updated":updated,"executable":executable}))?;
     }
     Ok(())
+}
+
+fn automatic_updates_enabled(preference: bool) -> bool {
+    auto_update_preference(
+        preference,
+        std::env::var("HONEYCOMB_AUTO_UPDATE").ok().as_deref(),
+    )
+}
+fn auto_update_preference(preference: bool, override_value: Option<&str>) -> bool {
+    preference
+        && !override_value.is_some_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
 }
 
 fn telemetry_enabled(preference: bool) -> bool {
@@ -1658,5 +1818,18 @@ mod tests {
             command: Command::Daemon { once: true },
         };
         update_packages(&root.0, &cli, false).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod auto_update_tests {
+    #[test]
+    fn process_opt_out_does_not_enable_a_disabled_preference() {
+        for value in ["0", "false", "OFF", " no "] {
+            assert!(!super::auto_update_preference(true, Some(value)));
+        }
+        assert!(super::auto_update_preference(true, None));
+        assert!(super::auto_update_preference(true, Some("true")));
+        assert!(!super::auto_update_preference(false, Some("true")));
     }
 }

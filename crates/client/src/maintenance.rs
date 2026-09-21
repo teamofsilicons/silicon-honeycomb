@@ -13,6 +13,7 @@ pub async fn update_cli_with_progress(
     current_executable: &Path,
     progress: &(dyn Fn(crate::progress::ProgressEvent) + Sync),
 ) -> Result<bool> {
+    require_regular_update_target(current_executable)?;
     use crate::progress::ProgressEvent::Stage;
     progress(Stage("Checking for a Honeycomb update"));
     let http = reqwest::Client::builder()
@@ -103,6 +104,7 @@ pub async fn install_cli_release(
     expected_version: &str,
     current_executable: &Path,
 ) -> Result<()> {
+    require_regular_update_target(current_executable)?;
     use sha2::{Digest, Sha256};
     if checksum.len() != 64 || hex::encode(Sha256::digest(archive)) != checksum.to_lowercase() {
         bail!("CLI release checksum verification failed");
@@ -148,6 +150,7 @@ pub async fn install_cli_release(
     {
         bail!("Updated CLI did not pass version verification");
     }
+    require_regular_update_target(current_executable)?;
     #[cfg(windows)]
     {
         let previous = parent.join("honeycomb.previous.exe");
@@ -163,6 +166,14 @@ pub async fn install_cli_release(
     #[cfg(not(windows))]
     fs::rename(staging, current_executable)
         .context("Cannot replace CLI executable; rerun its original installer")?;
+    Ok(())
+}
+fn require_regular_update_target(path: &Path) -> Result<()> {
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        bail!(
+            "Honeycomb cannot replace a managed command link; update it through its original package manager"
+        );
+    }
     Ok(())
 }
 fn xml(s: &str) -> String {

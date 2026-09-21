@@ -243,6 +243,8 @@ Options:
           Use a saved testing environment ID or its 32-character root key
       --json
           Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --rewrite-existing
+          Answer yes in advance to rewriting an older command this package requires
       --idempotency-key <IDEMPOTENCY_KEY>
           Reuse this key to safely retry a mutation after an uncertain response
   -h, --help

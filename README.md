@@ -132,6 +132,13 @@ honeycomb logout
 honeycomb report "What happened and how to reproduce it" --pr https://github.com/teamofsilicons/silicon-honeycomb/pull/123
 ```
 
+A command of the same name already on PATH is compared rather than refused. A version
+new enough for the package is reported as resolved and left alone; an older one is named
+against what the package requires and you are asked whether to rewrite it, which uninstall
+undoes. Pass `--rewrite-existing` to answer in advance, as unattended callers and `--json`
+must, or `--alias` to install alongside. A command owned by another package in Honeycomb's
+own bin directory is still a collision that needs `--alias`.
+
 Set `SILICON_HOME` or `honeycomb config home /existing/directory` to choose local
 storage. Run `honeycomb config env` for the PATH entries. Installations and sessions
 are isolated by API origin and test key. `--test <saved-id-or-key>` selects an
@@ -202,8 +209,13 @@ honeycomb publication decide REQUEST_ID 'tos>provider' approve --revision 1 --re
 Provider administrators review their own critical scopes. IAM reviewers require
 IAM's explicit authority; Honeycomb validators act only after provider approvals
 are accepted. Denials require a reason. The console's Review requests page provides
-the same discussions and decisions. Publication remains pending until IAM accepts
-activation and archive access is reconciled.
+the incoming discussions and decisions; **Sent requests** separately lists the
+publication history of applications you manage, including completed requests.
+Submitting a publication request expresses intent to go public. The final
+required approval starts publication automatically, with public visibility only
+after IAM accepts activation and archive access is reconciled. If the authorizing
+manager's IAM session expires, signing in and opening Sent requests resumes the
+workflow without another publication confirmation.
 
 ## Approve webhooks and rotate signing material
 
