@@ -316,9 +316,19 @@ fn logout_waits_for_rotation_and_cannot_be_undone_by_a_late_save() {
         }
         thread::sleep(Duration::from_millis(5));
     }
+    assert_eq!(fixture.provider.lock().unwrap().attempts.len(), 1);
     let logout = fixture.spawn(&["logout"], false);
-    success(refresh.wait_with_output().unwrap());
+    let status = refresh.wait_with_output().unwrap();
     success(logout.wait_with_output().unwrap());
+    // The session lock serializes rotation and deletion. Once rotation releases
+    // it, logout may revoke the token before the in-flight status HTTP read.
+    // Both a successful read and that explicit revocation are valid outcomes.
+    if status.status.success() {
+        assert_eq!(success(status)["authenticated"], true);
+    } else {
+        let error = String::from_utf8_lossy(&status.stderr);
+        assert!(error.contains("HTTP 401"), "{error}");
+    }
     assert!(!directory.join("session.json").exists());
     assert_eq!(
         success(fixture.run(&["login", "status"]))["authenticated"],
