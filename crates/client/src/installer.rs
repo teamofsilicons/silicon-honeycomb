@@ -1,6 +1,6 @@
 //! Local package actions. The caller owns paths, installation records and locking.
 use anyhow::{Context, Result, bail};
-use honeycomb_core::package;
+use honeycomb_core::{ReleaseChannel, package};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,6 +14,8 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Installed {
     pub app_id: String,
+    #[serde(default)]
+    pub channel: ReleaseChannel,
     pub version: String,
     pub target: String,
     pub directory: PathBuf,
@@ -102,7 +104,14 @@ pub fn install_archive_for(
     aliases: &BTreeMap<String, String>,
     previous: Option<&Installed>,
 ) -> Result<Installed> {
-    install_archive_with_identity(archive, state_dir, aliases, previous, Some(app_id), false)
+    install_archive_with_identity(
+        archive,
+        state_dir,
+        aliases,
+        previous,
+        Some((app_id, ReleaseChannel::Prod)),
+        false,
+    )
 }
 
 /// Install after the caller has answered an [`UnresolvedCommands`] error. With `rewrite`,
@@ -116,7 +125,35 @@ pub fn install_archive_resolving(
     previous: Option<&Installed>,
     rewrite: bool,
 ) -> Result<Installed> {
-    install_archive_with_identity(archive, state_dir, aliases, previous, Some(app_id), rewrite)
+    install_archive_channel_resolving(
+        app_id,
+        ReleaseChannel::Prod,
+        archive,
+        state_dir,
+        aliases,
+        previous,
+        rewrite,
+    )
+}
+
+/// Install the selected release track while keeping the manifest's base app identity.
+pub fn install_archive_channel_resolving(
+    app_id: &str,
+    channel: ReleaseChannel,
+    archive: &Path,
+    state_dir: &Path,
+    aliases: &BTreeMap<String, String>,
+    previous: Option<&Installed>,
+    rewrite: bool,
+) -> Result<Installed> {
+    install_archive_with_identity(
+        archive,
+        state_dir,
+        aliases,
+        previous,
+        Some((app_id, channel)),
+        rewrite,
+    )
 }
 
 fn install_archive_with_identity(
@@ -124,7 +161,7 @@ fn install_archive_with_identity(
     state_dir: &Path,
     aliases: &BTreeMap<String, String>,
     previous: Option<&Installed>,
-    requested_app_id: Option<&str>,
+    requested: Option<(&str, ReleaseChannel)>,
     rewrite: bool,
 ) -> Result<Installed> {
     let expected_sha = package::sha256(archive)?;
@@ -132,7 +169,9 @@ fn install_archive_with_identity(
     let state_dir = state_dir.canonicalize()?;
     let stage = tempfile::tempdir_in(&state_dir)?;
     let m = package::unpack(archive, stage.path())?;
-    let app_id = requested_app_id
+    let channel = requested.map(|(_, channel)| channel).unwrap_or_default();
+    let app_id = requested
+        .map(|(id, _)| id)
         .or(m.app_id.as_deref())
         .or_else(|| previous.map(|p| p.app_id.as_str()))
         .context(
@@ -222,10 +261,13 @@ fn install_archive_with_identity(
     if !unresolved.is_empty() && !rewrite {
         return Err(UnresolvedCommands(unresolved).into());
     }
-    let directory = state_dir
-        .join("packages")
-        .join(app_id.replace('>', "/"))
-        .join(format!("{}-{}", m.version, &expected_sha[..12]));
+    let application_directory = state_dir.join("packages").join(app_id.replace('>', "/"));
+    let application_directory = if channel == ReleaseChannel::Dev {
+        application_directory.join("dev")
+    } else {
+        application_directory
+    };
+    let directory = application_directory.join(format!("{}-{}", m.version, &expected_sha[..12]));
     if directory.exists() {
         bail!(
             "This exact package is already staged at {}; uninstall it before reinstalling",
@@ -236,6 +278,7 @@ fn install_archive_with_identity(
     fs::rename(stage.path().join(&payload.root), &directory)?;
     let mut activated = vec![];
     let mut backups = vec![];
+    let mut restored = vec![];
     let mut rewritten: BTreeMap<String, Rewritten> = BTreeMap::new();
     let result = (|| -> Result<()> {
         for (original, (destination, relative)) in &commands {
@@ -248,6 +291,32 @@ fn install_archive_with_identity(
             write_launcher(&source, destination)
                 .with_context(|| format!("Cannot activate command {original}"))?;
             activated.push(destination.clone());
+        }
+        // Keep approved external rewrites pointed at the new payload across updates and
+        // channel switches, retaining the original displaced file for eventual uninstall.
+        if let Some(old) = previous {
+            for (original, replacement) in &old.rewritten {
+                if let Some((_, relative)) = commands.get(original)
+                    && owns_command(old, &replacement.path)
+                {
+                    let backup = replacement
+                        .path
+                        .with_file_name(format!(".honeycomb-backup-{}", uuid::Uuid::new_v4()));
+                    fs::rename(&replacement.path, &backup)?;
+                    backups.push((replacement.path.clone(), backup));
+                    write_launcher(&directory.join(relative), &replacement.path)?;
+                    activated.push(replacement.path.clone());
+                    rewritten.insert(original.clone(), replacement.clone());
+                } else if !commands.contains_key(original) && owns_command(old, &replacement.path) {
+                    let backup = replacement
+                        .path
+                        .with_file_name(format!(".honeycomb-backup-{}", uuid::Uuid::new_v4()));
+                    fs::rename(&replacement.path, &backup)?;
+                    backups.push((replacement.path.clone(), backup));
+                    fs::rename(&replacement.backup, &replacement.path)?;
+                    restored.push((replacement.path.clone(), replacement.backup.clone()));
+                }
+            }
         }
         // Answered rewrites replace the older command where it already sits, keeping the
         // file it displaced so uninstall can restore the system to its previous state.
@@ -274,13 +343,18 @@ fn install_archive_with_identity(
         Ok(())
     })();
     if let Err(e) = result {
+        for (path, original) in restored {
+            let _ = fs::rename(path, original);
+        }
         for p in activated {
             let _ = fs::remove_file(p);
         }
         for (p, b) in backups {
             let _ = fs::rename(b, p);
         }
-        for r in rewritten.values() {
+        for r in rewritten.values().filter(|r| {
+            previous.is_none_or(|old| !old.rewritten.values().any(|prior| prior.backup == r.backup))
+        }) {
             let _ = fs::remove_file(&r.path);
             let _ = fs::rename(&r.backup, &r.path);
         }
@@ -303,6 +377,7 @@ fn install_archive_with_identity(
     }
     Ok(Installed {
         app_id: app_id.to_owned(),
+        channel,
         version: m.version,
         target: target.into(),
         directory,
@@ -361,7 +436,12 @@ fn launcher_version(path: &Path) -> Option<Version> {
         .collect();
     // <state>/packages/<org>/<app>/<version>-<sha12>/<executable>
     let packages = parts.iter().rposition(|p| p == "packages")?;
-    let (version, _) = parts.get(packages + 3)?.rsplit_once('-')?;
+    let offset = if parts.get(packages + 3)? == "dev" {
+        4
+    } else {
+        3
+    };
+    let (version, _) = parts.get(packages + offset)?.rsplit_once('-')?;
     Version::parse(version).ok()
 }
 

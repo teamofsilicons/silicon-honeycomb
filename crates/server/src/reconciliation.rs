@@ -43,8 +43,8 @@ pub async fn receive(s: &State, plane: &str, event: &Value) -> Result<bool> {
         if current.is_some_and(|current| revision > current) {
             sqlx::query("INSERT INTO application_reconciliation(plane,app_id,target_revision,updated_at) VALUES(?,?,?,?) ON CONFLICT(plane,app_id) DO UPDATE SET target_revision=excluded.target_revision,state='pending',retry_at=0,error=NULL,updated_at=excluded.updated_at WHERE excluded.target_revision>application_reconciliation.target_revision")
                 .bind(plane).bind(resource).bind(revision).bind(now()).execute(&mut *tx).await?;
-            // Public visibility is restored only after an authoritative read confirms
-            // both IAM state and a locally completed publication/archive operation.
+            // Public visibility is restored only after an authoritative read
+            // confirms IAM state and publication or legacy-adoption provenance.
             sqlx::query("UPDATE applications SET visibility='private' WHERE plane=? AND app_id=?")
                 .bind(plane)
                 .bind(resource)
@@ -125,11 +125,22 @@ pub async fn reconcile(s: &State, plane: &str, app_id: &str) -> Result<()> {
     let published: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM publication_requests p JOIN operations o ON o.id=p.activation_operation WHERE p.plane=? AND p.app_id=? AND p.id=? AND p.revision=? AND p.state='published' AND o.state='accepted')")
         .bind(plane).bind(app_id).bind(snapshot["publication_request_id"].as_str().unwrap_or(""))
         .bind(configuration_revision).fetch_one(&mut *tx).await?;
-    let visible = if visibility == "public" && availability == "active" && published {
-        "public"
+    // An operator may adopt an already public, verified legacy IAM identity
+    // without disabling its existing login while the first catalog release is
+    // prepared. This provenance cannot approve any new configuration: it applies
+    // only while IAM's accepted configuration is still the original revision 0.
+    let adopted_public = if plane == "production" && configuration_revision == 0 {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM operations WHERE plane='production' AND resource=? AND kind='iam.adopt' AND state='accepted' AND revision=0 AND json_extract(result,'$.preserved_public_visibility')=1 AND json_extract(result,'$.visibility')='public' AND json_extract(result,'$.app_id')=? AND json_extract(result,'$.configuration_revision')=0 AND json_extract(result,'$.iam_revision')>0 AND json_extract(result,'$.iam_revision')<=?)")
+            .bind(app_id).bind(app_id).bind(revision).fetch_one(&mut *tx).await?
     } else {
-        "private"
+        false
     };
+    let visible =
+        if visibility == "public" && availability == "active" && (published || adopted_public) {
+            "public"
+        } else {
+            "private"
+        };
     // A newer event arriving during the read wins and remains pending.
     let saved = sqlx::query("UPDATE application_reconciliation SET state='accepted',error=NULL,updated_at=? WHERE plane=? AND app_id=? AND target_revision<=?")
         .bind(now()).bind(plane).bind(app_id).bind(revision).execute(&mut *tx).await?;

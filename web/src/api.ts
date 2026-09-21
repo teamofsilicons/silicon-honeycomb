@@ -69,6 +69,9 @@ export async function request<T = any>(
 export function endpoint(id: string) {
   return `/api/v1/apps/${encodeURIComponent(id)}`;
 }
+export function releaseEndpoint(id: string) {
+  return `/api/v2/apps/${encodeURIComponent(id)}`;
+}
 export function safeLink(value: unknown): string | undefined {
   if (typeof value !== "string") return;
   try {

@@ -23,6 +23,7 @@ jobs:
       - run: python3 scripts/test_cli.py
       - run: python3 scripts/test_install.py
       - run: python3 scripts/test_progress.py
+      - run: python3 scripts/test_release_channels.py
       - run: python3 scripts/test_cargo_install.py
       - run: bash -n install.sh
   websites:

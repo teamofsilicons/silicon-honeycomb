@@ -53,7 +53,7 @@ IAM and Briefcase; it is excluded from the production image.
 
 ## Install the CLI
 
-CLI 0.2.2 is published as six native release binaries and on crates.io.
+Version 0.3.0 includes separate release channels and the shared minute updater. Published CLI versions are distributed as six native release binaries and on crates.io. Honeycomb also packages those same native binaries for its own `tos>honeycomb` catalog entry.
 
 ```sh
 printf "Starting Honeycomb installer…\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
@@ -79,7 +79,7 @@ It adds Honeycomb to Bash and Zsh startup files automatically (including a custo
 command in your existing terminal. Set `HONEYCOMB_NO_MODIFY_PATH=1` to manage
 your shell configuration yourself. Downloads display progress and time out with
 an error instead of waiting indefinitely.
-Cargo and release binaries also support Windows. The hourly worker checks for
+Cargo and release binaries also support Windows. The shared worker checks every minute for
 verified vendor releases, honors `config set auto_update false`, and works without
 a Rust toolchain. `honeycomb daemon --once` runs one scheduled check. The stateless
 client exposes update functions; a library cannot replace a running application's
@@ -114,13 +114,13 @@ honeycomb login status --json
 honeycomb validate ./my-app
 honeycomb pack ./my-app --output my-app-1.0.0.tar.gz
 honeycomb apps create application.json
-honeycomb releases upload 'my-org>my-app' my-app-1.0.0.tar.gz --revision 1
+honeycomb releases upload 'my-org>my-app' my-app-1.0.0.tar.gz --channel prod --revision 1
 honeycomb publication request 'my-org>my-app' --revision 1 --message 'Why this should be public'
 ```
 
 Configuration revisions are different from semantic release versions. Reuse
 `--idempotency-key` when retrying an uncertain mutation; use `operations get` to
-inspect saved work. New applications remain private. Publication requires a valid
+inspect saved work. New production applications automatically request public approval once ready; set `"visibility": "private"` in application input to opt out. Existing apps keep their preference when updates omit it. Effective access remains private until approval. Publication requires a valid
 six-target CLI release, provider approvals, Honeycomb validation and IAM acceptance.
 
 ```sh
@@ -287,3 +287,7 @@ The current IAM adapter has not yet mapped that cross-service contract: these jo
 remain visibly pending until it is available. The worker never borrows a user session
 or treats missing service receipts as success. Explicit lifecycle commands remain
 available for retry and recovery.
+
+## Bundled applications
+
+Use **Bundles** in the developer console or `honeycomb bundles` to manage organization-owned sign-in bundles. IAM independently checks owner/admin authority and organization eligibility. See [bundle management](docs-site/content/bundles.md).

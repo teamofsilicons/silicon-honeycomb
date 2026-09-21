@@ -129,6 +129,8 @@ pub fn validate_dir(root: &Path) -> Validation {
     {
         errors.push("app_id: expected org>app using lowercase handles".into());
     }
+    // Format 1 retains its semantic-version contract for existing archives.
+    // New release-channel creation enforces x.y.z at the versioned API boundary.
     if semver::Version::parse(&m.version).is_err() {
         errors.push("version: expected a semantic version such as 1.0.0".into());
     }
@@ -423,4 +425,58 @@ pub fn current_target() -> Result<&'static str> {
         ("windows", "x86") => Ok("windows-i686"),
         (os, arch) => bail!("unsupported platform {os}/{arch}"),
     }
+}
+
+/// Create a deterministic, revalidated archive with the requested release version.
+/// Executable bytes remain unchanged; the package manifest records the new version.
+pub fn repack_version(source: &Path, version: &str, output: &Path) -> Result<()> {
+    if !crate::valid_release_version(version) {
+        bail!("version: expected x.y.z without prerelease or build suffixes");
+    }
+    let directory = tempfile::tempdir()?;
+    let mut manifest = unpack(source, directory.path())?;
+    manifest.version = version.to_owned();
+    fs::write(
+        directory.path().join("honeycomb.yaml"),
+        serde_yaml::to_string(&manifest)?,
+    )?;
+    let file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(output)?;
+    let mut archive = tar::Builder::new(GzEncoder::new(file, Compression::default()));
+    for entry in walkdir::WalkDir::new(directory.path()).sort_by_file_name() {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(fs::metadata(path)?.len());
+        header.set_mtime(0);
+        header.set_uid(0);
+        header.set_gid(0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            header.set_mode(fs::metadata(path)?.permissions().mode() & 0o777);
+        }
+        #[cfg(not(unix))]
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive.append_data(
+            &mut header,
+            path.strip_prefix(directory.path())?,
+            fs::File::open(path)?,
+        )?;
+    }
+    archive.into_inner()?.finish()?.sync_all()?;
+    let validation = validate(output);
+    if !validation.valid {
+        bail!(
+            "Promoted archive failed validation: {}",
+            validation.errors.join("\n")
+        );
+    }
+    Ok(())
 }

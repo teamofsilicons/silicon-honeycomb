@@ -50,6 +50,48 @@ class AdoptionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     projection(record, "tos>briefcase", "existing-id", self.metadata)
 
+    def test_explicit_public_adoption_preserves_declarations_but_not_pending_grants(self):
+        self.record["application_id"] = "tos>briefcase"
+        endpoint = {"id": "files.read", "critical": True, "enabled": True,
+                    "metadata": {"existing": True}, "access_proof_ttl_seconds": 60}
+        self.record["obo_endpoints"] = [endpoint]
+        self.record["app_scope"]["external"] = [
+            {"app_id": "tos>provider", "endpoint_id": "granted"},
+            {"app_id": "tos>provider", "endpoint_id": "pending"},
+        ]
+        self.record["effective_scopes"].append({"scope": "obo:tos>provider:granted"})
+        config = projection(self.record, "tos>briefcase", "tos>briefcase", self.metadata, True)
+        with self.db:
+            receipt = insert(self.db, self.record, config, "operator:test", True)
+        app = self.db.execute("SELECT visibility,config,effective_config,webhook_secret FROM applications").fetchone()
+        desired, effective = json.loads(app[1]), json.loads(app[2])
+        self.assertEqual(app[0], "public")
+        self.assertEqual(app[3], "")
+        self.assertEqual(desired["visibility"], "public")
+        self.assertEqual(desired["app_scope"], self.record["app_scope"])
+        self.assertEqual(desired["obo_endpoints"], [endpoint])
+        self.assertEqual(effective["app_scope"]["iam"], ["granted"])
+        self.assertEqual(effective["app_scope"]["external"], self.record["app_scope"]["external"][:1])
+        self.assertNotIn("MUST-NOT-COPY", json.dumps([desired, effective, receipt]))
+        self.assertTrue(receipt["preserved_public_visibility"])
+        self.assertEqual(receipt["visibility"], "public")
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM publication_requests").fetchone()[0], 0)
+        stored = json.loads(self.db.execute("SELECT result FROM operations WHERE kind='iam.adopt'").fetchone()[0])
+        self.assertEqual(stored, receipt)
+
+    def test_public_adoption_requires_current_verified_public_revision_zero_identity(self):
+        for field, value in [("visibility", "private"), ("availability", "disabled"),
+                             ("configuration_revision", 1), ("configuration_revision", False), ("iam_revision", 0),
+                             ("iam_revision", True), ("credential_version", 0),
+                             ("credential_version", True)]:
+            with self.subTest(field=field, value=value):
+                record = dict(self.record, **{field: value})
+                with self.assertRaises(ValueError):
+                    projection(record, "tos>briefcase", "existing-id", self.metadata, True)
+                with self.assertRaises(ValueError):
+                    insert(self.db, record, self.config(), "operator:test", True)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

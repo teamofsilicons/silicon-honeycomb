@@ -165,3 +165,34 @@ fn rejects_windows_device_names_and_nonportable_paths() {
     }
     assert!(safe_relative("targets/linux-x86_64/bin/a tool"));
 }
+
+#[test]
+fn promotion_rewrites_manifest_and_preserves_payload_with_repeatable_checksum() {
+    let source = tempfile::tempdir().unwrap();
+    fixture(source.path());
+    let archive = pack(source.path(), None).unwrap();
+    let promoted = source.path().join("promoted.tar.gz");
+    let replay = source.path().join("replayed.tar.gz");
+    repack_version(&archive, "4.2.0", &promoted).unwrap();
+    repack_version(&archive, "4.2.0", &replay).unwrap();
+    assert_eq!(sha256(&promoted).unwrap(), sha256(&replay).unwrap());
+    assert_ne!(sha256(&archive).unwrap(), sha256(&promoted).unwrap());
+    let extracted = tempfile::tempdir().unwrap();
+    let manifest = unpack(&promoted, extracted.path()).unwrap();
+    assert_eq!(manifest.version, "4.2.0");
+    assert_eq!(manifest.app_id.as_deref(), Some("tos>hello"));
+    for target in REQUIRED_TARGETS {
+        let binary = format!("targets/{target}/bin/hello");
+        assert_eq!(
+            fs::read(source.path().join(&binary)).unwrap(),
+            fs::read(extracted.path().join(binary)).unwrap()
+        );
+    }
+    assert_eq!(validate(&archive).manifest.unwrap().version, "1.0.0");
+    for bad in ["v1.0.0", "1.0", "1.0.0-dev", "1.0.0+build", "01.0.0"] {
+        assert!(!silicon_honeycomb_core::valid_release_version(bad));
+        assert!(repack_version(&archive, bad, &source.path().join("bad.tar.gz")).is_err());
+    }
+    let legacy: silicon_honeycomb_core::Release = serde_json::from_value(serde_json::json!({"app_id":"tos>hello","version":"1.0.0","sha256":"","size":0,"created_at":1})).unwrap();
+    assert_eq!(legacy.channel, silicon_honeycomb_core::ReleaseChannel::Prod);
+}

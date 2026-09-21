@@ -10,6 +10,7 @@ binary=repo/'target/debug/honeycomb'
 blocks=[]
 def walk(command):
  result=subprocess.run([str(binary),*command,'--help'],check=True,capture_output=True,text=True).stdout.strip()
+ result='\n'.join(line.rstrip() for line in result.splitlines())
  title='honeycomb'+(' '+' '.join(command) if command else '')
  blocks.append(f'## {title}\n\n```text\n{result}\n```\n')
  commands=False
@@ -17,7 +18,7 @@ def walk(command):
   if line=='Commands:': commands=True; continue
   if commands and line and not line.startswith(' '): commands=False
   if commands:
-   match=re.match(r'  ([a-z][a-z0-9-]*)\s',line)
+   match=re.match(r'  ([a-z][a-z0-9-]*)(?:\s|$)',line)
    if match and match[1]!='help': walk([*command,match[1]])
 walk([])
 content='This reference is generated from the actual CLI command parser. Every command supports `--help`. Global flags can be supplied with subcommands. Examples with credentials print sensitive results only when that workflow explicitly returns them.\n\n'+ '\n'.join(blocks)
@@ -29,14 +30,48 @@ pages=json.loads((root/'pages.json').read_text())
 if not any(p['slug']=='cli-reference' for p in pages):
  pages.insert(next(i for i,p in enumerate(pages) if p['slug']=='configuration')+1,dict(slug='cli-reference',title='CLI command reference',group='Use Honeycomb',description='Every command, argument, default, and flag from honeycomb --help.'))
  (root/'pages.json').write_text(json.dumps(pages,indent=2)+'\n')
-source=(repo/'crates/server/src/api.rs').read_text()
+def route_arguments(source):
+ # Read only each route call, respecting nested layers and quoted path strings.
+ for match in re.finditer(r'\.route\(', source):
+  begin=match.end()
+  depth=1
+  quoted=False
+  escaped=False
+  for index in range(begin,len(source)):
+   char=source[index]
+   if quoted:
+    if escaped: escaped=False
+    elif char=='\\': escaped=True
+    elif char=='"': quoted=False
+   elif char=='"': quoted=True
+   elif char=='(': depth+=1
+   elif char==')':
+    depth-=1
+    if depth==0:
+     yield source[begin:index]
+     break
+  else: raise AssertionError('Unclosed router registration')
+
 rows=[]
-for part in source.split('.route(')[1:]:
- path=re.match(r'\s*"([^"]+)"',part)
- if path:
-  handlers=re.findall(r'\b(get|post|put|delete|patch)\(([\w:]+)\)',part.split('.layer(')[0])
+modules=['api']
+seen=set()
+for module in modules:
+ if module in seen: continue
+ seen.add(module)
+ source=(repo/f'crates/server/src/{module}.rs').read_text()
+ modules.extend(re.findall(r'\.merge\(super::(\w+)::router\(',source))
+ constants=dict(re.findall(r'const\s+(\w+):\s*&str\s*=\s*"([^"]+)"',source))
+ for part in route_arguments(source):
+  route=re.match(r'\s*(?:"([^"]+)"|(\w+))\s*,',part)
+  assert route, f'Unrecognized route path in {module}'
+  route_path=route[1] or constants.get(route[2])
+  assert route_path, f'Unresolved route constant {route[2]} in {module}'
+  handlers=re.findall(r'\b(get|post|put|delete|patch)\(([\w:]+)\)',part)
+  assert handlers, f'No handlers for {route_path}'
   for method,handler in handlers:
-   rows.append(f'| `{method.upper()}` | `{path[1]}` | [`{handler.split("::")[-1]}`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |')
+   handler_parts=handler.split('::')
+   handler_module=handler_parts[-2] if len(handler_parts)>1 else module
+   rows.append(f'| `{method.upper()}` | `{route_path}` | [`{handler_parts[-1]}`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/{handler_module}.rs) |')
 routes='| Method | Path | Handler |\n| --- | --- | --- |\n'+'\n'.join(rows)+'\n'
 r=root/'content/routes.generated.md'
 if args.check: assert r.read_text()==routes, 'API route index is stale'

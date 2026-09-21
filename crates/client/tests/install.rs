@@ -362,10 +362,93 @@ fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
         String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
         "hello-1.0.0\n"
     );
-    installer::uninstall(&installed, dest.path()).unwrap();
+    let newer = fixture_named(
+        src.path(),
+        "2.0.0",
+        "honeycomb-path-hello",
+        "honeycomb-path-hi",
+    );
+    let updated = installer::install_archive_channel_resolving(
+        "tos>hello",
+        silicon_honeycomb_client::ReleaseChannel::Dev,
+        &newer,
+        dest.path(),
+        &BTreeMap::new(),
+        Some(&installed),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        updated.rewritten["honeycomb-path-hi"].backup,
+        installed.rewritten["honeycomb-path-hi"].backup
+    );
+    assert!(
+        String::from_utf8_lossy(
+            &std::process::Command::new(&existing)
+                .output()
+                .unwrap()
+                .stdout
+        )
+        .contains("2.0.0")
+    );
+    installer::uninstall(&updated, dest.path()).unwrap();
     let output = std::process::Command::new(&existing).output().unwrap();
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("0.5.0"),
         "the displaced command must come back"
     );
+}
+
+#[test]
+fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
+    let _serial = serial();
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let archive = fixture(src.path(), "1.0.0");
+    let existing = other_installation(elsewhere.path(), "honeycomb-test-hi", "0.5.0");
+    let _path = with_path(elsewhere.path());
+    let installed = installer::install_archive_resolving(
+        "tos>hello",
+        &archive,
+        dest.path(),
+        &BTreeMap::new(),
+        None,
+        true,
+    )
+    .unwrap();
+    fixture(src.path(), "2.0.0");
+    let manifest = src.path().join("honeycomb.yaml");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    value["bin"]
+        .as_object_mut()
+        .unwrap()
+        .remove("honeycomb-test-hi");
+    fs::write(manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    let archive =
+        package::pack(src.path(), Some(&src.path().join("removed-command.tar.gz"))).unwrap();
+    let updated = installer::install_archive_channel_resolving(
+        "tos>hello",
+        silicon_honeycomb_client::ReleaseChannel::Dev,
+        &archive,
+        dest.path(),
+        &BTreeMap::new(),
+        Some(&installed),
+        false,
+    )
+    .unwrap();
+    assert!(updated.rewritten.is_empty());
+    assert!(!installed.directory.exists());
+    assert!(
+        String::from_utf8_lossy(
+            &std::process::Command::new(&existing)
+                .output()
+                .unwrap()
+                .stdout
+        )
+        .contains("0.5.0")
+    );
+    installer::uninstall(&updated, dest.path()).unwrap();
+    assert!(existing.exists());
 }

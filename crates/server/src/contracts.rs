@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 use sqlx::Row;
 
 pub const VERSION: &str = "v1";
+pub const RELEASE_VERSION: &str = "v2";
+const IMPLEMENTED_VERSIONS: [&str; 2] = [VERSION, RELEASE_VERSION];
 pub const QUIET_PERIOD_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 pub async fn retire_quiet(s: &State) -> Result<()> {
@@ -36,12 +38,21 @@ pub async fn run(s: State) {
 
 /// Retirement and request admission share one write transaction. A request admitted
 /// before the quiet-period boundary resets it; a retired contract never reactivates.
-async fn admit(s: &State, requested: Option<&str>, client: Option<&str>) -> Result<String> {
-    if requested.is_some_and(|v| v != VERSION) {
+async fn admit(
+    s: &State,
+    route_version: &str,
+    requested: Option<&str>,
+    client: Option<&str>,
+) -> Result<String> {
+    if !IMPLEMENTED_VERSIONS.contains(&route_version)
+        || requested.is_some_and(|v| v != route_version)
+    {
         return Err(Error::new(
             StatusCode::NOT_ACCEPTABLE,
             "api_version_unsupported",
-            "This endpoint supports API v1. Read /api/contracts before upgrading.",
+            format!(
+                "The API version header must match the supported route version ({route_version}). Read /api/contracts before upgrading."
+            ),
         ));
     }
     let client = client
@@ -51,9 +62,9 @@ async fn admit(s: &State, requested: Option<&str>, client: Option<&str>) -> Resu
     let mut tx = s.db.begin_with("BEGIN IMMEDIATE").await?;
     let timestamp = now();
     sqlx::query("UPDATE api_contracts SET state='retired',retired_at=? WHERE version=? AND state='deprecated' AND MAX(deprecated_at,COALESCE(last_request_at,deprecated_at))<=?")
-        .bind(timestamp).bind(VERSION).bind(timestamp-QUIET_PERIOD_SECONDS).execute(&mut *tx).await?;
+        .bind(timestamp).bind(route_version).bind(timestamp-QUIET_PERIOD_SECONDS).execute(&mut *tx).await?;
     let row = sqlx::query("SELECT state,minimum_client FROM api_contracts WHERE version=?")
-        .bind(VERSION)
+        .bind(route_version)
         .fetch_one(&mut *tx)
         .await?;
     let phase: String = row.get("state");
@@ -62,7 +73,9 @@ async fn admit(s: &State, requested: Option<&str>, client: Option<&str>) -> Resu
         return Err(Error::new(
             StatusCode::GONE,
             "api_version_retired",
-            "API v1 has retired after seven days without requests. Read /api/contracts for supported versions.",
+            format!(
+                "API {route_version} has retired after seven days without requests. Read /api/contracts for supported versions."
+            ),
         ));
     }
     let minimum = semver::Version::parse(&row.get::<String, _>("minimum_client"))
@@ -70,7 +83,7 @@ async fn admit(s: &State, requested: Option<&str>, client: Option<&str>) -> Resu
     let incompatible = client.is_some_and(|v| v < minimum);
     sqlx::query("UPDATE api_contracts SET last_request_at=? WHERE version=?")
         .bind(timestamp)
-        .bind(VERSION)
+        .bind(route_version)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -85,16 +98,23 @@ async fn admit(s: &State, requested: Option<&str>, client: Option<&str>) -> Resu
 }
 
 pub async fn http(S(s): S<State>, request: Request, next: Next) -> Response {
-    if !request.uri().path().starts_with("/api/v1/") {
+    let route_version = request
+        .uri()
+        .path()
+        .strip_prefix("/api/")
+        .and_then(|path| path.split_once('/').map(|(version, _)| version))
+        .filter(|version| version.starts_with('v'))
+        .map(str::to_owned);
+    let Some(route_version) = route_version else {
         return next.run(request).await;
-    }
+    };
     let headers = request.headers();
     let header = |name| crate::api::header_value(headers, name);
     let result = match (
         header("honeycomb-api-version"),
         header("honeycomb-client-version"),
     ) {
-        (Ok(version), Ok(client)) => admit(&s, version, client).await,
+        (Ok(version), Ok(client)) => admit(&s, &route_version, version, client).await,
         (Err(error), _) | (_, Err(error)) => Err(error),
     };
     let (mut response, phase) = match result {
@@ -108,9 +128,10 @@ pub async fn http(S(s): S<State>, request: Request, next: Next) -> Response {
             (error.into_response(), phase.to_owned())
         }
     };
-    response
-        .headers_mut()
-        .insert("honeycomb-api-version", HeaderValue::from_static(VERSION));
+    response.headers_mut().insert(
+        "honeycomb-api-version",
+        HeaderValue::from_str(&route_version).expect("URI path is a valid response header value"),
+    );
     response.headers_mut().insert(
         "honeycomb-contract-state",
         HeaderValue::from_str(&phase).unwrap(),
@@ -119,13 +140,20 @@ pub async fn http(S(s): S<State>, request: Request, next: Next) -> Response {
 }
 
 pub async fn discovery(S(s): S<State>) -> Result<Json<Value>> {
-    retire_quiet(&s).await?;
+    discover(&s, VERSION).await
+}
+pub async fn discovery_v2(S(s): S<State>) -> Result<Json<Value>> {
+    discover(&s, RELEASE_VERSION).await
+}
+async fn discover(s: &State, selected: &str) -> Result<Json<Value>> {
+    retire_quiet(s).await?;
     let rows = sqlx::query("SELECT version,state,minimum_client,deprecated_at,retired_at FROM api_contracts ORDER BY version").fetch_all(&s.db).await?;
     let versions: Vec<Value> = rows
         .iter()
         .map(|r| {
             json!({
                 "version":r.get::<String,_>("version"), "state":r.get::<String,_>("state"),
+                "scope":if r.get::<String,_>("version")==RELEASE_VERSION { "releases" } else { "general" },
                 "minimum_client":r.get::<String,_>("minimum_client"),
                 "deprecated_at":r.get::<Option<i64>,_>("deprecated_at"),
                 "retired_at":r.get::<Option<i64>,_>("retired_at")
@@ -134,14 +162,15 @@ pub async fn discovery(S(s): S<State>) -> Result<Json<Value>> {
         .collect();
     let supported: Vec<&str> = versions
         .iter()
-        .filter(|v| v["version"] == VERSION && v["state"] != "retired")
-        .map(|_| VERSION)
+        .filter(|v| v["state"] != "retired")
+        .filter_map(|v| v["version"].as_str())
+        .filter(|version| IMPLEMENTED_VERSIONS.contains(version))
         .collect();
     let minimum = versions
         .iter()
-        .find(|v| v["version"] == VERSION)
+        .find(|v| v["version"] == selected)
         .map(|v| v["minimum_client"].clone());
     Ok(Json(
-        json!({"selected_version":VERSION,"supported_versions":supported,"minimum_client":minimum,"versions":versions,"retirement_quiet_seconds":QUIET_PERIOD_SECONDS}),
+        json!({"selected_version":selected,"release_version":RELEASE_VERSION,"supported_versions":supported,"minimum_client":minimum,"versions":versions,"retirement_quiet_seconds":QUIET_PERIOD_SECONDS,"obo_endpoints":[crate::obo::endpoint_definition()]}),
     ))
 }

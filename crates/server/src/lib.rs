@@ -14,6 +14,7 @@ pub mod integration;
 pub mod lifecycle;
 pub mod logos;
 pub mod notifications;
+pub mod obo;
 pub mod participant_management;
 mod publication_intents;
 pub mod publication_worker;

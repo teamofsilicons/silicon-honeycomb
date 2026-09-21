@@ -35,19 +35,20 @@ Commands:
   apps          Create, inspect and configure organization-owned applications
   releases      Upload and inspect immutable CLI releases. Run pack before upload
   publication   Request publication and participate in application review discussions
+  bundles       Manage bundled sign-in applications through Honeycomb and IAM
   drafts        Save shared drafts with revision checks, allowing another admin to continue
   operations    Inspect pending operations or retry after repairing an integration
   environments  Create and manage isolated ecosystem testing environments
   config        Configure home, backend and update/telemetry preferences
-  daemon        Run the hourly update worker, including while no interactive commands run
+  daemon        Run the shared CLI/app update worker at second 01 of every minute
   self-update   Check for and install the latest verified Honeycomb CLI binary
-  service       Register the per-user hourly update worker
+  service       Register the per-user CLI/app update worker
   help          Print this message or the help of the given subcommand(s)
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost
-          
+
           [env: HONEYCOMB_API_URL=]
 
       --test <TEST>
@@ -114,7 +115,7 @@ Exchange an IAM short-lived token, or use `login status` to check live authentic
 Usage: honeycomb login [OPTIONS] <SLT_OR_STATUS>
 
 Arguments:
-  <SLT_OR_STATUS>  
+  <SLT_OR_STATUS>
 
 Options:
       --api <API>
@@ -211,7 +212,7 @@ Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
   -o, --output <OUTPUT>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -230,15 +231,15 @@ Install the latest or selected app release for this platform. Collision errors s
 Usage: honeycomb install [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --version <VERSION>
-          
+
       --alias <ALIAS>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -247,6 +248,8 @@ Options:
           Answer yes in advance to rewriting an older command this package requires
       --idempotency-key <IDEMPOTENCY_KEY>
           Reuse this key to safely retry a mutation after an uncertain response
+      --switch-channel
+          Confirm switching an existing installation between production and dev releases
   -h, --help
           Print help
 ```
@@ -259,7 +262,7 @@ Update an installed app to its latest release, preserving aliases
 Usage: honeycomb update [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
@@ -282,7 +285,7 @@ Uninstall only files and launchers owned by this package
 Usage: honeycomb uninstall [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
@@ -325,15 +328,15 @@ Save a rating and review for an application you can access
 Usage: honeycomb review [OPTIONS] --rating <RATING> --review <REVIEW> <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --rating <RATING>
-          
+
       --review <REVIEW>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -352,13 +355,13 @@ Report a reproducible bug; optionally link a pull request with its fix
 Usage: honeycomb report [OPTIONS] <MESSAGE>
 
 Arguments:
-  <MESSAGE>  
+  <MESSAGE>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --pr <PR>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -377,13 +380,13 @@ Star an application; repeat safely. Use --remove to remove the star
 Usage: honeycomb star [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --remove
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -402,12 +405,13 @@ Create, inspect and configure organization-owned applications
 Usage: honeycomb apps [OPTIONS] <COMMAND>
 
 Commands:
+  organization   List every app in an organization you belong to, including private apps
   upload-logo    Upload a publicly viewable logo to Briefcase. Set the returned logo_url in application.json
   webhook        Manage pending webhook destinations and signing credentials through IAM
   reconcile      Refresh accepted IAM state and retry notification reconciliation
   rotate-secret  Replace an application's secret through IAM. Save the one-time result securely
-  list           
-  get            
+  list
+  get
   create         Submit application.json containing org_id, local_app_id, details, webhook and scopes
   update         Update using a complete application.json and the current revision from apps get
   help           Print this message or the help of the given subcommand(s)
@@ -415,6 +419,33 @@ Commands:
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps organization
+
+```text
+List every app in an organization you belong to, including private apps
+
+Usage: honeycomb apps organization [OPTIONS] <ORG_ID>
+
+Arguments:
+  <ORG_ID>
+
+Options:
+      --after <AFTER>
+
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --limit <LIMIT>
+          [default: 100]
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -433,8 +464,8 @@ Upload a publicly viewable logo to Briefcase. Set the returned logo_url in appli
 Usage: honeycomb apps upload-logo [OPTIONS] <ORG_ID> <FILE>
 
 Arguments:
-  <ORG_ID>  
-  <FILE>    
+  <ORG_ID>
+  <FILE>
 
 Options:
       --api <API>
@@ -484,7 +515,7 @@ Read the current pending endpoint ID and IAM revision before making a change
 Usage: honeycomb apps webhook status [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
@@ -507,21 +538,21 @@ Approve the exact pending destination. Obtain application.webhook.approve step-u
 Usage: honeycomb apps webhook approve [OPTIONS] --endpoint <ENDPOINT> --revision <REVISION> <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --endpoint <ENDPOINT>
-          
+
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
           Emit structured JSON. Secrets appear only in explicit credential-returning commands
       --step-up-file <STEP_UP_FILE>
-          
+
       --idempotency-key <IDEMPOTENCY_KEY>
           Reuse this key to safely retry a mutation after an uncertain response
   -h, --help
@@ -536,21 +567,21 @@ Install a signing secret from a protected file. Update your receiver to verify i
 Usage: honeycomb apps webhook rotate-secret [OPTIONS] --secret-file <SECRET_FILE> --revision <REVISION> <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --secret-file <SECRET_FILE>
-          
+
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
           Emit structured JSON. Secrets appear only in explicit credential-returning commands
       --step-up-file <STEP_UP_FILE>
-          
+
       --idempotency-key <IDEMPOTENCY_KEY>
           Reuse this key to safely retry a mutation after an uncertain response
   -h, --help
@@ -565,13 +596,13 @@ Retry a saved change by operation ID; omit the secret and original endpoint
 Usage: honeycomb apps webhook retry [OPTIONS] <OPERATION_ID>
 
 Arguments:
-  <OPERATION_ID>  
+  <OPERATION_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --step-up-file <STEP_UP_FILE>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -590,7 +621,7 @@ Refresh accepted IAM state and retry notification reconciliation
 Usage: honeycomb apps reconcile [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
@@ -613,13 +644,13 @@ Replace an application's secret through IAM. Save the one-time result securely
 Usage: honeycomb apps rotate-secret [OPTIONS] --revision <REVISION> <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --revision <REVISION>
-          
+
       --step-up-file <STEP_UP_FILE>
           Read fresh IAM step-up evidence from a file, avoiding shell-history exposure
       --test <TEST>
@@ -658,7 +689,7 @@ Options:
 Usage: honeycomb apps get [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
@@ -681,7 +712,7 @@ Submit application.json containing org_id, local_app_id, details, webhook and sc
 Usage: honeycomb apps create [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  
+  <FILE>
 
 Options:
       --api <API>
@@ -704,14 +735,14 @@ Update using a complete application.json and the current revision from apps get
 Usage: honeycomb apps update [OPTIONS] --revision <REVISION> <APP_ID> <FILE>
 
 Arguments:
-  <APP_ID>  
-  <FILE>    
+  <APP_ID>
+  <FILE>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -730,9 +761,10 @@ Upload and inspect immutable CLI releases. Run pack before upload
 Usage: honeycomb releases [OPTIONS] <COMMAND>
 
 Commands:
-  list    
-  upload  
-  help    Print this message or the help of the given subcommand(s)
+  list
+  upload
+  promote  Promote a dev archive to a new production release with an explicit version
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --api <API>
@@ -753,11 +785,13 @@ Options:
 Usage: honeycomb releases list [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --channel <CHANNEL>
+          [default: prod]
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -771,17 +805,47 @@ Options:
 ## honeycomb releases upload
 
 ```text
-Usage: honeycomb releases upload [OPTIONS] --revision <REVISION> <APP_ID> <ARCHIVE>
+Usage: honeycomb releases upload [OPTIONS] --channel <CHANNEL> --revision <REVISION> <APP_ID> <ARCHIVE>
 
 Arguments:
-  <APP_ID>   
-  <ARCHIVE>  
+  <APP_ID>
+  <ARCHIVE>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --channel <CHANNEL>
+
       --revision <REVISION>
-          
+
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb releases promote
+
+```text
+Promote a dev archive to a new production release with an explicit version
+
+Usage: honeycomb releases promote [OPTIONS] --revision <REVISION> <APP_ID> <DEV_VERSION>
+
+Arguments:
+  <APP_ID>
+  <DEV_VERSION>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --version <VERSION>
+          Production version (x.y.z). Interactive terminals prompt when omitted
+      --revision <REVISION>
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -802,13 +866,13 @@ Usage: honeycomb publication [OPTIONS] <COMMAND>
 Commands:
   activate      Activate an approved public revision and reconcile archive access
   inbox         Requests you can review as a provider administrator or authorized validator
-  review        
-  retry-plan    
-  decide        
-  review-reply  
-  get           
-  request       
-  reply         
+  review
+  retry-plan
+  decide
+  review-reply
+  get
+  request
+  reply
   help          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -832,13 +896,13 @@ Activate an approved public revision and reconcile archive access
 Usage: honeycomb publication activate [OPTIONS] --revision <REVISION> <REQUEST_ID>
 
 Arguments:
-  <REQUEST_ID>  
+  <REQUEST_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -875,8 +939,8 @@ Options:
 Usage: honeycomb publication review [OPTIONS] <REQUEST_ID> <PROVIDER>
 
 Arguments:
-  <REQUEST_ID>  
-  <PROVIDER>    
+  <REQUEST_ID>
+  <PROVIDER>
 
 Options:
       --api <API>
@@ -897,13 +961,13 @@ Options:
 Usage: honeycomb publication retry-plan [OPTIONS] --revision <REVISION> <REQUEST_ID>
 
 Arguments:
-  <REQUEST_ID>  
+  <REQUEST_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -920,8 +984,8 @@ Options:
 Usage: honeycomb publication decide [OPTIONS] --revision <REVISION> <REQUEST_ID> <PROVIDER> <DECISION>
 
 Arguments:
-  <REQUEST_ID>  
-  <PROVIDER>    
+  <REQUEST_ID>
+  <PROVIDER>
   <DECISION>    [possible values: approve, deny]
 
 Options:
@@ -930,7 +994,7 @@ Options:
       --reason <REASON>
           [default: ""]
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -947,14 +1011,14 @@ Options:
 Usage: honeycomb publication review-reply [OPTIONS] --message <MESSAGE> <REQUEST_ID> <PROVIDER>
 
 Arguments:
-  <REQUEST_ID>  
-  <PROVIDER>    
+  <REQUEST_ID>
+  <PROVIDER>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --message <MESSAGE>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -971,7 +1035,7 @@ Options:
 Usage: honeycomb publication get [OPTIONS] <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
@@ -992,15 +1056,15 @@ Options:
 Usage: honeycomb publication request [OPTIONS] --message <MESSAGE> --revision <REVISION> <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --message <MESSAGE>
-          
+
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -1017,15 +1081,106 @@ Options:
 Usage: honeycomb publication reply [OPTIONS] --message <MESSAGE> <APP_ID>
 
 Arguments:
-  <APP_ID>  
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --message <MESSAGE>
-          
+
       --provider <PROVIDER>
-          
+
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb bundles
+
+```text
+Manage bundled sign-in applications through Honeycomb and IAM
+
+Usage: honeycomb bundles [OPTIONS] <COMMAND>
+
+Commands:
+  list
+  get
+  configure  Configure members; use revision zero only when the bundle does not exist
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb bundles list
+
+```text
+Usage: honeycomb bundles list [OPTIONS]
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb bundles get
+
+```text
+Usage: honeycomb bundles get [OPTIONS] <BUNDLE_ID>
+
+Arguments:
+  <BUNDLE_ID>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb bundles configure
+
+```text
+Configure members; use revision zero only when the bundle does not exist
+
+Usage: honeycomb bundles configure [OPTIONS] --revision <REVISION> <BUNDLE_ID> <FILE>
+
+Arguments:
+  <BUNDLE_ID>
+  <FILE>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --revision <REVISION>
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -1044,8 +1199,8 @@ Save shared drafts with revision checks, allowing another admin to continue
 Usage: honeycomb drafts [OPTIONS] <COMMAND>
 
 Commands:
-  list  
-  save  
+  list
+  save
   help  Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1067,7 +1222,7 @@ Options:
 Usage: honeycomb drafts list [OPTIONS] <ORG_ID>
 
 Arguments:
-  <ORG_ID>  
+  <ORG_ID>
 
 Options:
       --api <API>
@@ -1088,9 +1243,9 @@ Options:
 Usage: honeycomb drafts save [OPTIONS] <ORG_ID> <ID> <FILE>
 
 Arguments:
-  <ORG_ID>  
-  <ID>      
-  <FILE>    
+  <ORG_ID>
+  <ID>
+  <FILE>
 
 Options:
       --api <API>
@@ -1116,8 +1271,8 @@ Usage: honeycomb operations [OPTIONS] <COMMAND>
 
 Commands:
   recover-secret  Recover a creation/rotation secret within IAM's short replay window
-  get             
-  retry           
+  get
+  retry
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1141,7 +1296,7 @@ Recover a creation/rotation secret within IAM's short replay window
 Usage: honeycomb operations recover-secret [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
@@ -1162,7 +1317,7 @@ Options:
 Usage: honeycomb operations get [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
@@ -1183,7 +1338,7 @@ Options:
 Usage: honeycomb operations retry [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
@@ -1209,9 +1364,9 @@ Commands:
   retention      Inspect activity and retention deadlines without extending the idle timer
   set-retention  Set the shared environment idle period. App-specific longer retention still applies
   activity       Report actual use of an application in a ready environment; supports --test root authority
-  list           
-  get            
-  create         
+  list
+  get
+  create
   import         Import an application's external-scope dependencies and pin accepted configurations
   key            Retrieve and save an environment root key. This action is audited by the backend
   action         Coordinate rotation, clean, delete or restore with every participating service
@@ -1238,7 +1393,7 @@ Inspect activity and retention deadlines without extending the idle timer
 Usage: honeycomb environments retention [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
@@ -1261,15 +1416,15 @@ Set the shared environment idle period. App-specific longer retention still appl
 Usage: honeycomb environments set-retention [OPTIONS] --days <DAYS> --revision <REVISION> <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --days <DAYS>
-          
+
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -1288,16 +1443,16 @@ Report actual use of an application in a ready environment; supports --test root
 Usage: honeycomb environments activity [OPTIONS] --generation <GENERATION> --key-version <KEY_VERSION> <ID> <APP_ID>
 
 Arguments:
-  <ID>      
-  <APP_ID>  
+  <ID>
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --generation <GENERATION>
-          
+
       --key-version <KEY_VERSION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -1332,7 +1487,7 @@ Options:
 Usage: honeycomb environments get [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
@@ -1353,8 +1508,8 @@ Options:
 Usage: honeycomb environments create [OPTIONS] <ORG_ID> <NAME>
 
 Arguments:
-  <ORG_ID>  
-  <NAME>    
+  <ORG_ID>
+  <NAME>
 
 Options:
       --api <API>
@@ -1379,16 +1534,16 @@ Import an application's external-scope dependencies and pin accepted configurati
 Usage: honeycomb environments import [OPTIONS] --revision <REVISION> <ID> <APP_ID>
 
 Arguments:
-  <ID>      
-  <APP_ID>  
+  <ID>
+  <APP_ID>
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --revision <REVISION>
-          
+
       --release <RELEASE>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -1409,7 +1564,7 @@ Retrieve and save an environment root key. This action is audited by the backend
 Usage: honeycomb environments key [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --api <API>
@@ -1432,14 +1587,14 @@ Coordinate rotation, clean, delete or restore with every participating service
 Usage: honeycomb environments action [OPTIONS] --revision <REVISION> <ID> <ACTION>
 
 Arguments:
-  <ID>      
+  <ID>
   <ACTION>  [possible values: rotate-key, clean, delete, restore, retry, purge]
 
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --revision <REVISION>
-          
+
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
@@ -1459,7 +1614,7 @@ Usage: honeycomb config [OPTIONS] <COMMAND>
 
 Commands:
   home  Use an existing directory as home. Data lives below <home>/.honeycomb/dir
-  show  
+  show
   env   Print shell setup for this home and backend. Use eval "$(honeycomb config env)"
   set   Set api, auto_update or telemetry. Boolean values are true/false
   help  Print this message or the help of the given subcommand(s)
@@ -1485,7 +1640,7 @@ Use an existing directory as home. Data lives below <home>/.honeycomb/dir
 Usage: honeycomb config home [OPTIONS] <LOCATION>
 
 Arguments:
-  <LOCATION>  
+  <LOCATION>
 
 Options:
       --api <API>
@@ -1547,7 +1702,7 @@ Usage: honeycomb config set [OPTIONS] <NAME> <VALUE>
 
 Arguments:
   <NAME>   [possible values: api, auto_update, telemetry]
-  <VALUE>  
+  <VALUE>
 
 Options:
       --api <API>
@@ -1565,7 +1720,7 @@ Options:
 ## honeycomb daemon
 
 ```text
-Run the hourly update worker, including while no interactive commands run
+Run the shared CLI/app update worker at second 01 of every minute
 
 Usage: honeycomb daemon [OPTIONS]
 
@@ -1607,7 +1762,7 @@ Options:
 ## honeycomb service
 
 ```text
-Register the per-user hourly update worker
+Register the per-user CLI/app update worker
 
 Usage: honeycomb service [OPTIONS] <ACTION>
 

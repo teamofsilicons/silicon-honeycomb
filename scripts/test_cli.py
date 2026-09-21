@@ -103,7 +103,7 @@ def main():
                 entry = tarfile.TarInfo('honeycomb.yaml')
                 entry.size = len(invalid_manifest)
                 archive.addfile(entry, io.BytesIO(invalid_manifest))
-            upload_failure = run('releases', 'upload', app_id, str(invalid_archive), '--revision', '1', ok=False)
+            upload_failure = run('releases', 'upload', app_id, str(invalid_archive), '--channel', 'prod', '--revision', '1', ok=False)
             publication_failure = run('publication', 'request', app_id, '--message', 'Review', '--revision', '1', ok=False)
             for target in ['windows-x86_64', 'windows-aarch64']:
                 exact_error = f'targets.{target}: required 64-bit target is missing'
@@ -128,10 +128,10 @@ def main():
                 assert run('validate', str(package))['valid']
                 archive = root / f'{version}.tar.gz'
                 run('pack', str(package), '--output', str(archive))
-                upload = run('--idempotency-key', 'cli-upload-e2e-' + version, 'releases', 'upload', app_id, str(archive), '--revision', '1')
+                upload = run('--idempotency-key', 'cli-upload-e2e-' + version, 'releases', 'upload', app_id, str(archive), '--channel', 'prod', '--revision', '1')
                 assert upload['state'] == 'accepted'
                 # A version cannot be overwritten with another upload operation.
-                run('releases', 'upload', app_id, str(archive), '--revision', '1', ok=False)
+                run('releases', 'upload', app_id, str(archive), '--channel', 'prod', '--revision', '1', ok=False)
                 args = ['install', app_id, '--alias', 'honeycomb-e2e-greet=honeycomb-e2e-custom'] if version == '1.0.0' else ['update', app_id]
                 installed = run(*args, role='member')
                 assert installed['version'] == version

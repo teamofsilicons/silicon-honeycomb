@@ -119,12 +119,12 @@ function session(
     return;
   }
 }
-async function api(path: string, options: RequestInit = {}) {
+async function api(path: string, options: RequestInit = {}, version: "v1" | "v2" = "v1") {
   const headers = new Headers(options.headers);
-  headers.set("honeycomb-api-version", "v1");
+  headers.set("honeycomb-api-version", version);
   headers.set("honeycomb-client-version", packageInfo.version);
   if (telemetryContext.getStore() === false) headers.set("x-honeycomb-telemetry", "false");
-  return fetch(`${backend}/api/v1/${path}`, {
+  return fetch(`${backend}/api/${version}/${path}`, {
     ...options,
     headers,
     redirect: "error",
@@ -338,7 +338,7 @@ app.post("/auth/logout", csrf, async (req, res) => {
   res.json({ authenticated: false });
 });
 app.use(
-  "/api/v1",
+  ["/api/v1", "/api/v2"],
   (req, res, next) => {
     if (!["GET", "HEAD"].includes(req.method)) return csrf(req, res, next);
     next();
@@ -362,7 +362,7 @@ app.use(
         method: req.method,
         headers,
         body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
-      });
+      }, req.baseUrl === "/api/v2" ? "v2" : "v1");
       res.status(response.status);
       for (const name of ["content-type", "etag", "x-checksum-sha256", "honeycomb-api-version", "honeycomb-contract-state"]) {
         const value = response.headers.get(name);

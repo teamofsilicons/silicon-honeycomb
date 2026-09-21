@@ -80,8 +80,9 @@ notifications and deferred Briefcase acceptance remain separate checks.
 An application created before Honeycomb can have IAM configuration revision zero.
 Deploy revision-zero reconciliation support before importing it. The privileged
 `scripts/adopt_legacy_app.py` operator tool reads IAM's current accepted record,
-checks its immutable ID and organization, and imports an active **private** catalog
-record. It does not mutate IAM, obtain its app/webhook secrets, or publish a release.
+checks its immutable ID and organization, and by default imports an active
+**private** catalog record. It does not mutate IAM, obtain its app/webhook secrets,
+or publish a release.
 It refuses to overwrite an existing Honeycomb app. This is an operator migration,
 not a public endpoint or a replacement for actor-authorized app registration.
 
@@ -90,7 +91,7 @@ SQLite database; first omit `--apply` to review its safe projection:
 
 ```sh
 python3 adopt_legacy_app.py --app 'tos>briefcase' \
-  --expected-identity 01a070db-89b4-7542-83f1-4fad5cbce625 \
+  --expected-identity 'tos>briefcase' \
   --metadata briefcase-catalog.json \
   --database /var/lib/silicon-honeycomb/backend/honeycomb.db \
   --env-file /etc/silicon-honeycomb/backend.env \
@@ -98,6 +99,8 @@ python3 adopt_legacy_app.py --app 'tos>briefcase' \
   --backup-dir /var/lib/silicon-honeycomb/backups/legacy-adoption --apply
 ```
 
+Use the exact `application_id` from IAM's current protected application record for
+`--expected-identity`; current IAM returns the canonical application handle.
 The tool verifies a consistent SQLite backup before acquiring a write transaction,
 re-reads IAM to reject concurrent changes, and records an accepted `iam.adopt`
 operation and audit entry. Worker reconciliation continues from IAM revision zero;
@@ -106,3 +109,24 @@ secrets are preserved in IAM; a later configuration edit must supply the webhook
 URL and signing secret. The existing app is private until normal release and
 publication requirements are fulfilled. Verify its live CLI result and accepted
 reconciliation after the import; keep the receipt and backup path in the operator log.
+
+For an established public runtime identity, such as Honeycomb itself, explicitly
+add `--preserve-public-visibility` to both preview and apply. This option requires
+IAM to currently report public visibility, verified availability, configuration
+revision zero, and positive IAM and credential revisions. It records that existing
+public status in the adoption receipt; it cannot publish a private identity. The
+desired projection retains every scope declaration and OBO endpoint, while the
+effective projection includes only currently granted scopes. Existing app and
+webhook credentials remain unchanged.
+
+Deploy this option's reconciliation support before applying it. Reconciliation
+keeps the imported record public only while IAM still confirms its accepted public
+revision-zero identity. A new desired public configuration remains pending while
+the old accepted runtime stays available. Supply the existing webhook URL and
+signing secret for that configuration edit, preserving all existing fields and
+merging new endpoint declarations. An outstanding IAM notification pauses the
+configure operation until reconciliation completes; retry the returned operation
+ID afterwards. Publish through the normal release, manifest checks, IAM provider
+approval, authorized review, and activation flow. Revision one and later require
+the ordinary completed publication proof; adoption provenance never approves new
+scopes or replaces that review.

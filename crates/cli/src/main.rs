@@ -1,9 +1,11 @@
 mod progress;
+mod selection;
+mod shell_path;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
 use honeycomb_client::{
-    AppInput, Client, Mutation,
+    AppInput, Client, Mutation, ReleaseChannel,
     installer::{self, Installed},
     package,
 };
@@ -79,6 +81,9 @@ enum Command {
         /// Answer yes in advance to rewriting an older command this package requires.
         #[arg(long)]
         rewrite_existing: bool,
+        /// Confirm switching an existing installation between production and dev releases.
+        #[arg(long)]
+        switch_channel: bool,
     },
     /// Update an installed app to its latest release, preserving aliases.
     Update { app_id: String },
@@ -121,6 +126,11 @@ enum Command {
         #[command(subcommand)]
         command: Publication,
     },
+    /// Manage bundled sign-in applications through Honeycomb and IAM.
+    Bundles {
+        #[command(subcommand)]
+        command: Bundles,
+    },
     /// Save shared drafts with revision checks, allowing another admin to continue.
     Drafts {
         #[command(subcommand)]
@@ -141,7 +151,7 @@ enum Command {
         #[command(subcommand)]
         command: Config,
     },
-    /// Run the hourly update worker, including while no interactive commands run.
+    /// Run the shared CLI/app update worker at second 01 of every minute.
     Daemon {
         /// Run one scheduled check and exit, honoring auto_update.
         #[arg(long)]
@@ -149,7 +159,7 @@ enum Command {
     },
     /// Check for and install the latest verified Honeycomb CLI binary.
     SelfUpdate,
-    /// Register the per-user hourly update worker.
+    /// Register the per-user CLI/app update worker.
     Service {
         #[arg(value_parser=["install"])]
         action: String,
@@ -188,6 +198,14 @@ enum Webhook {
 }
 #[derive(Subcommand)]
 enum Apps {
+    /// List every app in an organization you belong to, including private apps.
+    Organization {
+        org_id: String,
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
     /// Upload a publicly viewable logo to Briefcase. Set the returned logo_url in application.json.
     UploadLogo {
         org_id: String,
@@ -234,10 +252,24 @@ enum Apps {
 enum Releases {
     List {
         app_id: String,
+        #[arg(long, default_value = "prod", value_parser = selection::channel)]
+        channel: ReleaseChannel,
     },
     Upload {
         app_id: String,
         archive: PathBuf,
+        #[arg(long, value_parser = selection::channel)]
+        channel: ReleaseChannel,
+        #[arg(long)]
+        revision: i64,
+    },
+    /// Promote a dev archive to a new production release with an explicit version.
+    Promote {
+        app_id: String,
+        dev_version: String,
+        /// Production version (x.y.z). Interactive terminals prompt when omitted.
+        #[arg(long)]
+        version: Option<String>,
         #[arg(long)]
         revision: i64,
     },
@@ -293,6 +325,20 @@ enum Publication {
         message: String,
         #[arg(long)]
         provider: Option<String>,
+    },
+}
+#[derive(Subcommand)]
+enum Bundles {
+    List,
+    Get {
+        bundle_id: String,
+    },
+    /// Configure members; use revision zero only when the bundle does not exist.
+    Configure {
+        bundle_id: String,
+        file: PathBuf,
+        #[arg(long)]
+        revision: i64,
     },
 }
 #[derive(Subcommand)]
@@ -641,7 +687,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         return Ok(());
     }
     if matches!(cli.command, Command::Service { .. }) {
-        honeycomb_client::maintenance::install_service(&base_home()?, &std::env::current_exe()?)?;
+        honeycomb_client::maintenance::install_service(&base_home()?, &invocation_path()?)?;
         show(&json!({"service":"installed"}))?;
         return Ok(());
     }
@@ -649,7 +695,21 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         return self_update(&root, true, Some(progress)).await;
     }
     if let Command::Daemon { once } = cli.command {
+        let daemon_lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(root.join("daemon.lock"))?;
+        if daemon_lock.try_lock_exclusive().is_err() {
+            return Ok(());
+        }
+        let executable = std::env::current_exe()?;
+        let running_digest = package::sha256(&executable)?;
         loop {
+            if !once {
+                tokio::time::sleep(next_update_delay(std::time::SystemTime::now())).await;
+            }
             let config: Settings = read(&root.join("config.json"))?;
             if automatic_updates_enabled(config.auto_update) {
                 let started = std::time::Instant::now();
@@ -668,10 +728,10 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                     eprintln!("Honeycomb maintenance deferred; run honeycomb update for details");
                 }
             }
-            if once {
+            // Supervisors relaunch the newly installed executable after self-update.
+            if once || package::sha256(&executable).is_ok_and(|digest| digest != running_digest) {
                 return Ok(());
             }
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     }
     let context = selected_context(cli, &settings, &root)?;
@@ -758,6 +818,15 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             show(&json!({"archive":archive,"sha256":package::sha256(&archive)?}))?;
         }
         Command::Apps { command } => match command {
+            Apps::Organization {
+                org_id,
+                after,
+                limit,
+            } => show(
+                &client
+                    .organization_apps(org_id, after.as_deref(), Some(*limit))
+                    .await?,
+            )?,
             Apps::Webhook { command } => match command {
                 Webhook::Status { app_id } => show(&client.webhook_state(app_id).await?)?,
                 Webhook::Approve {
@@ -859,16 +928,51 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             )?,
         },
         Command::Releases { command } => match command {
-            Releases::List { app_id } => show(&client.releases(app_id).await?)?,
+            Releases::List { app_id, channel } => {
+                show(&client.releases_channel(app_id, *channel).await?)?
+            }
             Releases::Upload {
                 app_id,
                 archive,
+                channel,
                 revision,
             } => show(
                 &client
-                    .upload_release(app_id, archive, &mutation(cli, Some(*revision))?)
+                    .upload_release(app_id, archive, *channel, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
+            Releases::Promote {
+                app_id,
+                dev_version,
+                version,
+                revision,
+            } => {
+                selection::validate_version(dev_version)?;
+                let version = match version {
+                    Some(value) => selection::validate_version(value)?,
+                    None if !cli.json
+                        && std::io::stdin().is_terminal()
+                        && std::io::stderr().is_terminal() =>
+                    {
+                        eprint!("Production release version (x.y.z): ");
+                        std::io::stderr().flush()?;
+                        let mut answer = String::new();
+                        std::io::stdin().read_line(&mut answer)?;
+                        selection::validate_version(answer.trim())?
+                    }
+                    None => bail!("Specify the new production version with --version x.y.z"),
+                };
+                show(
+                    &client
+                        .promote_release(
+                            app_id,
+                            dev_version,
+                            &version,
+                            &mutation(cli, Some(*revision))?,
+                        )
+                        .await?,
+                )?;
+            }
         },
         Command::Publication { command } => match command {
             Publication::Activate {
@@ -935,6 +1039,23 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             } => show(
                 &client
                     .publication_message(app_id, message, provider.as_deref(), &operation)
+                    .await?,
+            )?,
+        },
+        Command::Bundles { command } => match command {
+            Bundles::List => show(&client.bundles().await?)?,
+            Bundles::Get { bundle_id } => show(&client.bundle(bundle_id).await?)?,
+            Bundles::Configure {
+                bundle_id,
+                file,
+                revision,
+            } => show(
+                &client
+                    .configure_bundle(
+                        bundle_id,
+                        &input::<Value>(file)?,
+                        &mutation(cli, Some(*revision))?,
+                    )
                     .await?,
             )?,
         },
@@ -1052,6 +1173,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             version,
             alias,
             rewrite_existing,
+            switch_channel,
         } => {
             install(
                 &client,
@@ -1062,6 +1184,9 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 InstallOptions {
                     updating: false,
                     rewrite_existing: *rewrite_existing,
+                    switch_channel: *switch_channel,
+                    persist_path: context.testing_key.is_none(),
+                    ensure_worker: automatic_updates_enabled(settings.auto_update),
                 },
                 Some(progress),
             )
@@ -1077,6 +1202,8 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 None,
                 InstallOptions {
                     updating: true,
+                    persist_path: context.testing_key.is_none(),
+                    ensure_worker: automatic_updates_enabled(settings.auto_update),
                     ..InstallOptions::default()
                 },
                 Some(progress),
@@ -1085,6 +1212,11 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             write_private(&plane_dir.join("context.json"), &context)?;
         }
         Command::Uninstall { app_id } => {
+            let selection = selection::Selection::parse(app_id, None)?;
+            if selection.version.is_some() {
+                bail!("Uninstall selects a channel, not a release version; omit @version");
+            }
+            let app_id = &selection.key();
             let lock = fs::OpenOptions::new()
                 .create(true)
                 .truncate(false)
@@ -1112,14 +1244,17 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     if automatic_updates_enabled(settings.auto_update) {
         progress.stage("Checking scheduled updates");
     }
-    if automatic_updates_enabled(settings.auto_update)
+    if !matches!(
+        cli.command,
+        Command::Install { .. } | Command::Update { .. }
+    ) && automatic_updates_enabled(settings.auto_update)
         && update_packages(&root, cli, true).await.is_err()
     {
         eprintln!("Package update check deferred; run honeycomb update for details");
     }
     // Maintenance failures must not change the user's successful command result.
     if automatic_updates_enabled(settings.auto_update)
-        && now() - settings.last_update_check >= 3600
+        && update_due(settings.last_update_check, now())
         && let Err(e) = self_update(&root, false, None).await
     {
         eprintln!("Update check deferred: {e}");
@@ -1133,6 +1268,10 @@ struct InstallOptions {
     updating: bool,
     /// Yes, answered in advance, to rewriting an older command this package requires.
     rewrite_existing: bool,
+    /// Foreground production installs configure future shells; test contexts stay opt-in.
+    persist_path: bool,
+    switch_channel: bool,
+    ensure_worker: bool,
 }
 async fn install(
     client: &Client,
@@ -1143,9 +1282,9 @@ async fn install(
     options: InstallOptions,
     progress: Option<&Progress>,
 ) -> Result<()> {
-    if !honeycomb_client::valid_app_id(id) {
-        bail!("Expected an org>app identifier; quote it in your shell");
-    }
+    let selection = selection::Selection::parse(id, version)?;
+    let key = selection.key();
+    let id = selection.app_id.as_str();
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1157,19 +1296,39 @@ async fn install(
     }
     lock.lock_exclusive()?;
     let mut records: BTreeMap<String, Installed> = read(&root.join("installed.json"))?;
-    let previous = records.get(id);
+    let mut previous_key = key.clone();
+    if !records.contains_key(&key) && !options.updating {
+        let other_channel = if selection.channel == ReleaseChannel::Dev {
+            ReleaseChannel::Prod
+        } else {
+            ReleaseChannel::Dev
+        };
+        let other_key = selection::Selection::channel_key(id, other_channel);
+        if records.contains_key(&other_key)
+            && (options.switch_channel || aliases.as_ref().is_none_or(|a| a.is_empty()))
+        {
+            confirm_channel_switch(selection.channel, options.switch_channel, progress)?;
+            previous_key = other_key;
+        }
+    }
+    let previous = records.get(&previous_key);
     if options.updating && previous.is_none() {
         bail!("{id} is not installed; run honeycomb install '{id}' first");
     }
     if let Some(progress) = progress {
         progress.stage("Finding the requested release");
     }
-    let releases = client.releases(id).await?;
+    let releases = client.releases_channel(id, selection.channel).await?;
     let release = releases
         .iter()
-        .find(|r| version.is_none_or(|v| v == r.version))
+        .find(|r| selection.version.as_deref().is_none_or(|v| v == r.version))
         .context("Requested release is unavailable")?;
-    if previous.is_some_and(|p| p.version == release.version && p.sha256 == release.sha256) {
+    if release.channel != selection.channel {
+        bail!("Backend returned a release from the wrong channel");
+    }
+    if previous.is_some_and(|p| {
+        p.channel == selection.channel && p.version == release.version && p.sha256 == release.sha256
+    }) {
         if let Some(progress) = progress {
             progress.pause();
             // `update` reports staleness; `install` reports that the requirement is met.
@@ -1180,17 +1339,26 @@ async fn install(
             };
             // Callers still need the command map, so answer as fully as a fresh install does.
             let mut result = json!({"app_id":id,"version":release.version,"status":status,"bin_directory":root.join("bin")});
+            result["channel"] = json!(selection.channel);
             if let Some(first) = previous.and_then(|p| p.commands.values().next()) {
                 result["help_command"] = json!(format!("{} --help", first.display()));
             }
+            let setup = shell_path::configure(&root.join("bin"), options.persist_path);
+            result["path_setup"] = serde_json::to_value(&setup)?;
+            let worker = ensure_update_worker(options.ensure_worker);
+            result["auto_update"] = worker.clone();
             show(&result)?;
             if let Some(previous) = previous {
-                progress.completion(installation_message(previous, completion));
+                progress.completion(installation_message(
+                    previous,
+                    &format!("{completion}\n{}{}", setup.message, worker_warning(&worker)),
+                ));
             }
         }
         return Ok(());
     }
     let aliases = aliases
+        .filter(|a| !a.is_empty())
         .or_else(|| previous.map(|p| p.aliases.clone()))
         .unwrap_or_default();
     let stage = root.join(format!("download-{}.tar.gz", uuid::Uuid::new_v4()));
@@ -1205,7 +1373,15 @@ async fn install(
         if let Some(progress) = progress {
             progress.stage("Unpacking and activating commands");
         }
-        match installer::install_archive_resolving(id, &stage, root, &aliases, previous, false) {
+        match installer::install_archive_channel_resolving(
+            id,
+            selection.channel,
+            &stage,
+            root,
+            &aliases,
+            previous,
+            false,
+        ) {
             // The system already provides these commands, but older than this package needs.
             Err(e) => match e.downcast::<installer::UnresolvedCommands>() {
                 Ok(unresolved) => {
@@ -1220,7 +1396,15 @@ async fn install(
                                 .join(", ")
                         );
                     }
-                    installer::install_archive_resolving(id, &stage, root, &aliases, previous, true)
+                    installer::install_archive_channel_resolving(
+                        id,
+                        selection.channel,
+                        &stage,
+                        root,
+                        &aliases,
+                        previous,
+                        true,
+                    )
                 }
                 Err(e) => Err(e),
             },
@@ -1239,26 +1423,67 @@ async fn install(
     if let Some(progress) = progress {
         progress.stage("Saving installation record");
     }
-    records.insert(id.into(), record.clone());
+    records.remove(&previous_key);
+    records.insert(key, record.clone());
     write_private(&root.join("installed.json"), &records)?;
     if let Some(progress) = progress {
         progress.pause();
         let mut result = json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())});
+        result["channel"] = json!(selection.channel);
         if !record.resolved.is_empty() {
             result["resolved"] = json!(record.resolved);
         }
         if !record.rewritten.is_empty() {
             result["rewritten"] = json!(record.rewritten);
         }
+        let setup = shell_path::configure(&root.join("bin"), options.persist_path);
+        result["path_setup"] = serde_json::to_value(&setup)?;
+        let worker = ensure_update_worker(options.ensure_worker);
+        result["auto_update"] = worker.clone();
         show(&result)?;
         progress.completion(installation_message(
             &record,
-            if options.updating {
-                "Updated Successfully"
-            } else {
-                "Installed Successfully"
-            },
+            &format!(
+                "{}\n{}{}",
+                if options.updating {
+                    "Updated Successfully"
+                } else {
+                    "Installed Successfully"
+                },
+                setup.message,
+                worker_warning(&worker)
+            ),
         ));
+    }
+    Ok(())
+}
+fn confirm_channel_switch(
+    channel: ReleaseChannel,
+    accepted: bool,
+    progress: Option<&Progress>,
+) -> Result<()> {
+    if accepted {
+        return Ok(());
+    }
+    let question = if channel == ReleaseChannel::Dev {
+        "A production version is installed. Would you like to install the experimental dev version instead?"
+    } else {
+        "You were getting experimental dev updates. Would you like to get only official production releases now?"
+    };
+    if !progress.is_some_and(|p| p.interactive()) || !std::io::stdin().is_terminal() {
+        bail!(
+            "{question} Re-run with --switch-channel to confirm, or --alias to install alongside it"
+        );
+    }
+    if let Some(progress) = progress {
+        progress.pause();
+    }
+    eprint!("{question} [y/N] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        bail!("Stopped. The installed release channel was left unchanged");
     }
     Ok(())
 }
@@ -1387,7 +1612,7 @@ async fn update_packages(root: &Path, cli: &Cli, selected_only: bool) -> Result<
     let mut failed = false;
     for (directory, context) in contexts {
         let checked: i64 = read(&directory.join("last-package-update.json"))?;
-        if now() - checked < 3600 {
+        if !update_due(checked, now()) {
             continue;
         }
         let records: BTreeMap<String, Installed> = read(&directory.join("installed.json"))?;
@@ -1413,22 +1638,7 @@ async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> R
     }
     // current_exe can resolve a package manager's command link. Inspect the
     // invocation too, before considering replacement of its pinned target.
-    let invocation = std::env::args_os().next().map(std::path::PathBuf::from);
-    let invoked_path = invocation.and_then(|path| {
-        if path.components().count() > 1 || path.is_absolute() {
-            Some(path)
-        } else {
-            std::env::var_os("PATH").and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .map(|dir| dir.join(&path))
-                    .find(|p| p.is_file())
-            })
-        }
-    });
-    if invoked_path
-        .as_ref()
-        .is_some_and(|path| fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()))
-    {
+    if fs::symlink_metadata(invocation_path()?).is_ok_and(|m| m.file_type().is_symlink()) {
         if force {
             bail!(
                 "Honeycomb was invoked through a managed command link; update it through its original package manager"
@@ -1449,7 +1659,7 @@ async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> R
         return Ok(());
     }
     let mut settings: Settings = read(&root.join("config.json"))?;
-    if !force && now() - settings.last_update_check < 3600 {
+    if !force && !update_due(settings.last_update_check, now()) {
         return Ok(());
     }
     settings.last_update_check = now();
@@ -1486,6 +1696,62 @@ fn automatic_updates_enabled(preference: bool) -> bool {
         preference,
         std::env::var("HONEYCOMB_AUTO_UPDATE").ok().as_deref(),
     )
+}
+fn update_due(last: i64, current: i64) -> bool {
+    last == 0 || (current - 1).div_euclid(60) > (last - 1).div_euclid(60)
+}
+fn next_update_delay(time: std::time::SystemTime) -> std::time::Duration {
+    let elapsed = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let mut next = (elapsed.as_secs() / 60) * 60 + 1;
+    if next <= elapsed.as_secs() {
+        next += 60;
+    }
+    std::time::Duration::from_secs(next).saturating_sub(elapsed)
+}
+fn ensure_update_worker(enabled: bool) -> Value {
+    if !enabled || std::env::var("HONEYCOMB_NO_SERVICE").as_deref() == Ok("1") {
+        return json!({"status":"disabled"});
+    }
+    let result = (|| -> Result<()> {
+        honeycomb_client::maintenance::install_service(&base_home()?, &invocation_path()?)
+    })();
+    match result {
+        Ok(()) => json!({"status":"enabled","schedule":"every minute at second 01"}),
+        Err(error) => {
+            json!({"status":"manual","message":format!("Automatic update worker could not start: {error:#}. Run honeycomb service install to retry, or honeycomb daemon under your process supervisor.")})
+        }
+    }
+}
+/// Preserve managed command links in service definitions instead of resolving to their payload.
+fn invocation_path() -> Result<PathBuf> {
+    let path = std::env::args_os()
+        .next()
+        .map(PathBuf::from)
+        .context("Missing CLI invocation")?;
+    let path = if path.components().count() > 1 || path.is_absolute() {
+        path
+    } else {
+        std::env::var_os("PATH")
+            .and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|directory| directory.join(&path))
+                    .find(|p| p.is_file())
+            })
+            .unwrap_or(std::env::current_exe()?)
+    };
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    })
+}
+fn worker_warning(value: &Value) -> String {
+    value["message"]
+        .as_str()
+        .map(|message| format!("\n{message}"))
+        .unwrap_or_default()
 }
 fn auto_update_preference(preference: bool, override_value: Option<&str>) -> bool {
     preference
@@ -1538,6 +1804,7 @@ async fn record_command(cli: &Cli, source: &str, event: &str, duration: u64, suc
             Command::Apps { .. } => "apps",
             Command::Releases { .. } => "releases",
             Command::Publication { .. } => "publication",
+            Command::Bundles { .. } => "bundles",
             Command::Drafts { .. } => "drafts",
             Command::Environments { .. } => "environments",
             Command::Operations { .. } => "operations",
@@ -1646,9 +1913,9 @@ mod tests {
                     assert!(!request.contains("x-testing-environment-key:"));
                 }
                 assert!(request.contains(if step == 0 {
-                    "/releases "
+                    "/releases?channel=prod "
                 } else {
-                    "/download?version=1.1.0 "
+                    "/download?version=1.1.0&channel=prod "
                 }));
                 let body = if step == 0 {
                     release.clone()
@@ -1784,7 +2051,7 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("download-")
         }));
-        // No second request is made within the hourly interval, including for failures.
+        // No second request is made within the minute interval, including for failures.
         update_packages(&root.0, &cli, false).await.unwrap();
         #[cfg(unix)]
         {
@@ -1823,6 +2090,26 @@ mod tests {
 
 #[cfg(test)]
 mod auto_update_tests {
+    #[test]
+    fn schedule_aligns_to_second_one_and_checks_each_minute() {
+        use std::time::{Duration, UNIX_EPOCH};
+        for (millis, wait) in [
+            (0, 1000),
+            (1000, 60000),
+            (1500, 59500),
+            (59999, 1001),
+            (60000, 1000),
+            (61000, 60000),
+        ] {
+            assert_eq!(
+                super::next_update_delay(UNIX_EPOCH + Duration::from_millis(millis)),
+                Duration::from_millis(wait)
+            );
+        }
+        assert!(!super::update_due(61, 120));
+        assert!(super::update_due(61, 121));
+        assert!(super::update_due(0, 100));
+    }
     #[test]
     fn process_opt_out_does_not_enable_a_disabled_preference() {
         for value in ["0", "false", "OFF", " no "] {

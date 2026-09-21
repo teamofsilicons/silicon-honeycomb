@@ -76,7 +76,7 @@ The environment root key must be exactly 32 alphanumeric characters. The SDK sen
 | --- | --- |
 | Identity | `iam`, `login`, `refresh`, `login_status`, `logout`, `logout_session` |
 | Applications | `search`, `app`, `create_app`, `update_app`, `upload_logo`, `reconcile_app` |
-| Releases | `releases`, `upload_release`, `download` |
+| Releases | `releases`, `releases_channel`, `upload_release`, `promote_release`, `download` |
 | Community | `review`, `star`, `report` |
 | Publication | `request_publication`, `publication`, `publication_message`, `activate_publication` |
 | Review work | `review_inbox`, `review_request`, `reply_review`, `decide_review`, `retry_review_plan` |

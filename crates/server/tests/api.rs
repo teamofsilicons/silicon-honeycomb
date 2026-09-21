@@ -169,7 +169,7 @@ async fn contracts_negotiate_and_retire_only_after_deprecation_and_seven_idle_da
         StatusCode::BAD_REQUEST
     );
     // Active contracts never retire just because the service is quiet.
-    sqlx::query("UPDATE api_contracts SET last_request_at=1")
+    sqlx::query("UPDATE api_contracts SET last_request_at=1 WHERE version='v1'")
         .execute(&s.db)
         .await
         .unwrap();
@@ -183,7 +183,7 @@ async fn contracts_negotiate_and_retire_only_after_deprecation_and_seven_idle_da
     assert_eq!(response.headers()["honeycomb-contract-state"], "active");
     let old = now() - contracts::QUIET_PERIOD_SECONDS - 60;
     // Recent traffic postpones retirement even when deprecation is older.
-    sqlx::query("UPDATE api_contracts SET state='deprecated',deprecated_at=?")
+    sqlx::query("UPDATE api_contracts SET state='deprecated',deprecated_at=? WHERE version='v1'")
         .bind(old)
         .execute(&s.db)
         .await
@@ -196,7 +196,7 @@ async fn contracts_negotiate_and_retire_only_after_deprecation_and_seven_idle_da
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["honeycomb-contract-state"], "deprecated");
     // A newer deprecation also starts a fresh seven-day interval.
-    sqlx::query("UPDATE api_contracts SET deprecated_at=?,last_request_at=?")
+    sqlx::query("UPDATE api_contracts SET deprecated_at=?,last_request_at=? WHERE version='v1'")
         .bind(now())
         .bind(old)
         .execute(&s.db)
@@ -204,13 +204,13 @@ async fn contracts_negotiate_and_retire_only_after_deprecation_and_seven_idle_da
         .unwrap();
     contracts::retire_quiet(&s).await.unwrap();
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT state FROM api_contracts")
+        sqlx::query_scalar::<_, String>("SELECT state FROM api_contracts WHERE version='v1'")
             .fetch_one(&s.db)
             .await
             .unwrap(),
         "deprecated"
     );
-    sqlx::query("UPDATE api_contracts SET deprecated_at=?,last_request_at=?")
+    sqlx::query("UPDATE api_contracts SET deprecated_at=?,last_request_at=? WHERE version='v1'")
         .bind(old)
         .bind(old)
         .execute(&s.db)
@@ -227,7 +227,7 @@ async fn contracts_negotiate_and_retire_only_after_deprecation_and_seven_idle_da
     );
     // Discovery remains available, and requests cannot silently resurrect v1.
     let (_, discovery) = call(&s, "GET", "/api/contracts", None, Value::Null, "", None).await;
-    assert_eq!(discovery["supported_versions"], json!([]));
+    assert_eq!(discovery["supported_versions"], json!(["v2"]));
     assert_eq!(discovery["versions"][0]["state"], "retired");
     assert_eq!(
         router
@@ -1337,6 +1337,7 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
     import_source(&s, "tos>root", &["other>dependency", "tos>leaf"], false).await;
     import_source(&s, "other>dependency", &["tos>leaf"], true).await;
     import_source(&s, "tos>leaf", &["tos>root"], false).await;
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','tos>root','prod','1.0.0','prod-checksum',1,'prod-reference',1),('production','tos>root','dev','9.0.0','dev-checksum',1,'dev-reference',1)").execute(&s.db).await.unwrap();
     let (_, env) = call(
         &s,
         "POST",
@@ -1369,6 +1370,27 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
             .await
             .unwrap();
     assert_eq!(count, 3);
+    let snapshot: String = sqlx::query_scalar(
+        "SELECT snapshot FROM environment_imports WHERE environment_id=? AND app_id='tos>root'",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&snapshot).unwrap()["selected_release"],
+        "1.0.0"
+    );
+    // An import pins production metadata; it never copies release records or
+    // production storage references into the isolated test release catalog.
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM releases WHERE plane=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
     let calls = services.calls.lock().unwrap().clone();
     assert_eq!(calls[0], "tos>iam");
     assert_eq!(calls.iter().filter(|s| *s == "tos>leaf").count(), 1);
@@ -4566,6 +4588,197 @@ async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() 
     );
 }
 
+struct PublicAdoptionManager {
+    snapshot: std::sync::Mutex<Value>,
+    configurations: std::sync::Mutex<Vec<Value>>,
+}
+#[async_trait]
+impl Management for PublicAdoptionManager {
+    async fn configure(&self, request: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        // Like IAM, leave the current accepted public configuration live while
+        // the proposed change completes ordinary publication authorization.
+        assert_eq!(request["visibility"], "public");
+        self.configurations.lock().unwrap().push(request.clone());
+        Ok(json!({"state":"pending"}))
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        unreachable!()
+    }
+    async fn application_snapshot(&self, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn adopted_public_identity_survives_pending_configuration_but_cannot_approve_it() {
+    use silicon_honeycomb_server::reconciliation;
+    let (mut s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("reconcile"),
+        "public-adoption-create-0001",
+        None,
+    )
+    .await;
+    let config: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    sqlx::query("UPDATE applications SET revision=0,effective_revision=0,iam_revision=9,credential_version=1,visibility='public',webhook_secret='' WHERE app_id='tos>reconcile'").execute(&s.db).await.unwrap();
+    let receipt = json!({"app_id":"tos>reconcile","configuration_revision":0,"iam_revision":9,"visibility":"public","preserved_public_visibility":true});
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,result,created_at) VALUES('public-adoption','production','operator:test','public-adoption','iam.adopt','tos>reconcile','hash',0,'accepted',?,0)")
+        .bind(receipt.to_string()).execute(&s.db).await.unwrap();
+    let manager = Arc::new(PublicAdoptionManager {
+        snapshot: std::sync::Mutex::new(json!({
+            "app_id":"tos>reconcile","iam_revision":10,"configuration_revision":0,
+            "visibility":"public","availability":"active","effective_configuration":config,
+        })),
+        configurations: Default::default(),
+    });
+    s.management = manager.clone();
+    reconciliation::tick(&s).await.unwrap();
+    let visibility = || {
+        sqlx::query_scalar::<_, String>(
+            "SELECT visibility FROM applications WHERE app_id='tos>reconcile'",
+        )
+        .fetch_one(&s.db)
+    };
+    assert_eq!(visibility().await.unwrap(), "public");
+    // A desired configuration must not disable the existing public IAM identity
+    // while its ordinary publication request is prepared and reviewed.
+    // A notification first hides the local catalog entry until its authoritative
+    // snapshot arrives. Updating in that window must never configure IAM private.
+    reconciliation::receive(
+        &s,
+        "production",
+        &json!({
+            "event_id":"public-adoption-event", "event_type":"honeycomb.application.changed.v1",
+            "aggregate":{"type":"application","version":11}, "data":{"app_id":"tos>reconcile"},
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(visibility().await.unwrap(), "private");
+    let mut proposed = input("reconcile");
+    proposed["visibility"] = json!("public");
+    proposed["app_scope"]["iam"] = json!(["self.identity.read", "self.tags.read"]);
+    let (status, pending) = call(
+        &s,
+        "PUT",
+        "/api/v1/apps/tos%3Ereconcile",
+        Some("admin"),
+        proposed,
+        "public-adoption-config-0001",
+        Some(0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{pending}");
+    assert_eq!(pending["state"], "pending");
+    assert!(manager.configurations.lock().unwrap().is_empty());
+    manager.snapshot.lock().unwrap()["iam_revision"] = json!(11);
+    reconciliation::reconcile(&s, "production", "tos>reconcile")
+        .await
+        .unwrap();
+    assert_eq!(visibility().await.unwrap(), "public");
+    let (status, retried) = call(
+        &s,
+        "POST",
+        &format!(
+            "/api/v1/operations/{}/retry",
+            pending["id"].as_str().unwrap()
+        ),
+        Some("admin"),
+        json!({}),
+        "public-adoption-retry-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried["state"], "pending");
+    assert_eq!(manager.configurations.lock().unwrap().len(), 1);
+    assert_eq!(
+        manager.configurations.lock().unwrap()[0]["expected_iam_revision"],
+        11
+    );
+    let (desired, effective): (i64, i64) = sqlx::query_as(
+        "SELECT revision,effective_revision FROM applications WHERE app_id='tos>reconcile'",
+    )
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!((desired, effective), (1, 0));
+    assert_eq!(visibility().await.unwrap(), "public");
+    for invalid_receipt in [
+        json!({"app_id":"tos>reconcile","configuration_revision":0,"iam_revision":9,"visibility":"public"}),
+        json!({"app_id":"tos>other","configuration_revision":0,"iam_revision":9,"visibility":"public","preserved_public_visibility":true}),
+    ] {
+        sqlx::query("UPDATE operations SET result=? WHERE id='public-adoption'")
+            .bind(invalid_receipt.to_string())
+            .execute(&s.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE application_reconciliation SET state='pending'")
+            .execute(&s.db)
+            .await
+            .unwrap();
+        reconciliation::reconcile(&s, "production", "tos>reconcile")
+            .await
+            .unwrap();
+        assert_eq!(visibility().await.unwrap(), "private");
+    }
+    sqlx::query("UPDATE operations SET result=? WHERE id='public-adoption'")
+        .bind(receipt.to_string())
+        .execute(&s.db)
+        .await
+        .unwrap();
+    // The operator receipt never overrides current IAM visibility/availability.
+    for (iam_visibility, availability) in [("private", "active"), ("public", "disabled")] {
+        {
+            let mut snapshot = manager.snapshot.lock().unwrap();
+            snapshot["visibility"] = json!(iam_visibility);
+            snapshot["availability"] = json!(availability);
+        }
+        sqlx::query("UPDATE application_reconciliation SET state='pending'")
+            .execute(&s.db)
+            .await
+            .unwrap();
+        reconciliation::reconcile(&s, "production", "tos>reconcile")
+            .await
+            .unwrap();
+        assert_eq!(visibility().await.unwrap(), "private");
+    }
+    // A later accepted configuration needs its own completed publication proof.
+    {
+        let mut snapshot = manager.snapshot.lock().unwrap();
+        snapshot["visibility"] = json!("public");
+        snapshot["availability"] = json!("active");
+        snapshot["configuration_revision"] = json!(1);
+    }
+    sqlx::query("UPDATE application_reconciliation SET state='pending'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    reconciliation::reconcile(&s, "production", "tos>reconcile")
+        .await
+        .unwrap();
+    assert_eq!(visibility().await.unwrap(), "private");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM publication_requests")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
 struct ConfiguredIdentityServices {
     db: sqlx::SqlitePool,
     identity: String,
@@ -5394,7 +5607,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
     );
     let request = Request::builder()
         .method("POST")
-        .uri("/api/v1/apps/tos%3Einvalid-release/releases")
+        .uri("/api/v1/apps/tos%3Einvalid-release/releases?channel=prod")
         .header("authorization", "Bearer admin")
         .header("if-match", "1")
         .header("idempotency-key", "upload-invalid-release")
@@ -5422,6 +5635,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
         .upload_release(
             "tos>invalid-release",
             &archive_path,
+            honeycomb_client::ReleaseChannel::Prod,
             &honeycomb_client::Mutation::at_revision(1),
         )
         .await
@@ -5523,7 +5737,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
     let repaired = honeycomb_core::package::pack(dir.path(), None).unwrap();
     let request = Request::builder()
         .method("POST")
-        .uri("/api/v1/apps/tos%3Einvalid-release/releases")
+        .uri("/api/v1/apps/tos%3Einvalid-release/releases?channel=prod")
         .header("authorization", "Bearer admin")
         .header("if-match", "2")
         .header("idempotency-key", "upload-repaired-release")
@@ -5564,3 +5778,71 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
 mod bundles;
 
 mod default_publication;
+
+#[tokio::test]
+async fn publication_preserves_both_channels_when_they_share_a_version() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(PublicationManager::default());
+    let storage = Arc::new(PublicationStorage::default());
+    s.storage = storage.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    sqlx::query("DELETE FROM publication_authorizations WHERE request_id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','dev','1.0.0','dev-checksum',1,'dev-release',1)").execute(&s.db).await.unwrap();
+    approve_publication(&s, &id).await;
+    let (_, done) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/activate"),
+        Some("admin"),
+        json!({}),
+        "both-channel-activation",
+        Some(1),
+    )
+    .await;
+    assert_eq!(done["state"], "accepted", "{done}");
+    assert_eq!(done["archives"].as_array().unwrap().len(), 2);
+    for channel in ["prod", "dev"] {
+        assert!(
+            done["archives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|archive| archive["channel"] == channel
+                    && archive["version"] == "1.0.0"
+                    && archive["state"] == "ready")
+        );
+    }
+    let references: Vec<String> = sqlx::query_scalar(
+        "SELECT storage_ref FROM releases WHERE app_id='tos>review-app' ORDER BY channel",
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(references, ["public:dev-release", "public:fixture-release"]);
+    assert_eq!(storage.calls.lock().unwrap().values().sum::<usize>(), 2);
+    let (status, publication) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app/publication",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let archives = publication["items"][0]["activation"]["archives"]
+        .as_array()
+        .unwrap();
+    assert_eq!(archives.len(), 2);
+    for channel in ["prod", "dev"] {
+        assert!(archives.iter().any(|archive| archive["channel"] == channel
+            && archive["version"] == "1.0.0"
+            && archive["state"] == "ready"));
+    }
+}

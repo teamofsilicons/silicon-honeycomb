@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 const RELEASES: &str =
     "https://api.github.com/repos/teamofsilicons/silicon-honeycomb/releases/latest";
-const CACHE_TTL: Duration = Duration::from_secs(300);
+const CACHE_TTL: Duration = Duration::from_secs(60);
 static CACHE: LazyLock<Mutex<Option<(Instant, Value)>>> = LazyLock::new(|| Mutex::new(None));
 
 pub async fn latest() -> Result<Response> {
@@ -23,15 +23,22 @@ pub async fn latest() -> Result<Response> {
     if let Some((at, release)) = &*cached
         && at.elapsed() < CACHE_TTL
     {
-        return Ok(reply(release.clone()));
+        return Ok(reply(
+            release.clone(),
+            CACHE_TTL.saturating_sub(at.elapsed()).as_secs(),
+        ));
     }
     let release = fetch(RELEASES).await?;
     *cached = Some((Instant::now(), release.clone()));
-    Ok(reply(release))
+    Ok(reply(release, CACHE_TTL.as_secs()))
 }
-fn reply(release: Value) -> Response {
+fn reply(release: Value, remaining_seconds: u64) -> Response {
+    // A downstream cache must not extend the backend cache freshness window.
     (
-        [(header::CACHE_CONTROL, "public, max-age=60")],
+        [(
+            header::CACHE_CONTROL,
+            format!("public, max-age={remaining_seconds}"),
+        )],
         Json(release),
     )
         .into_response()

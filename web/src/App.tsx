@@ -1,3 +1,5 @@
+import Bundles from "./Bundles";
+import Releases, { type ReleaseChannel } from "./Releases";
 import { LogoField } from "./LogoField";
 import { telemetryEnabled, setTelemetry, setTelemetrySource, setTelemetryAuthenticated, diagnostic } from "./telemetry";
 import EnvironmentRetention from "./EnvironmentRetention";
@@ -42,6 +44,7 @@ import {
 import {
   request,
   endpoint,
+  releaseEndpoint,
   safeLink,
   type AppRecord,
   type Session,
@@ -121,6 +124,7 @@ const blank = () => ({
   local_app_id: "",
   name: "",
   description: "",
+  visibility: "public",
   webhook_url: "",
   webhook_secret: "",
   webhook_scope: ["membership"],
@@ -170,7 +174,9 @@ export default function App() {
   const [showCreate, setShowCreate] = createSignal(false);
   const [logoUploading, setLogoUploading] = createSignal(false);
   const [firstRelease, setFirstRelease] = createSignal<File>();
-  const [pendingRelease, setPendingRelease] = createSignal<{ appId: string; file: File; key: string }>();
+  const [pendingRelease, setPendingRelease] = createSignal<{ appId: string; file: File; key: string; channel: ReleaseChannel }>();
+  const [uploadChannel, setUploadChannel] = createSignal<ReleaseChannel | "">("");
+  const [releaseRevision, setReleaseRevision] = createSignal(0);
   const [form, setForm] = createSignal<Record<string, any>>(blank());
   const editing = () => form().draft_edit_app_id as string | undefined;
   const [advanced, setAdvanced] = createSignal(false);
@@ -294,6 +300,7 @@ export default function App() {
   }
   async function select(app: AppRecord) {
     setSelected(app);
+    setUploadChannel("");
     setDetailsTab("overview");
     setReviews([]);
     setPublication(undefined);
@@ -343,6 +350,7 @@ export default function App() {
       org_id: app.org_id,
       body: {
         ...app.config,
+        visibility: app.config.visibility ?? app.visibility,
         draft_edit_app_id: app.app_id,
         draft_edit_revision: app.revision,
       },
@@ -412,13 +420,17 @@ export default function App() {
         obo_endpoints: JSON.parse(oboText()),
       };
       const archive = editingId ? undefined : firstRelease();
+      const channel = form().draft_release_channel as ReleaseChannel | undefined;
       const appId = `${payload.org_id}>${payload.local_app_id}`;
       if (archive) {
+        if (channel !== "prod" && channel !== "dev") throw new Error("Choose production or development for the first CLI release.");
         if (archive.size > 512 * 1024 * 1024) throw new Error("CLI archives must be no larger than 512 MiB.");
         const validation = await request("/api/v1/packages/validate", {
           method: "POST", headers: { "Content-Type": "application/gzip" }, body: archive,
         });
         if (!validation.valid) throw new Error(validation.errors.join("\n"));
+        if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(validation.manifest?.version || ""))
+          throw new Error("CLI release version must use x.x.x format without prerelease or build suffixes. Update honeycomb.yaml and pack the archive again.");
         if (validation.manifest?.app_id != null && validation.manifest.app_id !== appId)
           throw new Error(`The archive app_id must match ${appId}. Correct or omit app_id in honeycomb.yaml, then run honeycomb pack again.`);
       }
@@ -449,7 +461,8 @@ export default function App() {
         );
         await load();
         if (archive) {
-          setPendingRelease({ appId, file: archive, key: crypto.randomUUID() });
+          setPendingRelease({ appId, file: archive, key: crypto.randomUUID(), channel: channel! });
+          setUploadChannel(channel!);
           setSelected(await request(endpoint(appId)));
           setDetailsTab("release");
           setPublication(undefined);
@@ -475,7 +488,7 @@ export default function App() {
     const pending = pendingRelease();
     const app = selected();
     if (!pending || !app || pending.appId !== app.app_id) return;
-    await request(endpoint(app.app_id) + "/releases", {
+    const result = await request(releaseEndpoint(app.app_id) + `/releases?channel=${pending.channel}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/gzip",
@@ -487,11 +500,17 @@ export default function App() {
     setPendingRelease(undefined);
     setSelected(await request(endpoint(app.app_id)));
     setPublication(await request(endpoint(app.app_id) + "/publication"));
+    setReleaseRevision(value => value + 1);
     await load();
+    if (result.publication?.state === "request_pending") {
+      throw new Error(`The CLI release was uploaded, but its public approval request needs attention. ${result.publication.error} Retry the request below.`);
+    }
   }
   async function upload(file: File | undefined) {
     if (!file || !selected() || busy()) return;
-    setPendingRelease({ appId: selected()!.app_id, file, key: crypto.randomUUID() });
+    const channel = uploadChannel();
+    if (!channel) { setError("Choose production or development before uploading a CLI release."); return; }
+    setPendingRelease({ appId: selected()!.app_id, file, key: crypto.randomUUID(), channel });
     await act(async () => {
       await sendRelease();
     }, "CLI release uploaded.");
@@ -550,6 +569,7 @@ export default function App() {
             {isConsole() ? "Applications" : "Browse applications"}
           </button>
           <Show when={isConsole()}>
+            <button class={view() === "bundles" ? "active" : ""} onClick={() => navigate("bundles")}><Package size={18} />Bundles</button>
             <button
               class={view() === "drafts" ? "active" : ""}
               onClick={() => navigate("drafts")}
@@ -693,8 +713,8 @@ export default function App() {
                   <div class="signin-note">
                     <Lock size={19} />
                     <span>
-                      Applications start private to their organization. You
-                      decide when to request a public release.
+                      Public approval is requested automatically once your
+                      application and first production release are ready, unless you choose to keep it private.
                     </span>
                   </div>
                 </section>
@@ -718,6 +738,7 @@ export default function App() {
               <Show when={view() === "sent-requests" && isConsole()}>
                 <SentRequests revision={sentRevision()} open={app => { void select(app); setDetailsTab("release"); }} discuss={item => void openReview(item)} />
               </Show>
+              <Show when={view() === "bundles" && isConsole()}><Bundles organizations={admins().map(([org]) => org)} /></Show>
               <Show when={view() === "applications"}>
                 <section class="page-heading">
                   <div>
@@ -877,7 +898,7 @@ export default function App() {
                               <span class="mono">
                                 {app.latest_version
                                   ? `v${app.latest_version}`
-                                  : "No releases"}
+                                  : "No production releases"}
                               </span>
                               <Show when={app.state !== "active"}>
                                 <Badge>Pending IAM</Badge>
@@ -1122,8 +1143,8 @@ export default function App() {
                     <Code text="honeycomb pack" />
                     <Code text="honeycomb apps create application.json" />
                     <p>
-                      Applications start private. Upload a release, then request
-                      publication when you’re ready.
+                      Upload a release to request public approval automatically,
+                      or choose to keep your application private.
                     </p>
                     <Code text="honeycomb --help" />
                   </section>
@@ -1188,7 +1209,7 @@ export default function App() {
                     {app().installs} downloads
                   </span>
                   <span class="mono">
-                    {app().latest_version || "No releases"}
+                    {app().latest_version || "No production releases"}
                   </span>
                 </div>
                 <p class="description">{app().description}</p>
@@ -1203,7 +1224,14 @@ export default function App() {
                 <Show when={app().latest_version}>
                   <h3 class="section-label">INSTALL FROM YOUR TERMINAL</h3>
                   <Code text={`honeycomb install '${app().app_id}'`} />
+                  <p class="muted">Installs the latest official production release and follows production updates.</p>
                 </Show>
+                <details class="experimental-install">
+                  <summary>Experimental development releases</summary>
+                  <p class="muted">If this application offers development releases, use this command to follow experimental updates. Honeycomb asks before switching an installed application between channels.</p>
+                  <Code text={`honeycomb install '${app().app_id}>test'`} />
+                  <p class="muted">For an exact version, append @x.x.x to either application identifier.</p>
+                </details>
                 <div class="detail-links">
                   <For each={["website_url", "docs_url", "base_url"]}>
                     {(key) => (
@@ -1374,7 +1402,7 @@ export default function App() {
               </Show>
               <Show when={detailsTab() === "release"}>
                 <Show when={pendingRelease()?.appId === app().app_id}>
-                  <p class="muted">Selected archive: {pendingRelease()?.file.name}</p>
+                  <p class="muted">Selected archive: {pendingRelease()?.file.name} · {pendingRelease()?.channel === "dev" ? "Development" : "Production"}</p>
                   <button class="button outline" disabled={busy()} onClick={() => void act(sendRelease, "CLI release uploaded.")}>Retry release upload</button>
                 </Show>
                 <Show when={app().iam_revision === 0}>
@@ -1386,8 +1414,15 @@ export default function App() {
                 <h3>Upload a CLI release</h3>
                 <p class="muted">
                   Package all required targets with honeycomb pack, then upload
-                  the .tar.gz archive.
+                  the .tar.gz archive. Its version must use x.x.x format.
                 </p>
+                <label>Upload release channel
+                  <select value={uploadChannel()} disabled={busy()} onChange={e => setUploadChannel(e.currentTarget.value as ReleaseChannel | "")}>
+                    <option value="" disabled>Choose a release channel</option>
+                    <option value="prod">Production — official releases</option>
+                    <option value="dev">Development — experimental releases</option>
+                  </select>
+                </label>
                 <label class="upload-zone">
                   <Upload size={24} />
                   <strong>
@@ -1400,10 +1435,21 @@ export default function App() {
                     aria-label="Upload CLI archive"
                     type="file"
                     accept=".gz,.tar.gz,application/gzip"
-                    disabled={busy()}
-                    onChange={(e) => void upload(e.currentTarget.files?.[0])}
+                    disabled={busy() || !uploadChannel()}
+                    onChange={(e) => {
+                      const file = e.currentTarget.files?.[0];
+                      e.currentTarget.value = "";
+                      void upload(file);
+                    }}
                   />
                 </label>
+                <div class="section-divider" />
+                <Releases app={app()} refresh={releaseRevision()} busy={busy()} setBusy={setBusy} changed={async () => {
+                  setSelected(await request(endpoint(app().app_id)));
+                  setPublication(await request(endpoint(app().app_id) + "/publication"));
+                  setReleaseRevision(value => value + 1);
+                  await load();
+                }} />
                 <div class="section-divider" />
                 <Show when={!publication()?.items?.some((request: { revision: number }) => request.revision === app().revision)}>
                 <h3>{app().visibility === "public" ? "Request scope review" : "Request public release"}</h3>
@@ -1411,6 +1457,9 @@ export default function App() {
                   Provider scope approvals and Honeycomb verification are
                   required before public access is enabled.
                 </p>
+                <Show when={app().config.visibility === "public" && !app().latest_version}>
+                  <p class="muted">Public approval will be requested automatically after your first valid production CLI release is uploaded and IAM accepts the configuration. Upload a production release or promote a development release when it is ready.</p>
+                </Show>
                 <form
                   class="review-form"
                   onSubmit={(e) => {
@@ -1457,7 +1506,7 @@ export default function App() {
                       <Show when={p.state === "awaiting_activation" || p.state === "activating"}><p class="muted">All approvals passed. Honeycomb is completing publication with IAM and release storage.</p></Show>
                       <Show when={p.error}><p class="muted">{p.error}</p></Show>
                       <Show when={p.activation?.error}><p class="field-error">{p.activation.error}</p></Show>
-                      <For each={p.activation?.archives || []}>{(archive)=><p>Release {archive.version} · {archive.state}{archive.error ? ` · ${archive.error}` : ""}</p>}</For>
+                      <For each={p.activation?.archives || []}>{(archive)=><p>{archive.channel === "dev" ? "Dev" : "Production"} release {archive.version} · {archive.state}{archive.error ? ` · ${archive.error}` : ""}</p>}</For>
                       <Show when={(p.state==="awaiting_activation" || p.state==="activating") && (p.error || p.activation?.error)}><button class="button primary" disabled={busy() || (p.state==="activating" && !p.activation?.idempotency_key)} onClick={()=>void act(async()=>{
                         const headers:Record<string,string>={"If-Match":String(p.revision)};if(p.activation?.idempotency_key)headers["Idempotency-Key"]=p.activation.idempotency_key;
                         const result=await request(`/api/v1/review-requests/${p.id}/activate`,{method:"POST",headers,body:"{}"});
@@ -1519,7 +1568,7 @@ export default function App() {
           <p class="muted">
             {editing()
               ? "Changes take effect after IAM accepts them. Other organization admins can continue from this draft."
-              : "Start with a private home for your application. Your organization’s admins can continue from this draft."}
+              : "Public approval is requested automatically when your configuration and first production release are ready. Your organization’s admins can continue from this draft."}
           </p>
           <div class="form-grid">
             <label>
@@ -1583,10 +1632,26 @@ export default function App() {
               words · 50–1,000 required
             </small>
           </label>
+          <label>
+            Publication preference
+            <select value={form().visibility} onChange={e => edit("visibility", e.currentTarget.value)}>
+              <option value="public">Public — automatically request approval</option>
+              <option value="private">Private — do not request approval</option>
+            </select>
+            <small>Public access starts only after all required approvals. This preference controls new requests; it does not revoke an existing public release.</small>
+          </label>
           <div class="section-divider" />
           <Show when={!editing()}>
             <h3>First CLI release</h3>
             <p class="muted">Choose the .tar.gz produced by honeycomb pack. It will be validated before registration and uploaded after your application is saved.</p>
+            <label>First release channel
+              <select value={form().draft_release_channel || ""} required={!!firstRelease()} disabled={busy()} onChange={e => edit("draft_release_channel", e.currentTarget.value)}>
+                <option value="" disabled>Choose a release channel</option>
+                <option value="prod">Production — official releases</option>
+                <option value="dev">Development — experimental releases</option>
+              </select>
+              <small>Each channel has its own x.x.x versions. A development release can be promoted later with a new production version.</small>
+            </label>
             <label class="upload-zone">
               <Upload size={24} />
               <strong>{firstRelease()?.name || "Choose a .tar.gz release"}</strong>
@@ -1594,7 +1659,7 @@ export default function App() {
               <input type="file" aria-label="First CLI archive" accept=".gz,.tar.gz,application/gzip" disabled={busy()} onChange={e => setFirstRelease(e.currentTarget.files?.[0])} />
             </label>
             <Show when={firstRelease()}><button type="button" class="text-link" disabled={busy()} onClick={() => setFirstRelease(undefined)}>Add release later</button></Show>
-            <p class="muted">You can add the release later, but it is required before publishing. Files are not saved in drafts; select the archive again when reopening a draft.</p>
+            <p class="muted">You can add the release later. A production release is required before publishing; a development release can be promoted when ready. Files are not saved in drafts; select the archive again when reopening a draft.</p>
             <div class="section-divider" />
           </Show>
           <LogoField org={form().org_id} value={form().logo_url} change={url => edit("logo_url", url)} onBusy={setLogoUploading} />
@@ -1740,7 +1805,7 @@ export default function App() {
                 ? "Saving…"
                 : editing()
                   ? "Save configuration"
-                  : "Create private application"}
+                  : "Create application"}
               <ArrowRight size={16} />
             </button>
           </div>

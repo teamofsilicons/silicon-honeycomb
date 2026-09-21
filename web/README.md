@@ -11,6 +11,16 @@ The visual reference is the current `silicon-interface-frontend`: paper surfaces
 `#1736B8`, Source Serif 4 headings, IBM Plex Sans and Mono, thin rules and spacious
 layouts. Identity, authorization and product behavior belong to Honeycomb.
 
+The console requires a release channel for both the first archive and subsequent
+uploads. Release history defaults to production and can show development
+independently. Development releases can be promoted by entering a production
+version; uncertain uploads and promotions retain their idempotency key when retried.
+The library defaults to official production install commands and offers expandable
+experimental installation instructions.
+Release requests and downloads use HTTP v2 with matching negotiation headers;
+authentication, application configuration, and publication continue to use v1.
+The website session proxy forwards both versions without moving tokens to the browser.
+
 ## Local development
 
 Requires Node 24+ and Rust from the workspace. Run `npm ci` here. For the production
@@ -75,6 +85,9 @@ The fixture is not included in the production server.
 Desktop/mobile journeys cover public and private search, hosted login redirect,
 app creation, publication gating, draft recovery, sign-out, CSRF/state rejection
 and responsive layout. Traces and screenshots are retained on failure.
+Release-channel browser checks cover independent histories, required upload
+selection, retry identity, production-version validation and promotion, and
+experimental install instructions on desktop and mobile.
 
 Real IAM activation and shared lifecycle completion require the integration in
 `../docs/IAM-HANDOFF.md`. The console displays pending operations until accepted.

@@ -163,12 +163,18 @@ impl Client {
         })
     }
     fn url(&self, segments: &[&str]) -> Result<Url> {
+        self.url_version("v1", segments)
+    }
+    fn release_url(&self, segments: &[&str]) -> Result<Url> {
+        self.url_version("v2", segments)
+    }
+    fn url_version(&self, version: &str, segments: &[&str]) -> Result<Url> {
         let mut url = self.base.clone();
         {
             let mut path = url
                 .path_segments_mut()
                 .map_err(|_| anyhow::anyhow!("Invalid API origin"))?;
-            path.clear().extend(["api", "v1"]).extend(segments);
+            path.clear().extend(["api", version]).extend(segments);
         }
         Ok(url)
     }
@@ -178,10 +184,15 @@ impl Client {
         url: Url,
         mutation: Option<&Mutation>,
     ) -> reqwest::RequestBuilder {
+        let version = if url.path().starts_with("/api/v2/") {
+            "v2"
+        } else {
+            "v1"
+        };
         let mut request = self
             .http
             .request(method, url)
-            .header("honeycomb-api-version", "v1")
+            .header("honeycomb-api-version", version)
             .header("honeycomb-client-version", env!("CARGO_PKG_VERSION"))
             .header(
                 "x-honeycomb-telemetry",
@@ -333,6 +344,45 @@ impl Client {
             &Self::bounded(response, 4 * 1024 * 1024).await?,
         )?)
     }
+    /// List applications visible to a current member of an organization, including private apps.
+    pub async fn organization_apps(
+        &self,
+        org: &str,
+        after: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Value> {
+        let mut url = self.url(&["organizations", org, "apps"])?;
+        if let Some(after) = after {
+            url.query_pairs_mut().append_pair("after", after);
+        }
+        if let Some(limit) = limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+        let response = Self::check(self.request(Method::GET, url, None).send().await?).await?;
+        Ok(serde_json::from_slice(
+            &Self::bounded(response, 4 * 1024 * 1024).await?,
+        )?)
+    }
+    /// Send a delegated organization-app query. Sign `serde_json::to_vec(request)`
+    /// when requesting the proof; these are the exact bytes sent by this method.
+    pub async fn organization_apps_obo(
+        &self,
+        request: &Value,
+        access_proof: &str,
+    ) -> Result<Value> {
+        let response = Self::check(
+            self.request(Method::POST, self.url(&["obo", "apps", "list"])?, None)
+                .header("x-iam-obo-access-proof", access_proof)
+                .json(request)
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(serde_json::from_slice(
+            &Self::bounded(response, 4 * 1024 * 1024).await?,
+        )?)
+    }
     pub async fn app(&self, id: &str) -> Result<App> {
         self.get(&["apps", id]).await
     }
@@ -369,11 +419,56 @@ impl Client {
     pub async fn update_app(&self, id: &str, input: &AppInput, m: &Mutation) -> Result<Value> {
         self.mutate(Method::PUT, &["apps", id], input, m).await
     }
+    /// List production releases. Development releases are selected explicitly.
     pub async fn releases(&self, id: &str) -> Result<Vec<Release>> {
-        let value: Value = self.get(&["apps", id, "releases"]).await?;
+        self.releases_channel(id, ReleaseChannel::Prod).await
+    }
+    pub async fn releases_channel(
+        &self,
+        id: &str,
+        channel: ReleaseChannel,
+    ) -> Result<Vec<Release>> {
+        let mut url = self.release_url(&["apps", id, "releases"])?;
+        url.query_pairs_mut()
+            .append_pair("channel", channel.as_str());
+        let response = Self::check(self.request(Method::GET, url, None).send().await?).await?;
+        let value: Value =
+            serde_json::from_slice(&Self::bounded(response, 4 * 1024 * 1024).await?)?;
         Ok(serde_json::from_value(value["items"].clone())?)
     }
-    pub async fn upload_release(&self, id: &str, path: &Path, m: &Mutation) -> Result<Value> {
+    /// Copy an immutable dev release into a new production version.
+    pub async fn promote_release(
+        &self,
+        id: &str,
+        source_version: &str,
+        production_version: &str,
+        m: &Mutation,
+    ) -> Result<Value> {
+        if !valid_release_version(production_version) {
+            bail!("Production version must be x.y.z");
+        }
+        let response = Self::check(
+            self.request(
+                Method::POST,
+                self.release_url(&["apps", id, "releases", source_version, "promote"])?,
+                Some(m),
+            )
+            .json(&json!({"version":production_version}))
+            .send()
+            .await?,
+        )
+        .await?;
+        Ok(serde_json::from_slice(
+            &Self::bounded(response, 4 * 1024 * 1024).await?,
+        )?)
+    }
+    pub async fn upload_release(
+        &self,
+        id: &str,
+        path: &Path,
+        channel: ReleaseChannel,
+        m: &Mutation,
+    ) -> Result<Value> {
         // The authenticated upload uses the server's package validator, which retains
         // exact failures for a later publication request in this app and context.
         let file = tokio::fs::File::open(path).await?;
@@ -385,8 +480,11 @@ impl Client {
         if bytes.len() as u64 > package::MAX_ARCHIVE_BYTES {
             bail!("Archive exceeds the maximum upload size");
         }
+        let mut url = self.release_url(&["apps", id, "releases"])?;
+        url.query_pairs_mut()
+            .append_pair("channel", channel.as_str());
         let response = Self::check(
-            self.request(Method::POST, self.url(&["apps", id, "releases"])?, Some(m))
+            self.request(Method::POST, url, Some(m))
                 .header("content-type", "application/gzip")
                 .body(bytes)
                 .send()
@@ -413,9 +511,10 @@ impl Client {
         if release.app_id != id {
             bail!("Release belongs to a different application");
         }
-        let mut url = self.url(&["apps", id, "download"])?;
+        let mut url = self.release_url(&["apps", id, "download"])?;
         url.query_pairs_mut()
-            .append_pair("version", &release.version);
+            .append_pair("version", &release.version)
+            .append_pair("channel", release.channel.as_str());
         progress(Stage("Connecting to package download"));
         let response = Self::check(
             self.request(Method::GET, url, None)
@@ -642,6 +741,23 @@ impl Client {
     }
     pub async fn retry_operation(&self, id: &str, m: &Mutation) -> Result<Value> {
         self.mutate(Method::POST, &["operations", id, "retry"], &json!({}), m)
+            .await
+    }
+    /// Read organization-authorized bundle definitions, including existing IAM bundles.
+    pub async fn bundles(&self) -> Result<Value> {
+        self.get(&["bundles"]).await
+    }
+    pub async fn bundle(&self, id: &str) -> Result<Value> {
+        self.get(&["bundles", id]).await
+    }
+    /// Create or update a bundle using its current IAM revision (zero for a new ID).
+    pub async fn configure_bundle(
+        &self,
+        id: &str,
+        body: &Value,
+        mutation: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(Method::PUT, &["bundles", id], body, mutation)
             .await
     }
     pub async fn drafts(&self, org: &str) -> Result<Value> {

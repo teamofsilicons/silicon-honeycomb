@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail};
 use std::{fs, path::Path, process::Command};
 
 /// Fetch the latest vendor release, verify its checksum, and atomically replace the CLI.
-/// Prebuilt installs need no Rust toolchain for their hourly updates.
+/// Prebuilt installs need no Rust toolchain for their minute updates.
 pub async fn update_cli(prefix: &Path, current_executable: &Path) -> Result<bool> {
     update_cli_with_progress(prefix, current_executable, &|_| {}).await
 }
@@ -185,17 +185,38 @@ fn xml(s: &str) -> String {
 }
 /// Render a launchd worker without interpolating unescaped paths into XML.
 pub fn launchd_plist(home: &Path, executable: &Path) -> String {
+    launchd_plist_named(home, executable, &service_name(home))
+}
+fn service_name(home: &Path) -> String {
+    if dirs::home_dir().as_ref().is_some_and(|user| {
+        user == home
+            || user
+                .canonicalize()
+                .ok()
+                .zip(home.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b)
+    }) {
+        "com.teamofsilicons.honeycomb.updater".into()
+    } else {
+        format!(
+            "com.teamofsilicons.honeycomb.updater.{}",
+            crate::context_fingerprint(&home.to_string_lossy(), None)
+        )
+    }
+}
+fn launchd_plist_named(home: &Path, executable: &Path, name: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>Label</key><string>com.teamofsilicons.honeycomb.updater</string>
+<key>Label</key><string>{}</string>
 <key>ProgramArguments</key><array><string>{}</string><string>daemon</string></array>
 <key>EnvironmentVariables</key><dict><key>SILICON_HOME</key><string>{}</string></dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 <key>ThrottleInterval</key><integer>60</integer>
 </dict></plist>
 "#,
+        xml(name),
         xml(&executable.to_string_lossy()),
         xml(&home.to_string_lossy())
     )
@@ -209,24 +230,35 @@ fn systemd_escape(s: &str) -> String {
 }
 pub fn systemd_unit(home: &Path, executable: &Path) -> String {
     format!(
-        "[Unit]\nDescription=Honeycomb hourly CLI updater\n[Service]\nExecStart=\"{}\" daemon\nEnvironment=\"SILICON_HOME={}\"\nRestart=on-failure\nRestartSec=60\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Honeycomb minute CLI and application updater\n[Service]\nExecStart=\"{}\" daemon\nEnvironment=\"SILICON_HOME={}\"\nRestart=always\nRestartSec=5\n[Install]\nWantedBy=default.target\n",
         systemd_escape(&executable.to_string_lossy()),
         systemd_escape(&home.to_string_lossy())
     )
 }
 /// Register the per-user worker. This does not require root privileges.
 pub fn install_service(home: &Path, executable: &Path) -> Result<()> {
+    let name = service_name(home);
     match std::env::consts::OS {
         "macos" => {
             let dir = dirs::home_dir()
                 .context("Cannot find OS user home")?
                 .join("Library/LaunchAgents");
             fs::create_dir_all(&dir)?;
-            let path = dir.join("com.teamofsilicons.honeycomb.updater.plist");
-            fs::write(&path, launchd_plist(home, executable))?;
+            let path = dir.join(format!("{name}.plist"));
+            let content = launchd_plist(home, executable);
             let uid = Command::new("id").arg("-u").output()?;
             let uid = String::from_utf8(uid.stdout)?.trim().to_owned();
             let domain = format!("gui/{uid}");
+            if fs::read_to_string(&path).ok().as_deref() == Some(&content)
+                && Command::new("launchctl")
+                    .args(["print", &format!("{domain}/{name}")])
+                    .output()?
+                    .status
+                    .success()
+            {
+                return Ok(());
+            }
+            fs::write(&path, content)?;
             let _ = Command::new("launchctl")
                 .args(["bootout", &domain])
                 .arg(&path)
@@ -247,18 +279,29 @@ pub fn install_service(home: &Path, executable: &Path) -> Result<()> {
                 .context("Cannot find OS configuration directory")?
                 .join("systemd/user");
             fs::create_dir_all(&dir)?;
-            fs::write(
-                dir.join("honeycomb-updater.service"),
-                systemd_unit(home, executable),
-            )?;
-            for args in [
+            let unit_name = if name == "com.teamofsilicons.honeycomb.updater" {
+                "honeycomb-updater.service".into()
+            } else {
+                format!("{name}.service")
+            };
+            let path = dir.join(&unit_name);
+            let content = systemd_unit(home, executable);
+            let changed = fs::read_to_string(&path).ok().as_deref() != Some(&content);
+            if changed {
+                fs::write(&path, content)?;
+            }
+            let mut commands = vec![
                 vec!["--user", "daemon-reload"],
-                vec!["--user", "enable", "--now", "honeycomb-updater.service"],
-            ] {
-                let status = Command::new("systemctl").args(args).status().context(
+                vec!["--user", "enable", "--now", &unit_name],
+            ];
+            if changed {
+                commands.push(vec!["--user", "restart", &unit_name]);
+            }
+            for args in commands {
+                let output = Command::new("systemctl").args(args).output().context(
                     "No user systemd session; run honeycomb daemon under your process supervisor",
                 )?;
-                if !status.success() {
+                if !output.status.success() {
                     bail!(
                         "Cannot start the user update worker; run honeycomb daemon under your process supervisor"
                     );
@@ -276,29 +319,42 @@ pub fn install_service(home: &Path, executable: &Path) -> Result<()> {
                 }
                 Ok(value.replace('%', "%%"))
             };
-            fs::write(
-                &script,
-                format!(
-                    "@echo off\r\nset \"SILICON_HOME={}\"\r\n\"{}\" daemon --once\r\n",
-                    escape(home)?,
-                    escape(executable)?
-                ),
-            )?;
+            let content = format!(
+                "@echo off\r\nset \"SILICON_HOME={}\"\r\n:run\r\n\"{}\" daemon\r\ntimeout /t 5 /nobreak >nul\r\ngoto run\r\n",
+                escape(home)?,
+                escape(executable)?
+            );
+            let changed = fs::read_to_string(&script).ok().as_deref() != Some(&content);
+            fs::write(&script, content)?;
             let task = format!("cmd.exe /d /c \"{}\"", script.display());
-            let status = Command::new("schtasks")
-                .args([
-                    "/Create",
-                    "/F",
-                    "/SC",
-                    "HOURLY",
-                    "/TN",
-                    "HoneycombUpdater",
-                    "/TR",
-                    &task,
-                ])
-                .status()?;
-            if !status.success() {
-                bail!("Could not register HoneycombUpdater scheduled task");
+            let task_name = if name == "com.teamofsilicons.honeycomb.updater" {
+                "HoneycombUpdater"
+            } else {
+                &name
+            };
+            if changed
+                || !Command::new("schtasks")
+                    .args(["/Query", "/TN", task_name])
+                    .output()?
+                    .status
+                    .success()
+            {
+                let output = Command::new("schtasks")
+                    .args([
+                        "/Create", "/F", "/SC", "ONLOGON", "/TN", task_name, "/TR", &task,
+                    ])
+                    .output()?;
+                if !output.status.success() {
+                    bail!("Could not register HoneycombUpdater scheduled task");
+                }
+            }
+            if !Command::new("schtasks")
+                .args(["/Run", "/TN", task_name])
+                .output()?
+                .status
+                .success()
+            {
+                bail!("Could not start HoneycombUpdater scheduled task");
             }
         }
         _ => bail!("Install honeycomb daemon with your operating system's process supervisor"),

@@ -235,8 +235,47 @@ pub struct App {
     pub stars: i64,
     pub installs: i64,
 }
+/// Release tracks have independent immutable version histories.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseChannel {
+    #[default]
+    Prod,
+    Dev,
+}
+impl ReleaseChannel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prod => "prod",
+            Self::Dev => "dev",
+        }
+    }
+}
+impl std::fmt::Display for ReleaseChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl std::str::FromStr for ReleaseChannel {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "prod" => Ok(Self::Prod),
+            "dev" => Ok(Self::Dev),
+            _ => Err("channel must be prod or dev"),
+        }
+    }
+}
+/// Both channels use exactly x.y.z, without prerelease or build suffixes.
+pub fn valid_release_version(value: &str) -> bool {
+    semver::Version::parse(value)
+        .is_ok_and(|v| v.pre.is_empty() && v.build.is_empty() && v.to_string() == value)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Release {
+    #[serde(default)]
+    pub channel: ReleaseChannel,
     pub app_id: String,
     pub version: String,
     pub sha256: String,

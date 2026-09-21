@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix='honeycomb-docs-') as tmp:
   folder=package/'targets'/target;folder.mkdir(parents=True)
   exe=folder/('my-app.exe' if target.startswith('windows') else 'my-app')
   exe.write_bytes(b'MZ docs structure fixture' if target.startswith('windows') else b'#!/bin/sh\nexit 0\n');exe.chmod(0o755)
- env=dict(os.environ,SILICON_HOME=str(root/'home'),HONEYCOMB_TELEMETRY='false')
+ env=dict(os.environ,SILICON_HOME=str(root/'home'),HONEYCOMB_TELEMETRY='false',HONEYCOMB_AUTO_UPDATE='0',HONEYCOMB_NO_SERVICE='1')
  for command in [['validate',str(package)],['pack',str(package),'--output',str(root/'release.tar.gz')],['validate',str(root/'release.tar.gz')]]:
   subprocess.run([str(binary),*command],env=env,check=True,capture_output=True,text=True)
  print('PASS: downloadable manifest validates, packs, and revalidates with six fixture payloads (structural check, not native binary execution).')
