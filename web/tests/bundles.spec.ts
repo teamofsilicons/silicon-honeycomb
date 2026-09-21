@@ -19,6 +19,6 @@ test("bundle editor preserves existing members and retries an uncertain save", a
   await page.getByRole("button", {name:"Save bundle",exact:true}).click();
   await expect(page.getByRole("alert")).toContainText("Response interrupted");
   await page.getByRole("button", {name:"Save bundle",exact:true}).click();
-  await expect(page.getByRole("status")).toContainText("Bundle accepted by IAM");
+  await expect(page.getByRole("status").filter({ hasText: "Bundle accepted by IAM" })).toBeVisible();
   expect(writes).toHaveLength(2);expect(writes[0]).toEqual(writes[1]);expect(writes[0].revision).toBe("1");
 });
