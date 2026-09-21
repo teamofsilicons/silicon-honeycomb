@@ -205,9 +205,22 @@ impl IdentityProvider for Iam {
             return Err(Error::unauthorized());
         }
         let principal_id = inspected
-            .principal_id
-            .ok_or_else(Error::unauthorized)?
-            .to_string();
+            .public_id
+            .clone()
+            .or_else(|| {
+                inspected
+                    .authorization
+                    .as_ref()
+                    .and_then(|a| a.public_id.clone())
+            })
+            .or_else(|| {
+                inspected
+                    .authorizations
+                    .as_ref()
+                    .and_then(|items| items.first().and_then(|a| a.public_id.clone()))
+            })
+            .filter(|id| !id.is_empty())
+            .ok_or_else(Error::unauthorized)?;
         let mut identity = Identity {
             principal_id,
             actor_type: value["actor_type"].as_str().map(str::to_owned),
@@ -222,7 +235,7 @@ impl IdentityProvider for Iam {
         for a in snapshots {
             let a = serde_json::to_value(a).map_err(|e| anyhow::anyhow!(e))?;
             if a["audience"].as_str() != Some(&self.app_id)
-                || a["principal_id"].as_str() != Some(&identity.principal_id)
+                || a["public_id"].as_str() != Some(&identity.principal_id)
             {
                 return Err(Error::unauthorized());
             }

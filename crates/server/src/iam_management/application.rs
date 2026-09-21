@@ -69,7 +69,7 @@ impl IamManagement {
                 .split_once('>')
                 .is_none_or(|(org, _)| org != identity.org_id)
             || identity.iam_revision <= 0
-            || identity.application_id.is_nil()
+            || identity.application_id.is_empty()
             || identity.organization_id.is_nil()
         {
             return Err(Error::unavailable(

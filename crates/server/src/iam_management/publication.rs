@@ -222,13 +222,13 @@ impl IamManagement {
         provider: &str,
     ) -> Result<Vec<String>> {
         let plan = uuid(plan)?;
-        let mut cursor = None;
+        let mut cursor: Option<String> = None;
         let mut seen = BTreeSet::new();
         let mut emails = BTreeSet::new();
         loop {
             let page = self
                 .client
-                .notification_recipients(plan, provider, cursor, Some(50))
+                .notification_recipients(plan, provider, cursor.as_deref(), Some(50))
                 .await
                 .map_err(map_error)?;
             if page.plan_id != plan || page.provider != provider {
@@ -245,20 +245,20 @@ impl IamManagement {
             let Some(next) = page.next_cursor else {
                 return Ok(emails.into_iter().collect());
             };
-            if !seen.insert(next) {
+            if !seen.insert(next.clone()) {
                 return Err(Error::unavailable("IAM repeated a recipient cursor"));
             }
             cursor = Some(next);
         }
     }
     pub(super) async fn organization_recipients_sdk(&self, org: &str) -> Result<Vec<String>> {
-        let mut cursor = None;
+        let mut cursor: Option<String> = None;
         let mut seen = BTreeSet::new();
         let mut emails = BTreeSet::new();
         loop {
             let page = self
                 .client
-                .organization_recipients(org, cursor, Some(50))
+                .organization_recipients(org, cursor.as_deref(), Some(50))
                 .await
                 .map_err(map_error)?;
             if page.org_id != org {
@@ -275,7 +275,7 @@ impl IamManagement {
             let Some(next) = page.next_cursor else {
                 return Ok(emails.into_iter().collect());
             };
-            if !seen.insert(next) {
+            if !seen.insert(next.clone()) {
                 return Err(Error::unavailable("IAM repeated a recipient cursor"));
             }
             cursor = Some(next);

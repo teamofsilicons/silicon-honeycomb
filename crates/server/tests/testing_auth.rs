@@ -88,7 +88,7 @@ async fn mocks(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_token":"oat_test","refresh_token":"ort_test","token_type":"Bearer","expires_in":3600,"scope":"self.identity.read"})))
         .mount(server).await;
     Mock::given(method("POST")).and(path("/api/v1/oauth/introspect"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"principal_id":"11111111-1111-4111-8111-111111111111","client_id":APP,"authorizations":[{"principal_id":"11111111-1111-4111-8111-111111111111","organization_id":"22222222-2222-4222-8222-222222222222","org_id":"custom","membership_id":"33333333-3333-4333-8333-333333333333","membership_version":1,"authorization_epoch":1,"audience":APP,"testing_environment_id":ENV,"scopes":["self.identity.read"],"org_role":"owner"}]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"public_id":"test-carbon","client_id":APP,"authorizations":[{"public_id":"test-carbon","organization_id":"22222222-2222-4222-8222-222222222222","org_id":"custom","membership_id":"33333333-3333-4333-8333-333333333333","membership_version":1,"authorization_epoch":1,"audience":APP,"testing_environment_id":ENV,"scopes":["self.identity.read"],"org_role":"owner"}]})))
         .mount(server).await;
     Mock::given(method("POST"))
         .and(path("/api/v1/oauth/revoke"))

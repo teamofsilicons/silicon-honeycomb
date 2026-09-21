@@ -44,7 +44,7 @@ async fn sdk_invalid_grants_are_authentication_failures_not_service_outages() {
     }
 }
 fn snapshot(role: Option<&str>) -> Value {
-    json!({"active":true,"principal_id":"11111111-1111-1111-1111-111111111111","client_id":"tos>honeycomb","actor_type":"carbon","authorizations":[{"principal_id":"11111111-1111-1111-1111-111111111111","organization_id":"22222222-2222-2222-2222-222222222222","org_id":"tos","membership_id":"33333333-3333-3333-3333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"tos>honeycomb","testing_environment_id":null,"scopes":["self.identity.read","self.membership.read"],"org_role":role,"tags":null}]})
+    json!({"active":true,"public_id":"test-carbon","client_id":"tos>honeycomb","actor_type":"carbon","authorizations":[{"public_id":"test-carbon","organization_id":"22222222-2222-2222-2222-222222222222","org_id":"tos","membership_id":"33333333-3333-3333-3333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"tos>honeycomb","testing_environment_id":null,"scopes":["self.identity.read","self.membership.read"],"org_role":role,"tags":null}]})
 }
 async fn introspection(server: &MockServer, body: Value) {
     server.reset().await;
@@ -133,4 +133,25 @@ async fn sdk_uses_slt_exchange_refresh_and_revocation_contracts() {
     iam.revoke("ort_fixture", "sdk-revoke-fixture-0001", None)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn sdk_accepts_legacy_extras_and_rejects_conflicting_canonical_identity() {
+    let server = MockServer::start().await;
+    let iam = adapter(&server);
+    let mut body = snapshot(Some("owner"));
+    body["public_id"] = json!("test-carbon");
+    body["principal_id"] = json!("11111111-1111-4111-8111-111111111111");
+    body["authorizations"][0]["principal_id"] = body["principal_id"].clone();
+    introspection(&server, body.clone()).await;
+    assert_eq!(
+        iam.authenticate("oat_fixture", None)
+            .await
+            .unwrap()
+            .principal_id,
+        "test-carbon"
+    );
+    body["authorizations"][0]["public_id"] = json!("different-carbon");
+    introspection(&server, body).await;
+    assert!(iam.authenticate("oat_fixture", None).await.is_err());
 }
