@@ -142,6 +142,8 @@ fn success(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or(Value::Null)
 }
 fn respond(mut stream: TcpStream, provider: Arc<Mutex<Provider>>) {
+    // Accepted sockets inherit O_NONBLOCK on macOS; the fixture reads a whole request.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
