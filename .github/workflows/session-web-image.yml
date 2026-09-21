@@ -1,0 +1,25 @@
+name: Session gateway image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build committed ARM64 session gateway
+        run: |
+          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f deploy/Dockerfile.web -t honeycomb-web:session .
+          docker image inspect honeycomb-web:session > image.json
+          docker save honeycomb-web:session | gzip > honeycomb-web-arm64.tar.gz
+          sha256sum honeycomb-web-arm64.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: honeycomb-session-web-arm64
+          path: |
+            honeycomb-web-arm64.tar.gz
+            image.json
+            SHA256SUMS
+          retention-days: 14
