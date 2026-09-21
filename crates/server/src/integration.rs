@@ -21,6 +21,19 @@ pub struct TestingApplicationAuthority {
 
 #[async_trait]
 pub trait Management: Send + Sync {
+    async fn bundle(&self, _id: &str) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM bundle management is not configured",
+        ))
+    }
+    async fn bundle_inventory(&self, _after: Option<uuid::Uuid>) -> Result<Value> {
+        Err(Error::unavailable("IAM bundle discovery is not configured"))
+    }
+    async fn configure_bundle(&self, _id: &str, _body: &Value, _actor: &str) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM bundle management is not configured",
+        ))
+    }
     /// Called only after all participant receipts have completed. Integrations that
     /// return a finalization requirement must explicitly activate their runtime.
     async fn finalize_lifecycle(&self, _operation: &Value) -> Result<Value> {

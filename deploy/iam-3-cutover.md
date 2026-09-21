@@ -15,3 +15,9 @@ The importer changes only explicit actor ownership/history columns and top-level
 Deploy this compatible backend before IAM 3 and retain it if IAM itself rolls back. Restoring an older Honeycomb backend requires restoring its pre-import database while all writers are stopped; an old backend would otherwise authenticate UUID actor strings against migrated canonical ownership. Do not restore an old snapshot after new production writes without reconciling those writes.
 
 Tests: SDK authentication/current-and-canonical identity checks, testing credential recovery, management pagination, and the real-schema Python import test cover retained resource/hash bytes, environment isolation, rollback on incomplete exports and repeat imports.
+
+## Reproducible backend baseline
+
+The production backend deployed on September 17 already includes automatic publication, bundle management, release validation and the publication-intent retry queue (migrations 0018–0022). Those changes had been left uncommitted beside unrelated CLI, client and website work. The canonical-identity adapter commit alone is not a deployable replacement for that production image.
+
+The following baseline commit records the existing server/core implementation, migrations, backend fixtures and deployment evidence together with the adapter. Build from the resulting commit, whose migration catalog includes 0022; do not build the earlier adapter-only commit. This does not add a new publication rollout, republish applications or alter the documented private/public approval rules. Unrelated CLI/client/UI drafts and the human-owned requirements remain outside this backend baseline.

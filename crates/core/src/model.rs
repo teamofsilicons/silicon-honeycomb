@@ -42,6 +42,10 @@ pub struct AppInput {
     pub local_app_id: String,
     pub name: String,
     pub description: String,
+    /// Desired publication visibility. New production apps default to public review;
+    /// effective visibility remains private until every approval passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
     #[serde(default = "default_idle_days")]
     pub testing_idle_days: u32,
     #[serde(default)]
@@ -74,6 +78,13 @@ impl AppInput {
     }
     pub fn validate(&self) -> Vec<String> {
         let mut errors = vec![];
+        if self
+            .visibility
+            .as_deref()
+            .is_some_and(|v| !["public", "private"].contains(&v))
+        {
+            errors.push("visibility: must be public or private".into());
+        }
         if !(1..=36500).contains(&self.testing_idle_days) {
             errors.push("testing_idle_days: must be between 1 and 36500".into());
         }

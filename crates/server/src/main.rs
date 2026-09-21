@@ -142,6 +142,9 @@ async fn main() -> anyhow::Result<()> {
     ));
     tokio::spawn(silicon_honeycomb_server::reconciliation::run(state.clone()));
     tokio::spawn(silicon_honeycomb_server::contracts::run(state.clone()));
+    tokio::spawn(silicon_honeycomb_server::publication_worker::run(
+        state.clone(),
+    ));
     tokio::spawn(silicon_honeycomb_server::retention_worker::run(
         state.clone(),
     ));

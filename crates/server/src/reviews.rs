@@ -270,9 +270,14 @@ pub async fn decide(
             ));
         }
         if existing.get::<String, _>("state") == "accepted" {
+            let op: String = existing.get("id");
+            tx.commit().await?;
+            let publication = crate::publication_worker::after_approval(&s, &c, &id).await?;
             return Ok((
                 StatusCode::OK,
-                Json(json!({"id":existing.get::<String,_>("id"),"state":"accepted"})),
+                Json(
+                    json!({"id":op,"state":"accepted","publication_state":publication["publication_state"],"publication_error":publication["publication_error"]}),
+                ),
             ));
         }
         (
@@ -396,9 +401,12 @@ pub async fn decide(
                 .bind(json!({"request_id":id,"app_id":app_id,"review_provider":"honeycomb"}).to_string()).bind(now()).execute(&mut *tx).await?;
         }
         tx.commit().await?;
+        let publication = crate::publication_worker::after_approval(&s, &c, &id).await?;
         return Ok((
             StatusCode::OK,
-            Json(json!({"id":op,"state":"accepted","publication_state":state})),
+            Json(
+                json!({"id":op,"state":"accepted","publication_state":publication["publication_state"],"publication_error":publication["publication_error"]}),
+            ),
         ));
     }
     sqlx::query("UPDATE operations SET error='Awaiting IAM decision acceptance' WHERE id=? AND state='pending'").bind(&op).execute(&s.db).await?;

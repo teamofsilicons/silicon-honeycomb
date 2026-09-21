@@ -293,6 +293,31 @@ fn map_error(error: silicon_iam_client::Error) -> Error {
 }
 #[async_trait]
 impl Management for IamManagement {
+    async fn bundle(&self, id: &str) -> Result<Value> {
+        self.client.bundle(id).await.map_err(|error| match error {
+            silicon_iam_client::Error::Api(api) if api.status == 404 => Error::missing(),
+            other => map_error(other),
+        })
+    }
+    async fn bundle_inventory(&self, after: Option<uuid::Uuid>) -> Result<Value> {
+        self.client
+            .inventory("bundles", after)
+            .await
+            .map_err(map_error)
+    }
+    async fn configure_bundle(&self, id: &str, body: &Value, actor: &str) -> Result<Value> {
+        let input = decode::<models::HoneycombBundleConfiguration>(body.clone())?;
+        let mutation = Mutation::with_key(
+            IdempotencyKey::parse(input.operation_id.to_string())
+                .map_err(|_| Error::bad("Invalid bundle operation ID"))?,
+        );
+        let receipt = self
+            .client
+            .configure_bundle(id, &SecretString::from(actor.to_owned()), &input, &mutation)
+            .await
+            .map_err(map_error)?;
+        serde_json::to_value(receipt).map_err(|e| anyhow::anyhow!(e).into())
+    }
     async fn verify_testing_application(
         &self,
         authorization: &str,

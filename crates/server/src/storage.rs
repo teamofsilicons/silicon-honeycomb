@@ -45,6 +45,12 @@ fn iam_storage_error(error: silicon_iam_client::Error) -> Error {
             "authentication_required",
             "The IAM login token is no longer valid. Sign in again, then retry the same operation.",
         )
+    } else if api.is_some_and(|e| e.code == "not_found") && status == Some(404) {
+        Error::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "storage_authorization_required",
+            "IAM could not authorize this Briefcase endpoint. Sign in again and review Honeycomb's storage permissions. If this continues, check Honeycomb's effective Briefcase scopes and the endpoint registration.",
+        )
     } else if status == Some(429) {
         Error::unavailable(
             "IAM temporarily rate-limited storage authorization. Wait and retry the same operation.",
@@ -84,6 +90,27 @@ fn iam_storage_error(error: silicon_iam_client::Error) -> Error {
         result.1.details.push(format!("upstream_request_id={id}"));
     }
     result
+}
+
+#[cfg(test)]
+mod authorization_tests {
+    use super::*;
+
+    #[test]
+    fn hidden_storage_authority_has_an_actionable_safe_recovery_message() {
+        let error = iam_storage_error(silicon_iam_client::Error::Api(Box::new(
+            silicon_iam_client::ApiError {
+                status: 404,
+                code: "not_found".into(),
+                message: "private upstream contents must not be forwarded".into(),
+                details: Some(json!({"secret":"private upstream details"})),
+                request_id: None,
+            },
+        )));
+        assert_eq!(error.1.code, "storage_authorization_required");
+        assert!(error.1.message.contains("Sign in again"));
+        assert!(!error.1.message.contains("private upstream"));
+    }
 }
 
 pub struct Briefcase {

@@ -59,6 +59,11 @@ pub fn router(state: State) -> Router {
             "/api/v1/organizations/{org}/scope-catalog",
             get(super::catalog::scopes),
         )
+        .route("/api/v1/bundles", get(super::bundles::list))
+        .route(
+            "/api/v1/bundles/{id}",
+            get(super::bundles::get).put(super::bundles::configure),
+        )
         .route("/api/v1/apps", get(search).post(create_app))
         .route(
             "/api/v1/organizations/{org}/logos",
@@ -713,6 +718,7 @@ async fn save_app(
                 o["app_secret"] = json!(secret);
             }
         }
+        o["publication"] = automatic_publication(s, &c, &app_id).await;
         return Ok((StatusCode::ACCEPTED, Json(o)));
     }
     let current = if expected.is_some() {
@@ -741,7 +747,19 @@ async fn save_app(
     }
     let revision = expected.unwrap_or(0) + 1;
     let op = uuid::Uuid::new_v4().to_string();
-    let config = input.public_config();
+    let mut config = input.public_config();
+    // Preserve existing privacy choices on updates, including legacy applications.
+    // This is publication intent, never IAM's effective visibility.
+    config["visibility"] = json!(input.visibility.as_deref().unwrap_or_else(|| {
+        current
+            .as_ref()
+            .map(|a| a.config["visibility"].as_str().unwrap_or(&a.visibility))
+            .unwrap_or(if c.plane == "production" {
+                "public"
+            } else {
+                "private"
+            })
+    }));
     let secret = s.encrypt(&input.webhook_secret)?;
     let mut tx = s.db.begin().await?;
     if c.plane != "production" {
@@ -822,7 +840,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
             c.environment.as_deref(),
         )
         .await;
-    match result {
+    let mut result = match result {
         Ok(response)
             if response["state"] == "accepted"
                 && response["configuration_revision"] == app.revision =>
@@ -862,7 +880,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
                 .await?;
             tx.commit().await?;
             // App secrets are deliberately not persisted in operations or catalog records.
-            Ok(
+            Ok::<Value, Error>(
                 json!({"id":id,"state":"accepted","resource":app_id,"revision":app.revision,"iam_revision":accepted,"app_secret":response.get("app_secret")}),
             )
         }
@@ -876,11 +894,13 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
                 .bind(id)
                 .execute(&s.db)
                 .await?;
-            Ok(
+            Ok::<Value, Error>(
                 json!({"id":id,"state":"pending","resource":app_id,"revision":app.revision,"error":message}),
             )
         }
-    }
+    }?;
+    result["publication"] = automatic_publication(s, c, &app_id).await;
+    Ok(result)
 }
 async fn operation(
     ExtractState(s): ExtractState<State>,
@@ -911,7 +931,12 @@ async fn retry_operation(
         .await?
         .ok_or_else(Error::missing)?;
     if row.get::<String, _>("state") == "accepted" {
-        return Ok(Json(operation_value(&row)));
+        let mut result = operation_value(&row);
+        if row.get::<String, _>("kind") == "configure" {
+            result["publication"] =
+                automatic_publication(&s, &c, &row.get::<String, _>("resource")).await;
+        }
+        return Ok(Json(result));
     }
     if row.get::<String, _>("kind") != "configure" {
         return Err(Error::bad(
@@ -949,30 +974,47 @@ async fn upload_release(
         return Err(Error::conflict("Application revision changed"));
     }
     let k = key(&h)?;
-    let (temp, path, manifest, sha) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let temp = tempfile::tempdir()?;
-        let path = temp.path().join("release.tar.gz");
-        std::fs::write(&path, body)?;
-        let v = honeycomb_core::package::validate(&path);
-        if !v.valid {
-            anyhow::bail!("{}", v.errors.join("\n"));
-        }
-        let sha = honeycomb_core::package::sha256(&path)?;
-        Ok((temp, path, v.manifest.unwrap(), sha))
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!(e))?
-    .map_err(|e| Error::bad(e.to_string()))?;
-    if manifest.app_id.as_deref().is_some_and(|app| app != id) {
-        return Err(Error::bad(
-            "Archive app_id differs from the application being released",
-        ));
+    let (temp, path, validation, sha) =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let temp = tempfile::tempdir()?;
+            let path = temp.path().join("release.tar.gz");
+            std::fs::write(&path, body)?;
+            let validation = honeycomb_core::package::validate(&path);
+            let sha = if validation.valid {
+                honeycomb_core::package::sha256(&path)?
+            } else {
+                String::new()
+            };
+            Ok((temp, path, validation, sha))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+    let mut errors = validation.errors;
+    if validation
+        .manifest
+        .as_ref()
+        .and_then(|m| m.app_id.as_deref())
+        .is_some_and(|app| app != id)
+    {
+        errors.push("Archive app_id differs from the application being released".into());
     }
+    if !errors.is_empty() {
+        sqlx::query("INSERT INTO release_validation_failures(plane,app_id,revision,errors,created_at) VALUES(?,?,?,?,?) ON CONFLICT(plane,app_id) DO UPDATE SET revision=excluded.revision,errors=excluded.errors,created_at=excluded.created_at WHERE excluded.revision >= release_validation_failures.revision")
+            .bind(&c.plane).bind(&id).bind(expected).bind(serde_json::to_string(&errors).map_err(anyhow::Error::from)?).bind(now()).execute(&s.db).await?;
+        let mut error = Error::bad("CLI release validation failed");
+        error.1.details = errors;
+        return Err(error);
+    }
+    let manifest = validation
+        .manifest
+        .ok_or_else(|| Error::bad("Archive is missing honeycomb.yaml"))?;
     let version = manifest.version;
     let digest = hash(&json!({"kind":"release","app_id":id,"version":version,"sha256":sha}));
     let existing = existing_operation(&s, &c, k, &digest).await?;
     if existing.as_ref().is_some_and(|o| o["state"] == "accepted") {
-        return Ok((StatusCode::OK, Json(existing.unwrap())));
+        let mut result = existing.unwrap();
+        result["publication"] = automatic_publication(&s, &c, &id).await;
+        return Ok((StatusCode::OK, Json(result)));
     }
     let mut operation_tx = s.db.begin().await?;
     let publishing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind='publication.activate' AND state='pending')").bind(&c.plane).bind(&id).fetch_one(&mut *operation_tx).await?;
@@ -1030,6 +1072,11 @@ async fn upload_release(
         .len() as i64;
     let mut tx = s.db.begin().await?;
     sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES(?,?,?,?,?,?,?)").bind(&c.plane).bind(&id).bind(&version).bind(&sha).bind(size).bind(reference).bind(now()).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM release_validation_failures WHERE plane=? AND app_id=?")
+        .bind(&c.plane)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("UPDATE operations SET state='accepted',error=NULL WHERE id=?")
         .bind(&op)
         .execute(&mut *tx)
@@ -1050,7 +1097,7 @@ async fn upload_release(
     Ok((
         StatusCode::CREATED,
         Json(
-            json!({"id":op,"state":"accepted","app_id":id,"version":version,"sha256":sha,"size":size}),
+            json!({"id":op,"state":"accepted","app_id":id,"version":version,"sha256":sha,"size":size,"publication":automatic_publication(&s, &c, &id).await}),
         ),
     ))
 }
@@ -1229,6 +1276,81 @@ struct Message {
     #[serde(default)]
     provider: Option<String>,
 }
+/// Submission is part of the authorized configure/upload operation. Failures must
+/// not hide an accepted release or the one-time application secret. The durable
+/// intent remains retryable through the original operation, upload, or publication UI.
+async fn automatic_publication(s: &State, c: &Context, id: &str) -> Value {
+    let attempt = async {
+        let app = find_app(s, c, id, true).await?;
+        crate::publication_intents::remember(s, c, &app).await?;
+        let result = automatic_publication_result(s, c, id, Some(app.revision)).await?;
+        crate::publication_intents::completed(s, id, app.revision, &result).await?;
+        Ok::<_, Error>(result)
+    }
+    .await;
+    match attempt {
+        Ok(value) => value,
+        Err(error) => json!({"state":"request_pending","error":error.1.message}),
+    }
+}
+pub(crate) async fn automatic_publication_result(
+    s: &State,
+    c: &Context,
+    id: &str,
+    expected: Option<i64>,
+) -> Result<Value> {
+    let app = find_app(s, c, id, true).await?;
+    if expected.is_some_and(|revision| revision != app.revision) {
+        return Err(Error::conflict("Application revision changed"));
+    }
+    if c.plane != "production" || app.config["visibility"] != "public" {
+        return Ok(json!({"state":"manual","visibility":app.visibility}));
+    }
+    if let Some(row) = sqlx::query(
+        "SELECT id,state FROM publication_requests WHERE plane=? AND app_id=? AND revision=?",
+    )
+    .bind(&c.plane)
+    .bind(id)
+    .bind(app.revision)
+    .fetch_optional(&s.db)
+    .await?
+    {
+        let request: String = row.get("id");
+        crate::publication_worker::remember(s, c, &request).await?;
+        return crate::reviews::plan(s, c, &request).await;
+    }
+    if app.latest_version.is_none() {
+        return Ok(json!({"state":"awaiting_release","visibility":app.visibility}));
+    }
+    if app.iam_revision == 0
+        || (app.visibility != "public" && app.effective_revision != app.revision)
+    {
+        return Ok(json!({"state":"awaiting_configuration","visibility":app.visibility}));
+    }
+    let key = format!("automatic-publication:{id}:{}", app.revision);
+    let message = format!(
+        "Request public release of {}.\n\n{}",
+        app.name, app.description
+    );
+    let message = message
+        .char_indices()
+        .take_while(|(index, ch)| index + ch.len_utf8() <= 10000)
+        .map(|(_, ch)| ch)
+        .collect();
+    let (_, Json(value)) = submit_publication(
+        s,
+        c,
+        &key,
+        id,
+        app.revision,
+        Message {
+            message,
+            provider: None,
+        },
+    )
+    .await?;
+    Ok(value)
+}
 async fn request_publication(
     ExtractState(s): ExtractState<State>,
     h: HeaderMap,
@@ -1237,12 +1359,22 @@ async fn request_publication(
 ) -> Result<(StatusCode, Json<Value>)> {
     let k = key(&h)?;
     let c = context(&s, &h).await?;
-    let app = find_app(&s, &c, &id, true).await?;
     let expected = revision(&h)?;
+    submit_publication(&s, &c, k, &id, expected, body).await
+}
+async fn submit_publication(
+    s: &State,
+    c: &Context,
+    k: &str,
+    id: &str,
+    expected: i64,
+    body: Message,
+) -> Result<(StatusCode, Json<Value>)> {
+    let app = find_app(s, c, id, true).await?;
     let digest = hash(
         &json!({"kind":"publication.request","app_id":id,"revision":expected,"message":body.message,"provider":body.provider}),
     );
-    if let Some(op) = existing_operation(&s, &c, k, &digest).await? {
+    if let Some(op) = existing_operation(s, c, k, &digest).await? {
         let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
             .bind(op["id"].as_str().unwrap())
             .fetch_one(&s.db)
@@ -1257,15 +1389,30 @@ async fn request_publication(
             "A publication justification of 1–10000 characters is required",
         ));
     }
-    if app.latest_version.is_none()
-        || app.iam_revision == 0
+    let mut blockers = Vec::new();
+    if app.latest_version.is_none() {
+        let validation: Option<String> = sqlx::query_scalar("SELECT errors FROM release_validation_failures WHERE plane=? AND app_id=? AND revision=?")
+            .bind(&c.plane).bind(id).bind(app.revision).fetch_optional(&s.db).await?;
+        if let Some(validation) = validation {
+            blockers.push("The last CLI release upload failed validation:".into());
+            blockers.extend(
+                serde_json::from_str::<Vec<String>>(&validation).map_err(anyhow::Error::from)?,
+            );
+        } else {
+            blockers.push("No CLI release has been uploaded successfully for this application. Run honeycomb validate <archive.tar.gz>, then honeycomb releases upload with the current application revision.".into());
+        }
+    }
+    if app.iam_revision == 0
         || (app.visibility != "public" && app.effective_revision != app.revision)
     {
-        return Err(Error::conflict(
-            "Upload a valid CLI release and wait for IAM private activation before requesting publication",
-        ));
+        blockers.push(format!("IAM private activation is pending: application revision {}, effective revision {}, IAM revision {}. Reconcile the application before retrying publication.", app.revision, app.effective_revision, app.iam_revision));
     }
-    let existing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM publication_requests WHERE plane=? AND app_id=? AND revision=?)").bind(&c.plane).bind(&id).bind(app.revision).fetch_one(&s.db).await?;
+    if !blockers.is_empty() {
+        let mut error = Error::conflict("Publication prerequisites are not satisfied");
+        error.1.details = blockers;
+        return Err(error);
+    }
+    let existing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM publication_requests WHERE plane=? AND app_id=? AND revision=?)").bind(&c.plane).bind(id).bind(app.revision).fetch_one(&s.db).await?;
     if existing {
         return Err(Error::conflict(
             "This revision already has a publication request; open its discussion or retry the original operation",
@@ -1273,10 +1420,15 @@ async fn request_publication(
     }
     let request = uuid::Uuid::new_v4().to_string();
     let mut tx = s.db.begin().await?;
-    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot) VALUES(?,?,?,?,'awaiting_review_plan',?,?,?)")
-        .bind(&request).bind(&c.plane).bind(&id).bind(app.revision).bind(&c.identity()?.principal_id).bind(now()).bind(app.config.to_string()).execute(&mut *tx).await?;
+    let inserted = sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot) SELECT ?,plane,app_id,revision,'awaiting_review_plan',?,?,config FROM applications WHERE plane=? AND app_id=? AND revision=? ON CONFLICT(plane,app_id,revision) DO NOTHING")
+        .bind(&request).bind(&c.identity()?.principal_id).bind(now()).bind(&c.plane).bind(id).bind(app.revision).execute(&mut *tx).await?;
+    if inserted.rows_affected() != 1 {
+        return Err(Error::conflict(
+            "Application revision changed or already has a publication request",
+        ));
+    }
     sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,created_at) VALUES(?,?,?,?,'publication.request',?,?,?,'accepted',?)")
-        .bind(&request).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind(&id).bind(digest).bind(app.revision).bind(now()).execute(&mut *tx).await?;
+        .bind(&request).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind(id).bind(digest).bind(app.revision).bind(now()).execute(&mut *tx).await?;
     sqlx::query(
         "INSERT INTO discussions(id,request_id,actor,message,created_at) VALUES(?,?,?,?,?)",
     )
@@ -1291,7 +1443,8 @@ async fn request_publication(
         .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(format!("publication:{request}:requested"))
         .bind(json!({"request_id":request,"app_id":id,"org_id":app.org_id,"state":"awaiting_review_plan"}).to_string()).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
-    let mut result = crate::reviews::plan(&s, &c, &request).await?;
+    let mut result = crate::reviews::plan(s, c, &request).await?;
+    crate::publication_worker::remember(s, c, &request).await?;
     result["visibility"] = json!(app.visibility);
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
@@ -1312,6 +1465,7 @@ async fn publication(
     let mut items = vec![];
     for r in requests {
         let request_id: String = r.get("id");
+        crate::publication_worker::remember(&s, &c, &request_id).await?;
         let rows =
             sqlx::query("SELECT * FROM discussions WHERE request_id=? ORDER BY created_at,id")
                 .bind(&request_id)

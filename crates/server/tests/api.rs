@@ -2170,6 +2170,12 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
     s.management = manager.clone();
     s.identity = Arc::new(ReviewIdentity);
     let id = review_application(&s).await;
+    // Legacy requests still exercise the explicit recovery endpoint.
+    sqlx::query("DELETE FROM publication_authorizations WHERE request_id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
     let provider_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions");
     let validator_path = format!("/api/v1/review-requests/{id}/honeycomb/decisions");
     let (_, inbox) = call(
@@ -2467,17 +2473,15 @@ async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effec
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
     }
-    let (_, activated) = call(
-        &s,
-        "POST",
-        &format!("/api/v1/review-requests/{id}/activate"),
-        Some("admin"),
-        Value::Null,
-        "public-revision-two-activate",
-        Some(2),
-    )
-    .await;
-    assert_eq!(activated["state"], "accepted", "{activated}");
+    let published: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        published, "published",
+        "Final approval applies the public revision automatically"
+    );
     let state: String =
         sqlx::query_scalar("SELECT state FROM operations WHERE id='pending-public-config'")
             .fetch_one(&s.db)
@@ -2620,6 +2624,12 @@ async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete
     s.storage = storage.clone();
     s.identity = Arc::new(ReviewIdentity);
     let id = review_application(&s).await;
+    // Legacy requests still exercise the explicit recovery endpoint.
+    sqlx::query("DELETE FROM publication_authorizations WHERE request_id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
     let path = format!("/api/v1/review-requests/{id}/activate");
     assert_eq!(
         call(
@@ -2753,6 +2763,12 @@ async fn publication_rejects_wrong_receipts_and_rechecks_current_iam_visibility(
     s.storage = storage.clone();
     s.identity = Arc::new(ReviewIdentity);
     let id = review_application(&s).await;
+    // Legacy requests still exercise the explicit recovery endpoint.
+    sqlx::query("DELETE FROM publication_authorizations WHERE request_id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
     approve_publication(&s, &id).await;
     let path = format!("/api/v1/review-requests/{id}/activate");
     manager.wrong_receipt.store(true, Ordering::SeqCst);
@@ -5020,3 +5036,531 @@ async fn root_key_delete_is_rejected_before_lifecycle_state_changes() {
     assert_eq!(state, ("ready".into(), 1));
     assert_eq!(services.calls.lock().unwrap().len(), calls_before);
 }
+
+#[tokio::test]
+async fn final_external_validator_approval_publishes_without_owner_confirmation() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(PublicationManager::default());
+    let storage = Arc::new(PublicationStorage::default());
+    s.management = manager.clone();
+    s.storage = storage.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    let encrypted: String = sqlx::query_scalar(
+        "SELECT encrypted_token FROM publication_authorizations WHERE request_id=?",
+    )
+    .bind(&id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert!(!encrypted.contains("admin"));
+    assert_eq!(s.decrypt(&encrypted).unwrap(), "admin");
+    // The final validator has no membership of the requesting organization.
+    approve_publication(&s, &id).await;
+    let (status, app) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app",
+        None,
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(app["visibility"], "public");
+    assert_eq!(manager.calls.load(Ordering::SeqCst), 1);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publication_authorizations")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "Completion discards the short-lived requester credential"
+    );
+    // A retried approval never repeats public sharing or IAM activation.
+    approve_publication(&s, &id).await;
+    assert_eq!(manager.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(storage.calls.lock().unwrap()["fixture-release"], 1);
+}
+
+#[tokio::test]
+async fn automatic_publication_retries_storage_without_repeating_completed_steps() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(PublicationManager::default());
+    let storage = Arc::new(PublicationStorage::default());
+    storage.fail_second.store(true, Ordering::SeqCst);
+    s.management = manager.clone();
+    s.storage = storage.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','2.0.0','fixture-only',1,'release-two',1)").execute(&s.db).await.unwrap();
+    approve_publication(&s, &id).await;
+    let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "activating");
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereview-app",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    storage.fail_second.store(false, Ordering::SeqCst);
+    sqlx::query("UPDATE publication_authorizations SET next_attempt_at=0")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    silicon_honeycomb_server::publication_worker::tick(&s)
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "published");
+    assert_eq!(manager.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(storage.calls.lock().unwrap()["fixture-release"], 1);
+    assert_eq!(storage.calls.lock().unwrap()["release-two"], 2);
+}
+
+#[tokio::test]
+async fn requester_sign_in_resumes_approved_legacy_request_without_confirmation() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(PublicationManager::default());
+    s.storage = Arc::new(PublicationStorage::default());
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    sqlx::query("DELETE FROM publication_authorizations")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    approve_publication(&s, &id).await;
+    let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "awaiting_activation");
+    let (_, history) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app/publication",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert!(!history.to_string().contains("encrypted_token"));
+    silicon_honeycomb_server::publication_worker::tick(&s)
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "published");
+}
+
+#[tokio::test]
+async fn another_current_app_manager_can_complete_a_legacy_request_without_rewriting_its_author() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(PublicationManager::default());
+    s.storage = Arc::new(PublicationStorage::default());
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    sqlx::query("DELETE FROM publication_authorizations")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE publication_requests SET requested_by='original-submitter' WHERE id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    approve_publication(&s, &id).await;
+    let path = "/api/v1/apps/tos%3Ereview-app/publication";
+    assert_eq!(
+        call(&s, "GET", path, Some("member"), Value::Null, "", None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publication_authorizations")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "Neither outside validators nor ordinary members supply manager authority"
+    );
+    assert_eq!(
+        call(&s, "GET", path, Some("admin"), Value::Null, "", None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    silicon_honeycomb_server::publication_worker::tick(&s)
+        .await
+        .unwrap();
+    let row: (String, String, String) = sqlx::query_as("SELECT p.state,p.requested_by,o.actor FROM publication_requests p JOIN operations o ON o.id=p.activation_operation WHERE p.id=?")
+        .bind(&id).fetch_one(&s.db).await.unwrap();
+    assert_eq!(
+        row,
+        (
+            "published".into(),
+            "original-submitter".into(),
+            "admin".into()
+        )
+    );
+}
+
+#[tokio::test]
+async fn expired_requester_authorization_keeps_approvals_and_sign_in_resumes_automatically() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(PublicationManager::default());
+    s.storage = Arc::new(PublicationStorage::default());
+    s.identity = Arc::new(ReviewIdentity);
+    let id = review_application(&s).await;
+    sqlx::query("UPDATE publication_authorizations SET encrypted_token=?")
+        .bind(s.encrypt("expired-owner").unwrap())
+        .execute(&s.db)
+        .await
+        .unwrap();
+    approve_publication(&s, &id).await;
+    let row = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state,error FROM publication_requests WHERE id=?",
+    )
+    .bind(&id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "awaiting_activation");
+    assert!(row.1.unwrap().contains("sign in"));
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM review_gates WHERE request_id=? AND state='approved'",
+    )
+    .bind(&id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(count, 3);
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereview-app",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    call(
+        &s,
+        "GET",
+        "/api/v1/apps/tos%3Ereview-app/publication",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    silicon_honeycomb_server::publication_worker::tick(&s)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereview-app",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .1["visibility"],
+        "public"
+    );
+}
+
+#[tokio::test]
+async fn automatic_publication_discards_authorization_for_a_superseded_revision() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(PublicationManager::default());
+    s.storage = Arc::new(PublicationStorage::default());
+    s.identity = Arc::new(ReviewIdentity);
+    review_application(&s).await;
+    sqlx::query("UPDATE applications SET revision=2 WHERE app_id='tos>review-app'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    silicon_honeycomb_server::publication_worker::tick(&s)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publication_authorizations")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        call(
+            &s,
+            "GET",
+            "/api/v1/apps/tos%3Ereview-app",
+            None,
+            Value::Null,
+            "",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn publication_reports_exact_release_validation_and_separate_iam_blockers() {
+    let (s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("invalid-release"),
+        "create-invalid-release",
+        None,
+    )
+    .await;
+    let publication_path = "/api/v1/apps/tos%3Einvalid-release/publication";
+    let (_, missing) = call(
+        &s,
+        "POST",
+        publication_path,
+        Some("admin"),
+        json!({"message":"Publish"}),
+        "publish-invalid-release",
+        Some(1),
+    )
+    .await;
+    assert!(
+        missing
+            .to_string()
+            .contains("No CLI release has been uploaded")
+    );
+    assert!(
+        !missing
+            .to_string()
+            .contains("IAM private activation is pending")
+    );
+
+    // A real rejected archive, not a hand-written stored diagnostic.
+    let dir = tempfile::tempdir().unwrap();
+    let archive_path = dir.path().join("release.tar.gz");
+    let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(gzip);
+    let manifest = b"format_version: 1\nversion: 1.0.0\nbin: {test: app}\ntargets: {}\n";
+    let mut header = tar::Header::new_gnu();
+    header.set_size(manifest.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    archive
+        .append_data(&mut header, "honeycomb.yaml", &manifest[..])
+        .unwrap();
+    let bytes = archive.into_inner().unwrap().finish().unwrap();
+    std::fs::write(&archive_path, &bytes).unwrap();
+    let expected = honeycomb_core::package::validate(&archive_path).errors;
+    assert!(
+        expected
+            .iter()
+            .any(|e| e.contains("targets.windows-aarch64: required 64-bit target is missing"))
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/apps/tos%3Einvalid-release/releases")
+        .header("authorization", "Bearer admin")
+        .header("if-match", "1")
+        .header("idempotency-key", "upload-invalid-release")
+        .header("content-type", "application/gzip")
+        .body(Body::from(bytes))
+        .unwrap();
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["error"]["details"], json!(expected));
+    // The Rust client used by the CLI must submit invalid uploads to the same
+    // validator, and preserve every error in its terminal-facing message.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = silicon_honeycomb_server::api::router(s.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = honeycomb_client::Client::new(&url)
+        .unwrap()
+        .with_token("admin");
+    let error = client
+        .upload_release(
+            "tos>invalid-release",
+            &archive_path,
+            &honeycomb_client::Mutation::at_revision(1),
+        )
+        .await
+        .unwrap_err();
+    for detail in &expected {
+        assert!(error.to_string().contains(detail));
+    }
+    server.abort();
+    let (status, publication) = call(
+        &s,
+        "POST",
+        publication_path,
+        Some("admin"),
+        json!({"message":"Publish"}),
+        "publish-invalid-release",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    for error in &expected {
+        assert!(
+            publication["error"]["details"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(error))
+        );
+    }
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            publication_path,
+            Some("outsider"),
+            json!({"message":"Publish"}),
+            "publish-invalid-release",
+            Some(1)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM publication_requests")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
+    // Old revision failures are never attributed to a new application revision.
+    sqlx::query("UPDATE applications SET revision=2 WHERE app_id='tos>invalid-release'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (_, newer) = call(
+        &s,
+        "POST",
+        publication_path,
+        Some("admin"),
+        json!({"message":"Publish"}),
+        "publish-invalid-release-2",
+        Some(2),
+    )
+    .await;
+    assert!(
+        newer
+            .to_string()
+            .contains("No CLI release has been uploaded")
+    );
+    assert!(
+        newer
+            .to_string()
+            .contains("IAM private activation is pending")
+    );
+    assert!(!newer.to_string().contains("targets.windows-aarch64"));
+    // A repaired, six-target archive clears the stored rejection. IAM can still
+    // independently block publication of the new application revision.
+    let mut targets = serde_json::Map::new();
+    for target in honeycomb_core::package::REQUIRED_TARGETS {
+        let relative = format!("targets/{target}");
+        std::fs::create_dir_all(dir.path().join(&relative)).unwrap();
+        let binary = dir.path().join(&relative).join("app");
+        std::fs::write(&binary, "fixture CLI").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        targets.insert(
+            target.into(),
+            json!({"root":relative,"executables":{"app":"app"}}),
+        );
+    }
+    std::fs::write(
+        dir.path().join("honeycomb.yaml"),
+        json!({"format_version":1,"version":"1.0.0","bin":{"test":"app"},"targets":targets})
+            .to_string(),
+    )
+    .unwrap();
+    let repaired = honeycomb_core::package::pack(dir.path(), None).unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/apps/tos%3Einvalid-release/releases")
+        .header("authorization", "Bearer admin")
+        .header("if-match", "2")
+        .header("idempotency-key", "upload-repaired-release")
+        .header("content-type", "application/gzip")
+        .body(Body::from(std::fs::read(repaired).unwrap()))
+        .unwrap();
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM release_validation_failures")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
+    let (_, pending) = call(
+        &s,
+        "POST",
+        publication_path,
+        Some("admin"),
+        json!({"message":"Publish"}),
+        "publish-repaired-release",
+        Some(2),
+    )
+    .await;
+    assert!(
+        pending
+            .to_string()
+            .contains("IAM private activation is pending")
+    );
+    assert!(!pending.to_string().contains("CLI release"));
+}
+
+#[path = "bundles/mod.rs"]
+mod bundles;
+
+mod default_publication;
