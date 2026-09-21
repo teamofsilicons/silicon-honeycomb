@@ -372,7 +372,13 @@ fn install_archive_with_identity(
             }
         }
         if old.directory != directory && old.directory.starts_with(state_dir.join("packages")) {
-            fs::remove_dir_all(&old.directory)?;
+            // Windows can keep a running executable locked after its stable launcher
+            // has moved to the new package. Activation succeeded; retain that old
+            // payload rather than prevent the caller from saving the new registry.
+            let cleanup = fs::remove_dir_all(&old.directory);
+            if !cfg!(windows) {
+                cleanup?;
+            }
         }
     }
     Ok(Installed {

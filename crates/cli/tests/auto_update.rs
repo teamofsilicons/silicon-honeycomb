@@ -96,3 +96,52 @@ fn process_opt_out_preserves_fresh_and_existing_home_preferences() {
     }
     fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn directly_invoked_managed_payload_refuses_self_update_without_network_or_mutation() {
+    let home =
+        std::env::temp_dir().join(format!("honeycomb-payload-test-{}", uuid::Uuid::new_v4()));
+    let root = home.join(".honeycomb/dir");
+    let state = root.join("contexts/origin");
+    let payload = state.join("packages/tos/honeycomb/0.3.0-123456789012");
+    fs::create_dir_all(&payload).unwrap();
+    fs::write(state.join("installed.json"), "{}").unwrap();
+    let executable = payload.join(format!("honeycomb{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(env!("CARGO_BIN_EXE_honeycomb"), &executable).unwrap();
+    let before = fs::read(&executable).unwrap();
+    let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    proxy.set_nonblocking(true).unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    // The same payload remains immutable if SILICON_HOME points at another installation.
+    for selected_home in [&home, &home.join("other-home")] {
+        let selected_root = selected_home.join(".honeycomb/dir");
+        fs::create_dir_all(&selected_root).unwrap();
+        let config = br#"{"api":"http://127.0.0.1:1","auto_update":true,"telemetry":false,"last_update_check":0}"#;
+        fs::write(selected_root.join("config.json"), config).unwrap();
+        let output = Command::new(&executable)
+            .args(["self-update", "--json"])
+            .env("SILICON_HOME", selected_home)
+            .env("HONEYCOMB_AUTO_UPDATE", "0")
+            .env("HONEYCOMB_TELEMETRY", "0")
+            .env("HTTP_PROXY", &proxy_url)
+            .env("HTTPS_PROXY", &proxy_url)
+            .env("ALL_PROXY", &proxy_url)
+            .env("NO_PROXY", "")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("managed package payload"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(selected_root.join("config.json")).unwrap(), config);
+        assert!(!selected_root.join("update.lock").exists());
+        assert!(!selected_root.join("system").exists());
+        assert!(
+            matches!(proxy.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(fs::read(&executable).unwrap(), before);
+    }
+    fs::remove_dir_all(home).unwrap();
+}

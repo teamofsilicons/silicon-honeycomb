@@ -452,3 +452,34 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     installer::uninstall(&updated, dest.path()).unwrap();
     assert!(existing.exists());
 }
+
+#[cfg(windows)]
+#[test]
+fn updating_a_locked_windows_payload_still_commits_the_new_installation() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let _serial = serial();
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let first = fixture(src.path(), "1.0.0");
+    let before = installer::install_archive(&first, dest.path(), &BTreeMap::new(), None).unwrap();
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(before.directory.join("bin/hello.cmd"))
+        .unwrap();
+    let second = fixture(src.path(), "2.0.0");
+    let after =
+        installer::install_archive(&second, dest.path(), &BTreeMap::new(), Some(&before)).unwrap();
+    assert_eq!(after.version, "2.0.0");
+    assert!(
+        before.directory.exists(),
+        "The locked old payload must remain recoverable"
+    );
+    let output = std::process::Command::new(&after.commands["honeycomb-test-hello"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("hello-2.0.0"));
+    drop(locked);
+    installer::uninstall(&after, dest.path()).unwrap();
+}

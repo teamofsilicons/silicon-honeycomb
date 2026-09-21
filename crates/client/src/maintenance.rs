@@ -235,6 +235,26 @@ pub fn systemd_unit(home: &Path, executable: &Path) -> String {
         systemd_escape(&home.to_string_lossy())
     )
 }
+fn windows_worker_script(home: &Path, executable: &Path) -> Result<String> {
+    let escape = |path: &Path| -> Result<String> {
+        let value = path.to_string_lossy();
+        if value.contains(['\r', '\n', '"']) {
+            bail!("Invalid updater path");
+        }
+        let value = if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            value.strip_prefix(r"\\?\").unwrap_or(&value).to_owned()
+        };
+        Ok(value.replace('%', "%%"))
+    };
+    // CALL returns to this loop after a .cmd catalog launcher exits.
+    Ok(format!(
+        "@echo off\r\nset \"SILICON_HOME={}\"\r\n:run\r\ncall \"{}\" daemon\r\ntimeout /t 5 /nobreak >nul\r\ngoto run\r\n",
+        escape(home)?,
+        escape(executable)?.replace('%', "%%")
+    ))
+}
 /// Register the per-user worker. This does not require root privileges.
 pub fn install_service(home: &Path, executable: &Path) -> Result<()> {
     let name = service_name(home);
@@ -312,18 +332,7 @@ pub fn install_service(home: &Path, executable: &Path) -> Result<()> {
             let directory = home.join(".honeycomb/dir/system");
             fs::create_dir_all(&directory)?;
             let script = directory.join("update.cmd");
-            let escape = |path: &Path| -> Result<String> {
-                let value = path.to_string_lossy();
-                if value.contains(['\r', '\n', '"']) {
-                    bail!("Invalid updater path");
-                }
-                Ok(value.replace('%', "%%"))
-            };
-            let content = format!(
-                "@echo off\r\nset \"SILICON_HOME={}\"\r\n:run\r\n\"{}\" daemon\r\ntimeout /t 5 /nobreak >nul\r\ngoto run\r\n",
-                escape(home)?,
-                escape(executable)?
-            );
+            let content = windows_worker_script(home, executable)?;
             let changed = fs::read_to_string(&script).ok().as_deref() != Some(&content);
             fs::write(&script, content)?;
             let task = format!("cmd.exe /d /c \"{}\"", script.display());
@@ -364,6 +373,23 @@ pub fn install_service(home: &Path, executable: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_worker_returns_from_managed_command_and_handles_canonical_paths() {
+        let script = windows_worker_script(
+            Path::new(r"C:\home"),
+            Path::new(r"\\?\C:\packages\100%\honeycomb.cmd"),
+        )
+        .unwrap();
+        assert!(script.contains("call \"C:\\packages\\100%%%%\\honeycomb.cmd\" daemon\r\n"));
+        assert!(script.ends_with("goto run\r\n"));
+        assert!(!script.contains(r"\\?\"));
+        let unc = windows_worker_script(
+            Path::new(r"C:\home"),
+            Path::new(r"\\?\UNC\server\share\honeycomb.cmd"),
+        )
+        .unwrap();
+        assert!(unc.contains(r"\\server\share\honeycomb.cmd"));
+    }
     #[test]
     fn service_paths_are_escaped() {
         let xml = launchd_plist(Path::new("/tmp/a&b"), Path::new("/tmp/a<b/honeycomb"));
