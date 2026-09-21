@@ -704,10 +704,17 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         if daemon_lock.try_lock_exclusive().is_err() {
             return Ok(());
         }
-        let executable = std::env::current_exe()?;
-        let running_digest = package::sha256(&executable)?;
-        let launcher = worker_executable()?;
-        let launcher_revision = command_revision(&launcher)?;
+        // One-shot workers always exit after maintenance. Fingerprints are only needed
+        // when a persistent worker must detect replacement and ask its supervisor to restart.
+        let running = if once {
+            None
+        } else {
+            let executable = std::env::current_exe()?;
+            let running_digest = package::sha256(&executable)?;
+            let launcher = worker_executable()?;
+            let launcher_revision = command_revision(&launcher)?;
+            Some((executable, running_digest, launcher, launcher_revision))
+        };
         loop {
             if !once {
                 tokio::time::sleep(next_update_delay(std::time::SystemTime::now())).await;
@@ -731,10 +738,12 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 }
             }
             // Supervisors relaunch the newly installed executable after self-update.
-            if once
-                || executable_replaced(&executable, &running_digest)
-                || command_revision(&launcher).ok().as_ref() != Some(&launcher_revision)
-            {
+            if running.as_ref().is_none_or(
+                |(executable, running_digest, launcher, launcher_revision)| {
+                    executable_replaced(executable, running_digest)
+                        || command_revision(launcher).ok().as_ref() != Some(launcher_revision)
+                },
+            ) {
                 return Ok(());
             }
         }
