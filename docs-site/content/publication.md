@@ -1,5 +1,11 @@
-## Start private
-New applications are private. Upload at least one valid six-target CLI release and supply the required registration details before requesting publication.
+## Public approval by default
+New production applications automatically request public approval when IAM accepts their configuration and at least one valid six-target production CLI release has been uploaded or promoted from development. A development release alone does not trigger public approval. The request uses the application description as its initial justification; managers can add context in its discussion. Effective visibility stays private until all required approvals pass.
+
+Release channel and application visibility are separate choices. An upload must specify production or development, and those channels retain independent version histories. A development release can be promoted by choosing a production version; this creates a new production release and preserves its development source. See [Upload an application](/upload-an-app/) for console and CLI instructions. Promotion does not bypass the application's visibility or scope approvals.
+
+To keep an application private, choose private in the console or set `"visibility": "private"` in the application JSON. Updates preserve the existing preference when omitted, and test-environment applications never auto-submit production reviews. Repeated configuration/upload operations reuse the same revision’s review request.
+
+For an application previously kept private, you can explicitly request publication:
 ```sh
 honeycomb apps get 'my-org>my-app'
 honeycomb publication request 'my-org>my-app' --revision 1 --message 'Describe the application and why its requested access is needed.'

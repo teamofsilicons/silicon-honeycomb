@@ -42,6 +42,12 @@
     "description": "A field-by-field guide to registration and configuration updates."
   },
   {
+    "slug": "bundles",
+    "title": "Bundled applications",
+    "group": "Publish an app",
+    "description": "Manage one sign-in identity for several applications, with independent permissions and consent."
+  },
+  {
     "slug": "releases",
     "title": "Releases & assets",
     "group": "Publish an app",

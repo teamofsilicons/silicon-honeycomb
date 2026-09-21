@@ -38,6 +38,11 @@ pub trait IdentityProvider: Send + Sync {
     async fn refresh(&self, token: &str, key: &str, environment: Option<&str>) -> Result<Value>;
     async fn authenticate(&self, token: &str, environment: Option<&str>) -> Result<Identity>;
     async fn revoke(&self, token: &str, key: &str, environment: Option<&str>) -> Result<()>;
+    /// Verify a single-use proof for the organization catalog and its exact body.
+    /// Providers must revalidate current membership, consent and endpoint access.
+    async fn verify_obo(&self, _: &str, _: &[u8], _: Option<&str>) -> Result<Identity> {
+        Err(Error::unauthorized())
+    }
 }
 pub struct Iam {
     pub client: Client,
@@ -263,6 +268,77 @@ impl IdentityProvider for Iam {
         // IAM 1.9 does not disclose Honeycomb's platform validator capability.
         // Keep false until the protected reviewer contract is available.
         Ok(identity)
+    }
+    async fn verify_obo(
+        &self,
+        proof: &str,
+        body: &[u8],
+        environment: Option<&str>,
+    ) -> Result<Identity> {
+        let verified = self
+            .scoped(environment)
+            .await?
+            .obo()
+            .verify(&models::OboVerifyRequest {
+                access_proof: proof.into(),
+                request: models::OboVerifyRequestBinding {
+                    method: "POST".into(),
+                    path: crate::obo::ENDPOINT_PATH.into(),
+                    body_sha256: silicon_iam_client::api::obo::body_sha256(body),
+                },
+            })
+            .await
+            .map_err(|e| match e {
+                // Expired, revoked and consumed proofs are authentication failures,
+                // not upstream outages. Never copy IAM's potentially sensitive text.
+                silicon_iam_client::Error::Api(a)
+                    if matches!(a.status, 400 | 401 | 403 | 404 | 409 | 410) =>
+                {
+                    Error::unauthorized()
+                }
+                _ => Error::unavailable("IAM could not verify delegated access"),
+            })?;
+        let a = &verified.authorization;
+        let actor_kind =
+            serde_json::to_value(&verified.actor.type_field).map_err(|e| anyhow::anyhow!(e))?;
+        let authorization_kind = a
+            .actor_type
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if verified.valid != true
+            || verified.audience != self.app_id
+            || a.audience != self.app_id
+            || verified.endpoint.endpoint_id != crate::obo::ENDPOINT_ID
+            || verified.endpoint.path != crate::obo::ENDPOINT_PATH
+            || a.org_id != verified.org_id
+            || a.org_id.is_empty()
+            || a.public_id
+                .as_deref()
+                .is_some_and(|id| id != verified.actor.public_id)
+            || verified.actor.public_id.is_empty()
+            || !matches!(actor_kind.as_str(), Some("carbon" | "silicon"))
+            || authorization_kind
+                .as_ref()
+                .is_some_and(|kind| kind != &actor_kind)
+            || !a
+                .scopes
+                .contains(&format!("obo:{}:{}", self.app_id, crate::obo::ENDPOINT_ID))
+            || environment.is_some() != a.testing_environment_id.is_some()
+            || !verified.metadata.as_object().is_some_and(|m| m.is_empty())
+            || verified.expires_at.unix_timestamp() <= crate::now()
+            || verified.consumed_at > verified.expires_at
+        {
+            return Err(Error::unauthorized());
+        }
+        Ok(Identity {
+            principal_id: verified.actor.public_id,
+            actor_type: actor_kind.as_str().map(str::to_owned),
+            organizations: BTreeMap::from([(a.org_id.clone(), None)]),
+            testing_environment_id: a.testing_environment_id.map(|id| id.to_string()),
+            validator: false,
+        })
     }
     async fn revoke(&self, token: &str, key: &str, environment: Option<&str>) -> Result<()> {
         self.scoped(environment)

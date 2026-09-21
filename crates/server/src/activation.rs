@@ -81,13 +81,17 @@ pub async fn activate(
         }
         let configuration_operations:Vec<String>=sqlx::query_scalar("SELECT id FROM operations WHERE plane=? AND resource=? AND kind='configure' AND revision=? AND state='pending'")
             .bind(&c.plane).bind(&app_id).bind(expected).fetch_all(&mut *tx).await?;
-        let releases =
-            sqlx::query("SELECT version,storage_ref FROM releases WHERE plane=? AND app_id=?")
-                .bind(&c.plane)
-                .bind(&app_id)
-                .fetch_all(&mut *tx)
-                .await?;
-        if releases.is_empty() {
+        let releases = sqlx::query(
+            "SELECT channel,version,storage_ref FROM releases WHERE plane=? AND app_id=?",
+        )
+        .bind(&c.plane)
+        .bind(&app_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        if !releases
+            .iter()
+            .any(|r| r.get::<String, _>("channel") == "prod")
+        {
             return Err(Error::conflict("Publication requires a CLI release"));
         }
         let approvals: Vec<String> = sqlx::query_scalar(
@@ -105,9 +109,10 @@ pub async fn activate(
             .bind(&op).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind(&app_id).bind(digest).bind(expected).bind(request.to_string()).bind(now()).execute(&mut *tx).await?;
         for release in releases {
             sqlx::query(
-                "INSERT INTO publication_archives(operation_id,version,source_ref) VALUES(?,?,?)",
+                "INSERT INTO publication_archives(operation_id,channel,version,source_ref) VALUES(?,?,?,?)",
             )
             .bind(&op)
+            .bind(release.get::<String, _>("channel"))
             .bind(release.get::<String, _>("version"))
             .bind(release.get::<String, _>("storage_ref"))
             .execute(&mut *tx)
@@ -146,8 +151,8 @@ pub async fn activate(
         .bind(&op)
         .fetch_one(&s.db)
         .await?;
-    let archives=sqlx::query("SELECT version,state,error FROM publication_archives WHERE operation_id=? ORDER BY version").bind(&op).fetch_all(&s.db).await?;
-    let archives:Vec<Value>=archives.iter().map(|r|json!({"version":r.get::<String,_>("version"),"state":r.get::<String,_>("state"),"error":r.get::<Option<String>,_>("error")})).collect();
+    let archives=sqlx::query("SELECT channel,version,state,error FROM publication_archives WHERE operation_id=? ORDER BY version").bind(&op).fetch_all(&s.db).await?;
+    let archives:Vec<Value>=archives.iter().map(|r|json!({"channel":r.get::<String,_>("channel"),"version":r.get::<String,_>("version"),"state":r.get::<String,_>("state"),"error":r.get::<Option<String>,_>("error")})).collect();
     Ok((
         StatusCode::ACCEPTED,
         Json(
@@ -243,13 +248,18 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
         }
         accepted
     };
-    let archives=sqlx::query("SELECT version,source_ref FROM publication_archives WHERE operation_id=? AND state!='ready' ORDER BY version").bind(id).fetch_all(&s.db).await?;
+    let archives=sqlx::query("SELECT channel,version,source_ref FROM publication_archives WHERE operation_id=? AND state!='ready' ORDER BY version").bind(id).fetch_all(&s.db).await?;
     for archive in archives {
         renew(s, id, lease).await?;
         let version: String = archive.get("version");
+        let channel: String = archive.get("channel");
         let reference: String = archive.get("source_ref");
         let archive_operation = uuid::Uuid::from_bytes(
-            Sha256::digest(format!("{id}:{version}"))[..16]
+            Sha256::digest(if channel == "prod" {
+                format!("{id}:{version}")
+            } else {
+                format!("{id}:{channel}:{version}")
+            })[..16]
                 .try_into()
                 .unwrap(),
         )
@@ -268,10 +278,11 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
             Ok(reference) => reference,
             Err(error) => {
                 sqlx::query(
-                    "UPDATE publication_archives SET error=? WHERE operation_id=? AND version=?",
+                    "UPDATE publication_archives SET error=? WHERE operation_id=? AND channel=? AND version=?",
                 )
                 .bind(&error.1.message)
                 .bind(id)
+                .bind(&channel)
                 .bind(&version)
                 .execute(&s.db)
                 .await?;
@@ -279,14 +290,14 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
             }
         };
         let mut tx = s.db.begin().await?;
-        let saved=sqlx::query("UPDATE publication_archives SET published_ref=?,state='ready',error=NULL WHERE operation_id=? AND version=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
-            .bind(&published).bind(id).bind(&version).bind(id).bind(lease).bind(now()).execute(&mut *tx).await?;
+        let saved=sqlx::query("UPDATE publication_archives SET published_ref=?,state='ready',error=NULL WHERE operation_id=? AND channel=? AND version=? AND EXISTS(SELECT 1 FROM operations WHERE id=? AND lease_token=? AND lease_until>?)")
+            .bind(&published).bind(id).bind(&channel).bind(&version).bind(id).bind(lease).bind(now()).execute(&mut *tx).await?;
         if saved.rows_affected() != 1 {
             return Err(Error::conflict(
                 "Publication lease changed during archive sharing",
             ));
         }
-        let updated = sqlx::query("UPDATE releases SET storage_ref=? WHERE plane=? AND app_id=? AND version=? AND storage_ref=?").bind(published).bind(&c.plane).bind(app).bind(&version).bind(reference).execute(&mut *tx).await?;
+        let updated = sqlx::query("UPDATE releases SET storage_ref=? WHERE plane=? AND app_id=? AND channel=? AND version=? AND storage_ref=?").bind(published).bind(&c.plane).bind(app).bind(&channel).bind(&version).bind(reference).execute(&mut *tx).await?;
         if updated.rows_affected() != 1 {
             return Err(Error::conflict("Release changed during archive sharing"));
         }

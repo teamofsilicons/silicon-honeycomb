@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Real CLI/HTTP/database journey with explicit IAM and archive test doubles."""
 import json
+import io
+import tarfile
 import os
 from pathlib import Path
 import socket
@@ -93,6 +95,21 @@ def main():
                 assert run('search', 'CLI integration', role=role)['total'] == 0
                 run('apps', 'get', app_id, role=role, ok=False)
             assert run('apps', 'get', app_id, role='member')['visibility'] == 'private'
+            # A rejected CLI upload must explain the later publication failure.
+            invalid_archive = root / 'missing-targets.tar.gz'
+            invalid_manifest = json.dumps({'format_version': 1, 'version': '1.0.0',
+                                           'bin': {'greet': 'app'}, 'targets': {}}).encode()
+            with tarfile.open(invalid_archive, 'w:gz') as archive:
+                entry = tarfile.TarInfo('honeycomb.yaml')
+                entry.size = len(invalid_manifest)
+                archive.addfile(entry, io.BytesIO(invalid_manifest))
+            upload_failure = run('releases', 'upload', app_id, str(invalid_archive), '--channel', 'prod', '--revision', '1', ok=False)
+            publication_failure = run('publication', 'request', app_id, '--message', 'Review', '--revision', '1', ok=False)
+            for target in ['windows-x86_64', 'windows-aarch64']:
+                exact_error = f'targets.{target}: required 64-bit target is missing'
+                assert exact_error in json.loads(upload_failure.stderr)['error']['message']
+                assert exact_error in json.loads(publication_failure.stderr)['error']['message']
+            assert 'IAM private activation is pending' not in publication_failure.stderr
             package = root / 'package'
             package.mkdir()
             targets = {}
@@ -111,10 +128,10 @@ def main():
                 assert run('validate', str(package))['valid']
                 archive = root / f'{version}.tar.gz'
                 run('pack', str(package), '--output', str(archive))
-                upload = run('--idempotency-key', 'cli-upload-e2e-' + version, 'releases', 'upload', app_id, str(archive), '--revision', '1')
+                upload = run('--idempotency-key', 'cli-upload-e2e-' + version, 'releases', 'upload', app_id, str(archive), '--channel', 'prod', '--revision', '1')
                 assert upload['state'] == 'accepted'
                 # A version cannot be overwritten with another upload operation.
-                run('releases', 'upload', app_id, str(archive), '--revision', '1', ok=False)
+                run('releases', 'upload', app_id, str(archive), '--channel', 'prod', '--revision', '1', ok=False)
                 args = ['install', app_id, '--alias', 'honeycomb-e2e-greet=honeycomb-e2e-custom'] if version == '1.0.0' else ['update', app_id]
                 installed = run(*args, role='member')
                 assert installed['version'] == version
@@ -126,12 +143,12 @@ def main():
             details = run('apps', 'get', app_id, role='member')
             assert details['stars'] == 1 and details['reviews'] == 1 and details['rating'] == 4.7
             assert details['installs'] == 2
-            request = run('publication', 'request', app_id, '--message', 'Please review this working release.', '--revision', '1')
+            # The first production release already starts the saved publication intent.
+            request = run('publication', 'get', app_id)['items'][0]
             assert request
             assert run('apps', 'get', app_id, role='member')['visibility'] == 'private'
-            run('publication', 'decide', request['id'], 'honeycomb', 'approve', '--revision', '1', role='validator')
-            published = run('publication', 'activate', request['id'], '--revision', '1')
-            assert published['state'] == 'accepted'
+            published = run('publication', 'decide', request['id'], 'honeycomb', 'approve', '--revision', '1', role='validator')
+            assert published['publication_state'] == 'published'
             assert run('apps', 'get', app_id, role='anonymous')['visibility'] == 'public'
             public_install = run('install', app_id, role='anonymous')
             assert public_install['version'] == '1.1.0'

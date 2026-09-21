@@ -35,12 +35,14 @@ test("registration validates the first archive and retries its upload without re
       }
       await route.continue();
     });
-    await page.route("**/api/v1/apps/*/releases", async route => {
+    await page.route("**/api/v2/apps/*/releases?*", async route => {
       if (route.request().method() !== "POST") return route.continue();
+      expect(["prod", "dev"]).toContain(new URL(route.request().url()).searchParams.get("channel"));
       keys.push(route.request().headers()["idempotency-key"]);
       if (keys.length === 1) {
         const accepted = await route.fetch();
         expect(accepted.ok()).toBe(true);
+        expect(accepted.headers()["honeycomb-api-version"]).toBe("v2");
         return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "The upload response was lost." } }) });
       }
       await route.continue();
@@ -49,19 +51,21 @@ test("registration validates the first archive and retries its upload without re
     await page.getByRole("link", { name: "Continue with IAM" }).click();
     await page.getByRole("button", { name: "Create application", exact: true }).click();
     const form = page.getByRole("dialog", { name: "Create an application", exact: true });
+    await expect(form.getByLabel("Publication preference")).toHaveValue("public");
     await form.getByLabel("Application handle").fill(handle + "-wrong");
     await form.getByLabel("Application name", { exact: true }).fill(name);
     await form.getByLabel("Description", { exact: true }).fill("This useful application provides tools for the Silicon ecosystem. ".repeat(7));
     await form.getByLabel("Webhook URL").fill("https://example.com/webhook/");
     await form.getByLabel("Webhook signing secret").fill("fixture-signing-secret-0000000000000000000");
+    await form.getByLabel("First release channel").selectOption("prod");
     await form.getByLabel("First CLI archive").setInputFiles({ name: "broken.tar.gz", mimeType: "application/gzip", buffer: Buffer.from("invalid archive") });
-    await form.getByRole("button", { name: "Create private application" }).click();
+    await form.getByRole("button", { name: "Create application" }).click();
     await expect(form.getByRole("alert")).toBeVisible();
     expect(creates).toBe(0);
     await form.getByLabel("First CLI archive").setInputFiles(archive);
     await form.getByRole("heading", { name: "First CLI release" }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `/tmp/honeycomb-registration-form-${info.project.name}.png` });
-    await form.getByRole("button", { name: "Create private application" }).click();
+    await form.getByRole("button", { name: "Create application" }).click();
     await expect(form.getByRole("alert")).toContainText("The archive app_id must match");
     expect(creates).toBe(0);
     // The same payload can omit its identity and use the selected application.
@@ -70,7 +74,7 @@ test("registration validates the first archive and retries its upload without re
     execFileSync(cli, ["pack", root, "--output", optionalArchive], { env });
     await form.getByLabel("First CLI archive").setInputFiles(optionalArchive);
     await form.getByLabel("Application handle").fill(handle);
-    await form.getByRole("button", { name: "Create private application" }).click();
+    await form.getByRole("button", { name: "Create application" }).click();
     const detail = page.getByRole("dialog", { name, exact: true });
     const secret = page.getByRole("dialog", { name: "Save your application secret", exact: true });
     await expect(secret).toBeVisible();
@@ -85,8 +89,35 @@ test("registration validates the first archive and retries its upload without re
     expect(creates).toBe(1);
     const saved = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}`)).json();
     expect(saved.latest_version).toBe("1.0.0");
-    const releases = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/releases`)).json();
+    expect(saved.config.visibility).toBe("public");
+    expect(saved.visibility).toBe("private");
+    const publication = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/publication`)).json();
+    expect(publication.items).toHaveLength(1);
+    const releases = await (await page.context().request.get(`${consoleSite}/api/v2/apps/${encodeURIComponent(appId)}/releases`)).json();
     expect(releases.items).toHaveLength(1);
+    // A development upload has an independent history and must not replace the
+    // production version. Promotion asks for the production version explicitly.
+    writeFileSync(join(root, "honeycomb.yaml"), JSON.stringify({ format_version: 1, version: "3.4.5", bin: { greet: "app" }, targets }));
+    const devArchive = join(root, "development.tar.gz");
+    execFileSync(cli, ["pack", root, "--output", devArchive], { env });
+    await detail.getByLabel("Upload release channel").selectOption("dev");
+    await detail.getByLabel("Upload CLI archive").setInputFiles(devArchive);
+    await expect(detail.getByLabel("Upload release channel")).toBeEnabled();
+    const afterDevelopment = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}`)).json();
+    expect(afterDevelopment.latest_version).toBe("1.0.0");
+    const history = detail.getByRole("region", { name: "Release history" });
+    await history.getByLabel("Release history channel").selectOption("dev");
+    await history.getByRole("button", { name: "Promote 3.4.5 to production" }).click();
+    await expect(history.getByLabel("Production version")).toHaveValue("");
+    await history.getByLabel("Production version").fill("1.1.0");
+    await history.getByRole("button", { name: "Create production release" }).click();
+    await expect(history.getByRole("status")).toContainText("Production release 1.1.0 created");
+    await expect(history).toContainText(`${appId}@1.1.0`);
+    const afterPromotion = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}`)).json();
+    expect(afterPromotion.latest_version).toBe("1.1.0");
+    await history.getByLabel("Release history channel").selectOption("dev");
+    await expect(history).toContainText(`${appId}>test@3.4.5`);
+    await expect(history).not.toContainText(`${appId}@1.1.0`);
     await detail.getByRole("heading", { name: "Upload a CLI release" }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `/tmp/honeycomb-first-release-${info.project.name}.png` });
   } finally {
@@ -194,7 +225,7 @@ test("console is gated and creates a private application through the backend", a
     .getByLabel("Webhook signing secret")
     .fill("fixture-signing-secret-0000000000000000000");
   await dialog
-    .getByRole("button", { name: "Create private application" })
+    .getByRole("button", { name: "Create application" })
     .click();
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
@@ -238,11 +269,13 @@ test("login callback rejects missing state and writes reject cross-origin reques
     `${consoleSite}/auth/callback?slt=fixture-owner&state=wrong`,
   );
   expect(callback.status()).toBe(400);
-  const write = await request.post(`${consoleSite}/api/v1/apps`, {
-    data: {},
-    headers: { Origin: "https://attacker.invalid" },
-  });
-  expect(write.status()).toBe(403);
+  for (const path of ["/api/v1/apps", "/api/v2/apps/tos%3Efixture/releases?channel=dev"]) {
+    const write = await request.post(`${consoleSite}${path}`, {
+      data: {},
+      headers: { Origin: "https://attacker.invalid" },
+    });
+    expect(write.status()).toBe(403);
+  }
 });
 test("both websites fit the viewport and show installation instructions", async ({
   page,
@@ -485,12 +518,11 @@ test("console uploads and activates an approved release visible in the anonymous
     await page.getByRole("heading", { name, exact: true }).click();
     await page.getByRole("button", { name: "Releases & publication" }).click();
     const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Upload release channel").selectOption("prod");
     await expect(dialog.getByLabel("Upload CLI archive")).toBeEnabled();
     await dialog.getByLabel("Upload CLI archive").setInputFiles(archive);
-    await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toBeEnabled();
-    await dialog.getByLabel("Tell reviewers about your application").fill("Please review this complete six-target release.");
-    await dialog.getByRole("button", { name: "Request publication", exact: true }).click();
-    await expect(dialog).toContainText("awaiting validator");
+    // Public-by-default registration automatically requests review after upload.
+    await expect(dialog).toContainText("Awaiting Honeycomb approval");
     const publications = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/publication`)).json();
     // The independent validator uses an explicit test identity; the owner cannot self-approve.
     const login = await request.post("http://127.0.0.1:19180/api/v1/auth/login", {
@@ -502,10 +534,11 @@ test("console uploads and activates an approved release visible in the anonymous
     });
     expect(decision.ok()).toBe(true);
     await page.reload();
-    await page.getByRole("heading", { name, exact: true }).click();
-    await page.getByRole("button", { name: "Releases & publication" }).click();
-    await page.getByRole("button", { name: "Activate public release", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText("published");
+    if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
+    await page.getByRole("button", { name: "Sent requests", exact: true }).click();
+    const sentRequest = page.locator("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
+    await expect(sentRequest).toContainText("Published", { timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Activate public release", exact: true })).toHaveCount(0);
     await page.goto(library);
     await page.getByRole("searchbox", { name: "Search applications" }).fill(name);
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();

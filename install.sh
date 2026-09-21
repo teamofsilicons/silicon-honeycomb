@@ -96,7 +96,7 @@ for honeycomb_shell_file in "${honeycomb_shell_files[@]}"; do
   printf 'Shell configured: %s\n' "$honeycomb_shell_file"
 done
 if [ "${HONEYCOMB_NO_SERVICE:-0}" != 1 ]; then
-  progress 'Registering the hourly update worker…'
+  progress 'Registering the minute update worker…'
   case "$(uname -s)" in
     Darwin)
       # launchd XML is generated with escaped values by the CLI, avoiding path interpolation.

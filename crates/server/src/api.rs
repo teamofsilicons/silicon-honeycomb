@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use honeycomb_core::{App, AppInput, Page, Release};
+use honeycomb_core::{App, AppInput, Page, Release, ReleaseChannel};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -20,9 +20,11 @@ use sqlx::{Row, sqlite::SqliteRow};
 pub fn router(state: State) -> Router {
     let archive_limit = DefaultBodyLimit::max(honeycomb_core::package::MAX_ARCHIVE_BYTES as usize);
     Router::new()
+        .merge(super::obo::router())
         .route("/health", get(health))
         .route("/api/contracts", get(super::contracts::discovery))
         .route("/api/v1/contract", get(super::contracts::discovery))
+        .route("/api/v2/contract", get(super::contracts::discovery_v2))
         .route("/api/v1/cli/latest", get(super::cli_release::latest))
         .route("/api/v1/iam", get(iam))
         .route("/api/v1/auth/login", post(login))
@@ -85,9 +87,20 @@ pub fn router(state: State) -> Router {
         )
         .route(
             "/api/v1/apps/{id}/releases",
+            get(releases_v1)
+                .post(upload_release_v1)
+                .layer(archive_limit),
+        )
+        .route("/api/v1/apps/{id}/download", get(download_v1))
+        .route(
+            "/api/v2/apps/{id}/releases",
             get(releases).post(upload_release).layer(archive_limit),
         )
-        .route("/api/v1/apps/{id}/download", get(download))
+        .route(
+            "/api/v2/apps/{id}/releases/{version}/promote",
+            post(promote_release),
+        )
+        .route("/api/v2/apps/{id}/download", get(download))
         .route(
             "/api/v1/apps/{id}/secret-rotations",
             post(super::secrets::rotate),
@@ -424,12 +437,13 @@ pub(crate) async fn find_app(s: &State, c: &Context, id: &str, manage: bool) -> 
     Ok(app)
 }
 async fn latest_version(s: &State, c: &Context, id: &str) -> Result<Option<String>> {
-    let versions: Vec<String> =
-        sqlx::query_scalar("SELECT version FROM releases WHERE plane=? AND app_id=?")
-            .bind(&c.plane)
-            .bind(id)
-            .fetch_all(&s.db)
-            .await?;
+    let versions: Vec<String> = sqlx::query_scalar(
+        "SELECT version FROM releases WHERE plane=? AND app_id=? AND channel='prod'",
+    )
+    .bind(&c.plane)
+    .bind(id)
+    .fetch_all(&s.db)
+    .await?;
     Ok(versions
         .into_iter()
         .filter_map(|v| semver::Version::parse(&v).ok())
@@ -961,11 +975,39 @@ async fn validate_archive(
     .map_err(|e| anyhow::anyhow!(e))??;
     Ok(Json(result))
 }
-async fn upload_release(
+#[derive(Deserialize)]
+struct ReleaseQuery {
+    channel: Option<ReleaseChannel>,
+}
+// The original v1 mutation remains a production upload without a channel field.
+async fn upload_release_v1(
     ExtractState(s): ExtractState<State>,
     h: HeaderMap,
     Path(id): Path<String>,
     body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>)> {
+    store_release(s, h, id, ReleaseChannel::Prod, body, None, true).await
+}
+async fn upload_release(
+    ExtractState(s): ExtractState<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<ReleaseQuery>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>)> {
+    let channel = q
+        .channel
+        .ok_or_else(|| Error::bad("Choose an explicit release channel: prod or dev"))?;
+    store_release(s, h, id, channel, body, None, false).await
+}
+async fn store_release(
+    s: State,
+    h: HeaderMap,
+    id: String,
+    channel: ReleaseChannel,
+    body: axum::body::Bytes,
+    promoted_from: Option<String>,
+    legacy_contract: bool,
 ) -> Result<(StatusCode, Json<Value>)> {
     let c = context(&s, &h).await?;
     let app = find_app(&s, &c, &id, true).await?;
@@ -990,6 +1032,16 @@ async fn upload_release(
         .await
         .map_err(|e| anyhow::anyhow!(e))??;
     let mut errors = validation.errors;
+    if !legacy_contract
+        && validation
+            .manifest
+            .as_ref()
+            .is_some_and(|m| !honeycomb_core::valid_release_version(&m.version))
+    {
+        errors.push(
+            "version: release channels require x.y.z without prerelease or build suffixes".into(),
+        );
+    }
     if validation
         .manifest
         .as_ref()
@@ -999,8 +1051,8 @@ async fn upload_release(
         errors.push("Archive app_id differs from the application being released".into());
     }
     if !errors.is_empty() {
-        sqlx::query("INSERT INTO release_validation_failures(plane,app_id,revision,errors,created_at) VALUES(?,?,?,?,?) ON CONFLICT(plane,app_id) DO UPDATE SET revision=excluded.revision,errors=excluded.errors,created_at=excluded.created_at WHERE excluded.revision >= release_validation_failures.revision")
-            .bind(&c.plane).bind(&id).bind(expected).bind(serde_json::to_string(&errors).map_err(anyhow::Error::from)?).bind(now()).execute(&s.db).await?;
+        sqlx::query("INSERT INTO release_validation_failures(plane,app_id,channel,revision,errors,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(plane,app_id,channel) DO UPDATE SET revision=excluded.revision,errors=excluded.errors,created_at=excluded.created_at WHERE excluded.revision >= release_validation_failures.revision")
+            .bind(&c.plane).bind(&id).bind(channel.as_str()).bind(expected).bind(serde_json::to_string(&errors).map_err(anyhow::Error::from)?).bind(now()).execute(&s.db).await?;
         let mut error = Error::bad("CLI release validation failed");
         error.1.details = errors;
         return Err(error);
@@ -1009,10 +1061,35 @@ async fn upload_release(
         .manifest
         .ok_or_else(|| Error::bad("Archive is missing honeycomb.yaml"))?;
     let version = manifest.version;
-    let digest = hash(&json!({"kind":"release","app_id":id,"version":version,"sha256":sha}));
+    let size = std::fs::metadata(&path)
+        .map_err(|e| anyhow::anyhow!(e))?
+        .len() as i64;
+    let mut digest = hash(
+        &json!({"kind":"release","app_id":id,"channel":channel,"version":version,"sha256":sha,"promoted_from":promoted_from}),
+    );
+    // Before channels existed, uploads implicitly targeted production. Preserve
+    // those exact retries, including Briefcase's original upload filename.
+    let legacy_digest = hash(&json!({"kind":"release","app_id":id,"version":version,"sha256":sha}));
+    let legacy: bool = if legacy_contract {
+        true
+    } else if channel == ReleaseChannel::Prod && promoted_from.is_none() {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND actor=? AND idempotency_key=? AND kind='release' AND resource=? AND revision=? AND request_hash=?)")
+            .bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind(&id).bind(expected).bind(&legacy_digest).fetch_one(&s.db).await?
+    } else {
+        false
+    };
+    if legacy {
+        digest = legacy_digest;
+    }
     let existing = existing_operation(&s, &c, k, &digest).await?;
     if existing.as_ref().is_some_and(|o| o["state"] == "accepted") {
         let mut result = existing.unwrap();
+        result["app_id"] = json!(id);
+        result["channel"] = json!(channel);
+        result["version"] = json!(version);
+        result["sha256"] = json!(sha);
+        result["size"] = json!(size);
+        result["promoted_from"] = json!(promoted_from);
         result["publication"] = automatic_publication(&s, &c, &id).await;
         return Ok((StatusCode::OK, Json(result)));
     }
@@ -1027,10 +1104,11 @@ async fn upload_release(
         o["id"].as_str().unwrap().to_owned()
     } else {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM releases WHERE plane=? AND app_id=? AND version=?)",
+            "SELECT EXISTS(SELECT 1 FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?)",
         )
         .bind(&c.plane)
         .bind(&id)
+        .bind(channel.as_str())
         .bind(&version)
         .fetch_one(&mut *operation_tx)
         .await?;
@@ -1043,12 +1121,25 @@ async fn upload_release(
         sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(&op).bind(&c.plane).bind(&c.identity()?.principal_id).bind(k).bind("release").bind(&id).bind(digest).bind(app.revision).bind(now()).execute(&mut *operation_tx).await?;
         op
     };
+    sqlx::query("INSERT OR IGNORE INTO release_reservations(plane,app_id,channel,version,operation_id) VALUES(?,?,?,?,?)")
+        .bind(&c.plane).bind(&id).bind(channel.as_str()).bind(&version).bind(&op).execute(&mut *operation_tx).await?;
+    let owner: String = sqlx::query_scalar("SELECT operation_id FROM release_reservations WHERE plane=? AND app_id=? AND channel=? AND version=?")
+        .bind(&c.plane).bind(&id).bind(channel.as_str()).bind(&version).fetch_one(&mut *operation_tx).await?;
+    if owner != op {
+        return Err(Error::conflict(
+            "This channel/version is already being released; retry its original operation or choose a new version",
+        ));
+    }
     operation_tx.commit().await?;
     let mut reference = s
         .storage
         .put(
             &id,
-            &version,
+            &if legacy {
+                version.clone()
+            } else {
+                format!("{}-{version}", channel.as_str())
+            },
             &path,
             c.token.as_deref().unwrap(),
             c.environment.as_deref(),
@@ -1067,14 +1158,24 @@ async fn upload_release(
             )
             .await?;
     }
-    let size = std::fs::metadata(&path)
-        .map_err(|e| anyhow::anyhow!(e))?
-        .len() as i64;
     let mut tx = s.db.begin().await?;
-    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES(?,?,?,?,?,?,?)").bind(&c.plane).bind(&id).bind(&version).bind(&sha).bind(size).bind(reference).bind(now()).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM release_validation_failures WHERE plane=? AND app_id=?")
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(plane,app_id,channel,version) DO NOTHING").bind(&c.plane).bind(&id).bind(channel.as_str()).bind(&version).bind(&sha).bind(size).bind(reference).bind(now()).execute(&mut *tx).await?;
+    let checksum: String = sqlx::query_scalar(
+        "SELECT sha256 FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?",
+    )
+    .bind(&c.plane)
+    .bind(&id)
+    .bind(channel.as_str())
+    .bind(&version)
+    .fetch_one(&mut *tx)
+    .await?;
+    if checksum != sha {
+        return Err(Error::conflict("Release versions are immutable"));
+    }
+    sqlx::query("DELETE FROM release_validation_failures WHERE plane=? AND app_id=? AND channel=?")
         .bind(&c.plane)
         .bind(&id)
+        .bind(channel.as_str())
         .execute(&mut *tx)
         .await?;
     sqlx::query("UPDATE operations SET state='accepted',error=NULL WHERE id=?")
@@ -1082,13 +1183,13 @@ async fn upload_release(
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,?,?,?)",
+        "INSERT OR IGNORE INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES(?,?,?,?,?,?)",
     )
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(&c.plane)
     .bind(format!("release:{op}"))
     .bind("release.created")
-    .bind(json!({"app_id":id,"org_id":app.org_id,"version":version}).to_string())
+    .bind(json!({"app_id":id,"org_id":app.org_id,"channel":channel,"version":version,"promoted_from":promoted_from}).to_string())
     .bind(now())
     .execute(&mut *tx)
     .await?;
@@ -1097,34 +1198,115 @@ async fn upload_release(
     Ok((
         StatusCode::CREATED,
         Json(
-            json!({"id":op,"state":"accepted","app_id":id,"version":version,"sha256":sha,"size":size,"publication":automatic_publication(&s, &c, &id).await}),
+            json!({"id":op,"state":"accepted","app_id":id,"channel":channel,"version":version,"promoted_from":promoted_from,"sha256":sha,"size":size,"publication":automatic_publication(&s, &c, &id).await}),
         ),
     ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Promotion {
+    version: String,
+}
+async fn promote_release(
+    ExtractState(s): ExtractState<State>,
+    h: HeaderMap,
+    Path((id, source_version)): Path<(String, String)>,
+    Json(input): Json<Promotion>,
+) -> Result<(StatusCode, Json<Value>)> {
+    if !honeycomb_core::valid_release_version(&input.version) {
+        return Err(Error::bad(
+            "Production version must be x.y.z without prerelease or build suffixes",
+        ));
+    }
+    let c = context(&s, &h).await?;
+    let app = find_app(&s, &c, &id, true).await?;
+    if app.revision != revision(&h)? {
+        return Err(Error::conflict("Application revision changed"));
+    }
+    key(&h)?;
+    let row = sqlx::query("SELECT storage_ref,sha256 FROM releases WHERE plane=? AND app_id=? AND channel='dev' AND version=?")
+        .bind(&c.plane).bind(&id).bind(&source_version).fetch_optional(&s.db).await?.ok_or_else(Error::missing)?;
+    let bytes = s
+        .storage
+        .read(
+            &row.get::<String, _>("storage_ref"),
+            &app.org_id,
+            c.token.as_deref(),
+            c.environment.as_deref(),
+        )
+        .await?;
+    if hex::encode(Sha256::digest(&bytes)) != row.get::<String, _>("sha256") {
+        return Err(Error::unavailable(
+            "Source dev release checksum does not match",
+        ));
+    }
+    let promoted = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("source.tar.gz");
+        let output = directory.path().join("promoted.tar.gz");
+        std::fs::write(&source, bytes)?;
+        honeycomb_core::package::repack_version(&source, &input.version, &output)?;
+        Ok(std::fs::read(output)?)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!(e))??;
+    store_release(
+        s,
+        h,
+        id,
+        ReleaseChannel::Prod,
+        promoted.into(),
+        Some(source_version),
+        false,
+    )
+    .await
 }
 fn release_from(r: &SqliteRow) -> Release {
     Release {
         app_id: r.get("app_id"),
+        channel: r
+            .get::<String, _>("channel")
+            .parse()
+            .expect("database release channel constraint"),
         version: r.get("version"),
         sha256: r.get("sha256"),
         size: r.get("size"),
         created_at: r.get("created_at"),
     }
 }
+async fn releases_v1(
+    s: ExtractState<State>,
+    h: HeaderMap,
+    id: Path<String>,
+) -> Result<Json<Value>> {
+    releases(
+        s,
+        h,
+        id,
+        Query(ReleaseQuery {
+            channel: Some(ReleaseChannel::Prod),
+        }),
+    )
+    .await
+}
 async fn releases(
     ExtractState(s): ExtractState<State>,
     h: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<ReleaseQuery>,
 ) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
     find_app(&s, &c, &id, false).await?;
-    let mut items: Vec<Release> = sqlx::query("SELECT * FROM releases WHERE plane=? AND app_id=?")
-        .bind(&c.plane)
-        .bind(id)
-        .fetch_all(&s.db)
-        .await?
-        .iter()
-        .map(release_from)
-        .collect();
+    let mut items: Vec<Release> =
+        sqlx::query("SELECT * FROM releases WHERE plane=? AND app_id=? AND channel=?")
+            .bind(&c.plane)
+            .bind(id)
+            .bind(q.channel.unwrap_or_default().as_str())
+            .fetch_all(&s.db)
+            .await?
+            .iter()
+            .map(release_from)
+            .collect();
     items.sort_by(|a, b| {
         semver::Version::parse(&b.version)
             .ok()
@@ -1135,6 +1317,29 @@ async fn releases(
 #[derive(Deserialize)]
 struct Download {
     version: Option<String>,
+    #[serde(default)]
+    channel: ReleaseChannel,
+}
+#[derive(Deserialize)]
+struct LegacyDownload {
+    version: Option<String>,
+}
+async fn download_v1(
+    s: ExtractState<State>,
+    h: HeaderMap,
+    id: Path<String>,
+    Query(q): Query<LegacyDownload>,
+) -> Result<Response> {
+    download(
+        s,
+        h,
+        id,
+        Query(Download {
+            version: q.version,
+            channel: ReleaseChannel::Prod,
+        }),
+    )
+    .await
 }
 async fn download(
     ExtractState(s): ExtractState<State>,
@@ -1149,17 +1354,34 @@ async fn download(
             "Application is awaiting IAM activation or is disabled",
         ));
     }
-    let version = q
-        .version
-        .or(app.latest_version)
-        .ok_or_else(Error::missing)?;
-    let row = sqlx::query("SELECT * FROM releases WHERE plane=? AND app_id=? AND version=?")
+    let version = if let Some(version) = q.version {
+        version
+    } else {
+        let versions: Vec<String> = sqlx::query_scalar(
+            "SELECT version FROM releases WHERE plane=? AND app_id=? AND channel=?",
+        )
         .bind(&c.plane)
         .bind(&id)
-        .bind(&version)
-        .fetch_optional(&s.db)
-        .await?
-        .ok_or_else(Error::missing)?;
+        .bind(q.channel.as_str())
+        .fetch_all(&s.db)
+        .await?;
+        versions
+            .into_iter()
+            .filter_map(|v| semver::Version::parse(&v).ok())
+            .max()
+            .map(|v| v.to_string())
+            .ok_or_else(Error::missing)?
+    };
+    let row = sqlx::query(
+        "SELECT * FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?",
+    )
+    .bind(&c.plane)
+    .bind(&id)
+    .bind(q.channel.as_str())
+    .bind(&version)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(Error::missing)?;
     let bytes = s
         .storage
         .read(
@@ -1179,13 +1401,17 @@ async fn download(
         .filter(|s| uuid::Uuid::parse_str(s).is_ok())
         .map(str::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    sqlx::query("INSERT OR IGNORE INTO downloads(plane,app_id,receipt,created_at) VALUES(?,?,?,?)")
+    if q.channel == ReleaseChannel::Prod {
+        sqlx::query(
+            "INSERT OR IGNORE INTO downloads(plane,app_id,receipt,created_at) VALUES(?,?,?,?)",
+        )
         .bind(&c.plane)
         .bind(&id)
         .bind(receipt)
         .bind(now())
         .execute(&s.db)
         .await?;
+    }
     Ok((
         [
             (header::CONTENT_TYPE, "application/gzip"),
@@ -1391,7 +1617,7 @@ async fn submit_publication(
     }
     let mut blockers = Vec::new();
     if app.latest_version.is_none() {
-        let validation: Option<String> = sqlx::query_scalar("SELECT errors FROM release_validation_failures WHERE plane=? AND app_id=? AND revision=?")
+        let validation: Option<String> = sqlx::query_scalar("SELECT errors FROM release_validation_failures WHERE plane=? AND app_id=? AND channel='prod' AND revision=?")
             .bind(&c.plane).bind(id).bind(app.revision).fetch_optional(&s.db).await?;
         if let Some(validation) = validation {
             blockers.push("The last CLI release upload failed validation:".into());
@@ -1485,8 +1711,8 @@ async fn publication(
                     .bind(&id)
                     .fetch_one(&s.db)
                     .await?;
-            let archives=sqlx::query("SELECT version,state,error FROM publication_archives WHERE operation_id=? ORDER BY version").bind(&id).fetch_all(&s.db).await?;
-            let mut value = json!({"id":id,"state":row.get::<String,_>("state"),"error":row.get::<Option<String>,_>("error"),"archives":archives.iter().map(|a|json!({"version":a.get::<String,_>("version"),"state":a.get::<String,_>("state"),"error":a.get::<Option<String>,_>("error")})).collect::<Vec<_>>()});
+            let archives=sqlx::query("SELECT channel,version,state,error FROM publication_archives WHERE operation_id=? ORDER BY version").bind(&id).fetch_all(&s.db).await?;
+            let mut value = json!({"id":id,"state":row.get::<String,_>("state"),"error":row.get::<Option<String>,_>("error"),"archives":archives.iter().map(|a|json!({"channel":a.get::<String,_>("channel"),"version":a.get::<String,_>("version"),"state":a.get::<String,_>("state"),"error":a.get::<Option<String>,_>("error")})).collect::<Vec<_>>()});
             if row.get::<String, _>("actor") == c.identity()?.principal_id {
                 value["idempotency_key"] = json!(row.get::<String, _>("idempotency_key"));
             }

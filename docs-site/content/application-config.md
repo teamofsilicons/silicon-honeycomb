@@ -31,6 +31,7 @@ The resulting ID is `org_id>local_app_id`. Updating configuration does not renam
 ## Optional fields
 | Field | Default / purpose |
 | --- | --- |
+| `visibility` | New production apps default to `public`: automatically request approval once configuration and the first valid release are ready. Set `private` to opt out. On updates, omission preserves the existing choice; older apps retain their existing visibility preference. Effective public access still requires every approval. |
 | `logo_url` | Optional HTTPS logo. Uploaded logo links are public. |
 | `website_url`, `docs_url` | Optional HTTPS links. |
 | `base_url` | Backend origin for exposed OBO endpoints; no path, query, or trailing slash. |
@@ -40,6 +41,8 @@ The resulting ID is `org_id>local_app_id`. Updating configuration does not renam
 | `obo_endpoints` | Endpoints your application exposes for delegated access. |
 | `obo_review_message` | Context for permission reviewers. |
 | `testing_idle_days` | 30 by default; range 1–36500. |
+
+The `visibility` input is available in the deployed console and HTTP API and in CLI builds containing this change. The public 0.2.2 CLI predates that input; use the console to select private until upgrading to a supporting CLI build.
 
 Unknown input fields are rejected. Requested and effective configuration are displayed separately because IAM must accept changes before they apply at runtime.
 

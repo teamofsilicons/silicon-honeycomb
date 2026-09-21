@@ -23,6 +23,7 @@ jobs:
       - run: python3 scripts/test_cli.py
       - run: python3 scripts/test_install.py
       - run: python3 scripts/test_progress.py
+      - run: python3 scripts/test_release_channels.py
       - run: python3 scripts/test_cargo_install.py
       - run: bash -n install.sh
   websites:
@@ -43,6 +44,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: cargo +1.98.0 build -p silicon-honeycomb-cli --locked
+      - run: npm run test:unit
+        working-directory: web
       - run: npm run test:e2e
         working-directory: web
       - uses: actions/upload-artifact@v7.0.1

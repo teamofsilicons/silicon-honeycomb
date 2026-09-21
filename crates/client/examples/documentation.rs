@@ -31,7 +31,12 @@ pub async fn upload_example() -> anyhow::Result<()> {
         revision: Some(app.revision),
     };
     let result = client
-        .upload_release(&app.app_id, Path::new("my-app-1.0.0.tar.gz"), &mutation)
+        .upload_release(
+            &app.app_id,
+            Path::new("my-app-1.0.0.tar.gz"),
+            silicon_honeycomb_client::ReleaseChannel::Prod,
+            &mutation,
+        )
         .await?;
     // Inspect accepted/pending state; do not log arbitrary credential results.
     let _ = result;

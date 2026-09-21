@@ -34,7 +34,7 @@ fn archive() -> Vec<u8> {
 async fn upload(s: &State, id: &str, bytes: &[u8], actor: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("POST")
-        .uri(format!("/api/v1/apps/tos%3E{id}/releases"))
+        .uri(format!("/api/v1/apps/tos%3E{id}/releases?channel=prod"))
         .header("authorization", format!("Bearer {actor}"))
         .header("if-match", "1")
         .header("idempotency-key", "default-publication-upload")

@@ -1,0 +1,12 @@
+{
+  "obo_endpoints": [
+    {
+      "endpoint_id": "honeycomb.apps.list",
+      "path": "/api/v1/obo/apps/list",
+      "metadata": {},
+      "critical": true,
+      "ttl_seconds": 60,
+      "enabled": true
+    }
+  ]
+}

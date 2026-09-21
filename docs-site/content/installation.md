@@ -38,7 +38,7 @@ honeycomb self-update
 honeycomb config set auto_update false
 honeycomb daemon --once
 ```
-The per-user worker checks hourly and honors `auto_update`. It uses launchd on macOS, systemd user services on Linux, and the platform task mechanism on Windows. Self-update verifies vendor release integrity. The worker also updates installed applications in their original account and environment context. CLI commands check for due updates too. Use `honeycomb update APP_ID` for an immediate application update.
+The per-user worker checks at second `01` of every minute and honors `auto_update`. It uses launchd on macOS, systemd user services on Linux, and the platform task mechanism on Windows. Self-update verifies vendor release integrity. The worker also updates installed applications in their original account and environment context. CLI commands check for due updates too. Use `honeycomb update APP_ID` for an immediate application update.
 
 Interactive `install`, `update`, and `self-update` commands show progress on stderr from startup through release lookup, download, verification, and installation. Download percentages reflect bytes received, not estimated total installation time. Redirected output uses plain progress lines; `--json` and background maintenance omit progress output.
 
@@ -51,6 +51,6 @@ cargo install --path crates/cli --locked
 The workspace currently requires Rust 1.98 or newer. [Troubleshooting](/troubleshooting/) covers PATH and network errors.
 
 ## Latest Honeycomb CLI release
-`GET https://backend.honeycomb.teamofsilicons.com/api/v1/cli/latest` returns the latest published stable Honeycomb CLI version, release page, and archive/checksum URLs for all six platforms. No login is required. Discovery uses GitHub’s latest release and requires all native assets to be uploaded; drafts, prereleases and incomplete releases are never advertised. Results may be cached for up to five minutes.
+`GET https://backend.honeycomb.teamofsilicons.com/api/v1/cli/latest` returns the latest published stable Honeycomb CLI version, release page, and archive/checksum URLs for all six platforms. No login is required. Discovery uses GitHub’s latest release and requires all native assets to be uploaded; drafts, prereleases and incomplete releases are never advertised. Results may be cached for up to one minute; HTTP responses advertise only the remaining cache lifetime so downstream caches do not extend that window.
 
-`honeycomb self-update` and the hourly CLI worker use this endpoint, then verify the downloaded checksum and executable version before activation. This endpoint is for Honeycomb itself, independent of application releases.
+`honeycomb self-update` and the minute CLI worker use this endpoint, then verify the downloaded checksum and executable version before activation. This endpoint is for Honeycomb itself, independent of application releases.

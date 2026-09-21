@@ -562,6 +562,38 @@ kbd {
   margin-bottom: 24px;
   border-radius: 4px;
 }
+.release-history > label {
+  display: grid;
+  gap: 8px;
+}
+.release-list {
+  list-style: none;
+  margin: 20px 0;
+  padding: 0;
+}
+.release-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+.release-list small, .release-list code {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.release-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.experimental-install summary {
+  cursor: pointer;
+  color: var(--blue);
+}
 footer {
   display: flex;
   align-items: center;
@@ -1255,6 +1287,10 @@ textarea {
 .review-request-row > div {flex:1;min-width:0;}
 .review-request-row h2 {font-size:1.2rem;margin:0 0 8px;}
 .review-request-row p {overflow-wrap:anywhere;}
+.sent-request { border-bottom: 1px solid var(--line); padding: 24px 0; }
+.sent-request-heading, .sent-request-gate { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.sent-request h2 { font-size: 1.35rem; margin: 0 0 8px; }
+.sent-request p { overflow-wrap: anywhere; }
 
 .scope-picker { display: grid; gap: 14px; }
 .scope-picker h3, .scope-picker p { margin: 0; }
