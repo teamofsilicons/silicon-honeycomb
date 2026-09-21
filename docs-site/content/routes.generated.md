@@ -18,6 +18,9 @@
 | `POST` | `/api/v1/review-requests/{id}/plan` | [`retry_plan`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `POST` | `/api/v1/review-requests/{id}/{provider}/decisions` | [`decide`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `GET` | `/api/v1/organizations/{org}/scope-catalog` | [`scopes`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
+| `GET` | `/api/v1/bundles` | [`list`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
+| `GET` | `/api/v1/bundles/{id}` | [`get`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
+| `PUT` | `/api/v1/bundles/{id}` | [`configure`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `GET` | `/api/v1/apps` | [`search`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `POST` | `/api/v1/apps` | [`create_app`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |
 | `POST` | `/api/v1/organizations/{org}/logos` | [`upload`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/api.rs) |

@@ -143,8 +143,12 @@ def main():
             details = run('apps', 'get', app_id, role='member')
             assert details['stars'] == 1 and details['reviews'] == 1 and details['rating'] == 4.7
             assert details['installs'] == 2
-            request = run('publication', 'request', app_id, '--message', 'Please review this working release.', '--revision', '1')
-            assert request
+            # Default-public intent submits once after the first valid upload;
+            # later releases reuse that request until its revision changes.
+            publications = run('publication', 'get', app_id)
+            assert len(publications['items']) == 1
+            request = publications['items'][0]
+            assert request['revision'] == 1
             assert run('apps', 'get', app_id, role='member')['visibility'] == 'private'
             published = run('publication', 'decide', request['id'], 'honeycomb', 'approve', '--revision', '1', role='validator')
             assert published['publication_state'] == 'published'

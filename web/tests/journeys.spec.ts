@@ -449,7 +449,7 @@ test("provider administrators can discuss and approve their review gate", async 
   await expect(dialog.getByRole("button", { name: "Submit decision", exact: true })).toBeDisabled();
 });
 
-test("console uploads and activates an approved release visible in the anonymous library", async ({ page, request }, info) => {
+test("console shows the automatic publication request and publishes an approved release in the anonymous library", async ({ page, request }, info) => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -487,11 +487,10 @@ test("console uploads and activates an approved release visible in the anonymous
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByLabel("Upload CLI archive")).toBeEnabled();
     await dialog.getByLabel("Upload CLI archive").setInputFiles(archive);
-    await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toBeEnabled();
-    await dialog.getByLabel("Tell reviewers about your application").fill("Please review this complete six-target release.");
-    await dialog.getByRole("button", { name: "Request publication", exact: true }).click();
     await expect(dialog).toContainText("Awaiting Honeycomb approval");
+    await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toHaveCount(0);
     const publications = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/publication`)).json();
+    expect(publications.items).toHaveLength(1);
     // The independent validator uses an explicit test identity; the owner cannot self-approve.
     const login = await request.post("http://127.0.0.1:19180/api/v1/auth/login", {
       headers: { "Idempotency-Key": `${handle}-validator-login` }, data: { slt: "fixture-validator" },

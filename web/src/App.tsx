@@ -486,6 +486,7 @@ export default function App() {
     });
     setPendingRelease(undefined);
     setSelected(await request(endpoint(app.app_id)));
+    setPublication(await request(endpoint(app.app_id) + "/publication"));
     await load();
   }
   async function upload(file: File | undefined) {
@@ -1404,6 +1405,7 @@ export default function App() {
                   />
                 </label>
                 <div class="section-divider" />
+                <Show when={!publication()?.items?.some((request: { revision: number }) => request.revision === app().revision)}>
                 <h3>{app().visibility === "public" ? "Request scope review" : "Request public release"}</h3>
                 <p class="muted">
                   Provider scope approvals and Honeycomb verification are
@@ -1447,6 +1449,7 @@ export default function App() {
                     <ArrowRight size={16} />
                   </button>
                 </form>
+                </Show>
                 <For each={publication()?.items || []}>
                   {(p) => (
                     <section class="review-thread">
