@@ -22,6 +22,7 @@ struct Provider {
     drop_response: bool,
     malformed: bool,
     revoked: bool,
+    unavailable: bool,
 }
 struct Fixture {
     home: PathBuf,
@@ -207,8 +208,11 @@ fn respond(mut stream: TcpStream, provider: Arc<Mutex<Provider>>) {
             value
         }
     } else if headers.starts_with("get /api/v1/auth/status ") {
-        let valid = !headers.contains("bearer access-old") && !provider.lock().unwrap().revoked;
-        if !valid {
+        let state = provider.lock().unwrap();
+        let valid = !headers.contains("bearer access-old") && !state.revoked;
+        if state.unavailable {
+            status = 503;
+        } else if !valid {
             status = 401;
         }
         json!({"authenticated":valid})
@@ -346,4 +350,30 @@ fn testing_context_does_not_borrow_or_overwrite_the_production_session() {
     success(fixture.run(&["--test", &test_key, "login", "status"]));
     assert_eq!(fixture.saved(None)["refresh_token"], "refresh-old");
     assert_eq!(fixture.saved(Some(&test_key))["refresh_token"], "refresh-1");
+}
+
+#[test]
+fn early_rejection_recovers_before_local_expiry_but_outage_retains_credentials() {
+    for unavailable in [false, true] {
+        let fixture = Fixture::new();
+        let directory = fixture.seed(None);
+        let mut saved = fixture.saved(None);
+        saved["expires_at"] = json!(now() + 3600);
+        fs::write(
+            directory.join("session.json"),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        fixture.provider.lock().unwrap().unavailable = unavailable;
+        let output = fixture.run(&["login", "status"]);
+        if unavailable {
+            assert!(!output.status.success());
+            assert_eq!(fixture.saved(None), saved);
+            assert!(fixture.provider.lock().unwrap().attempts.is_empty());
+        } else {
+            assert_eq!(success(output)["authenticated"], true);
+            assert_eq!(fixture.saved(None)["refresh_token"], "refresh-1");
+            assert_eq!(fixture.provider.lock().unwrap().attempts.len(), 1);
+        }
+    }
 }

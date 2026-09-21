@@ -30,6 +30,19 @@ use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 use url::Url;
 
+/// A rejected HTTP request. Callers may distinguish authentication failure from an outage.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: u16,
+    message: String,
+}
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for ApiError {}
+
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -232,19 +245,23 @@ impl Client {
                     .join("\n")
             })
             .unwrap_or_default();
-        bail!(
-            "HTTP {} {}: {}{}",
-            status.as_u16(),
-            error["code"].as_str().unwrap_or("request_failed"),
-            error["message"]
-                .as_str()
-                .unwrap_or("Honeycomb returned an unexpected error response"),
-            if details.is_empty() {
-                String::new()
-            } else {
-                format!("\n{details}")
-            }
-        )
+        Err(ApiError {
+            status: status.as_u16(),
+            message: format!(
+                "HTTP {} {}: {}{}",
+                status.as_u16(),
+                error["code"].as_str().unwrap_or("request_failed"),
+                error["message"]
+                    .as_str()
+                    .unwrap_or("Honeycomb returned an unexpected error response"),
+                if details.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{details}")
+                }
+            ),
+        }
+        .into())
     }
     async fn bounded(mut response: Response, limit: usize) -> Result<Vec<u8>> {
         let mut bytes = vec![];

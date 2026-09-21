@@ -95,6 +95,39 @@ impl Store {
         Ok(())
     }
 
+    /// Validate before dispatching a command. A server-side rejection can precede
+    /// the cached expiry; renew once without replaying a command or its input.
+    pub async fn verified(&mut self, client: &Client) -> Result<Option<Value>> {
+        self.renew(client).await?;
+        let Some(access) = self.session.access_token.clone() else {
+            return Ok(None);
+        };
+        let status = client.with_token(&access).login_status().await;
+        let rejected = match &status {
+            Ok(value) => value["authenticated"] == false,
+            Err(error) => error
+                .downcast_ref::<honeycomb_client::ApiError>()
+                .is_some_and(|error| error.status == 401),
+        };
+        if !rejected || self.session.refresh_token.is_none() {
+            return status.map(Some);
+        }
+        self.session.expires_at = 0;
+        // renew persists the same pending attempt before sending and saves the successor.
+        self.renew(client).await?;
+        Ok(Some(
+            client
+                .with_token(
+                    self.session
+                        .access_token
+                        .as_deref()
+                        .expect("renewed access"),
+                )
+                .login_status()
+                .await?,
+        ))
+    }
+
     pub async fn renew(&mut self, client: &Client) -> Result<()> {
         // A replay after a long offline period can return an already-expired access token.
         // Save its rotated refresh token first, then renew once more with a new operation.

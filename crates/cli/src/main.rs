@@ -755,9 +755,11 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             | Command::Installed
             | Command::Uninstall { .. }
     );
-    if !auth_mutation && !local_only {
-        store.renew(&client).await?;
-    }
+    let verified_status = if !auth_mutation && !local_only {
+        store.verified(&client).await?
+    } else {
+        None
+    };
     // Login/logout retain the same lock through the remote operation and local save.
     // Release it before package maintenance acquires its own locks.
     let session = store.session.clone();
@@ -772,7 +774,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             if session.access_token.is_none() {
                 show(&json!({"authenticated":false}))?;
             } else {
-                show(&client.login_status().await?)?;
+                show(&verified_status.expect("stored session was verified"))?;
             }
         }
         Command::Login { slt_or_status } => {
@@ -1533,7 +1535,7 @@ async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) 
     }
     let mut client = context.client(telemetry)?;
     let mut store = SessionStore::open(&directory)?;
-    store.renew(&client).await?;
+    store.verified(&client).await?;
     if let Some(token) = &store.session.access_token {
         client = client.with_token(token);
     }
@@ -1950,7 +1952,7 @@ mod tests {
         let key = key.map(str::to_owned);
         let token = token.to_owned();
         let task = tokio::spawn(async move {
-            for step in 0..2 {
+            for step in 0..3 {
                 let (mut stream, _) =
                     tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
                         .await
@@ -1978,12 +1980,14 @@ mod tests {
                 } else {
                     assert!(!request.contains("x-testing-environment-key:"));
                 }
-                assert!(request.contains(if step == 0 {
-                    "/releases?channel=prod "
-                } else {
-                    "/download?version=1.1.0&channel=prod "
+                assert!(request.contains(match step {
+                    0 => "/auth/status ",
+                    1 => "/releases?channel=prod ",
+                    _ => "/download?version=1.1.0&channel=prod ",
                 }));
                 let body = if step == 0 {
+                    br#"{"authenticated":true}"#.to_vec()
+                } else if step == 1 {
                     release.clone()
                 } else if corrupt {
                     b"corrupted archive".to_vec()

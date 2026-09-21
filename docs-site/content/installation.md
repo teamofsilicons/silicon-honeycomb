@@ -11,17 +11,17 @@ The default binary lives in `~/.honeycomb/dir/system/bin`. Bash, Zsh (including 
 ## Cargo and Windows
 Install Rust and its platform build prerequisites, then run:
 ```sh
-cargo install silicon-honeycomb-cli --version '=0.3.0' --locked
+cargo install silicon-honeycomb-cli --version '=0.3.2' --locked
 honeycomb --version
 honeycomb service install
 ```
 The command is `honeycomb`; the crate is `silicon-honeycomb-cli`. Cargo places the binary in its configured bin directory, usually `~/.cargo/bin`; make sure that directory is on PATH. Cargo installation supports Windows, Linux, and macOS. Native release downloads also include Windows x86_64 and aarch64.
 
-[Release archives and checksums](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.3.0) are available for all six required targets. The Bash installer itself is for macOS/Linux.
+[Release archives and checksums](https://github.com/teamofsilicons/silicon-honeycomb/releases/tag/v0.3.2) are available for all six required targets. The Bash installer itself is for macOS/Linux.
 
 ## Choose a version or installation home
 ```sh
-printf "Starting Honeycomb installer…\n"; HONEYCOMB_VERSION=0.3.0 /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
+printf "Starting Honeycomb installer…\n"; HONEYCOMB_VERSION=0.3.2 /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
 ```
 | Variable | Effect |
 | --- | --- |
