@@ -1,5 +1,7 @@
 mod progress;
 mod selection;
+mod session;
+use session::{Session, Store as SessionStore};
 mod shell_path;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -459,15 +461,6 @@ impl Default for Settings {
         }
     }
 }
-#[derive(Default, Serialize, Deserialize)]
-struct Session {
-    #[serde(default)]
-    access_token: Option<String>,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    expires_at: i64,
-}
 /// Private because the selected environment key grants test root authority.
 #[derive(Serialize, Deserialize)]
 struct InstallContext {
@@ -738,28 +731,23 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
     let mut client = context.client(telemetry_enabled(settings.telemetry))?;
     let plane_dir = context.directory(&root);
     fs::create_dir_all(&plane_dir)?;
-    let session_path = plane_dir.join("session.json");
-    let mut session: Session = read(&session_path)?;
-    if !matches!(
+    let mut store = SessionStore::open(&plane_dir)?;
+    let auth_mutation = matches!(&cli.command, Command::Login { slt_or_status } if slt_or_status != "status")
+        || matches!(cli.command, Command::Logout);
+    let local_only = matches!(
         cli.command,
-        Command::Login { .. }
-            | Command::Logout
-            | Command::Validate { .. }
+        Command::Validate { .. }
             | Command::Pack { .. }
             | Command::Installed
             | Command::Uninstall { .. }
-    ) && session.access_token.is_some()
-        && session.expires_at <= now() + 30
-        && let Some(refresh) = &session.refresh_token
-    {
-        let tokens = client.refresh(refresh, &mutation(cli, None)?).await?;
-        session = Session {
-            access_token: tokens["access_token"].as_str().map(str::to_owned),
-            refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
-            expires_at: now() + tokens["expires_in"].as_i64().unwrap_or(0),
-        };
-        write_private(&session_path, &session)?;
+    );
+    if !auth_mutation && !local_only {
+        store.renew(&client).await?;
     }
+    // Login/logout retain the same lock through the remote operation and local save.
+    // Release it before package maintenance acquires its own locks.
+    let session = store.session.clone();
+    let mut auth_store = auth_mutation.then_some(store);
     if let Some(token) = &session.access_token {
         client = client.with_token(token);
     }
@@ -774,16 +762,15 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             }
         }
         Command::Login { slt_or_status } => {
+            let started_at = now();
             let tokens = client.login(slt_or_status, &operation).await?;
-            let access = tokens["access_token"]
-                .as_str()
-                .context("IAM login returned no access token")?;
-            let session = Session {
-                access_token: Some(access.into()),
-                refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
-                expires_at: now() + tokens["expires_in"].as_i64().unwrap_or(0),
-            };
-            write_private(&session_path, &session)?;
+            let store = auth_store.as_mut().expect("login session lock");
+            store.save(Session::from_tokens(&tokens, started_at)?)?;
+            let access = store
+                .session
+                .access_token
+                .as_deref()
+                .expect("validated login");
             show(&client.with_token(access).login_status().await?)?;
         }
         Command::Logout => {
@@ -792,9 +779,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                     .logout_session(session.refresh_token.as_deref(), &operation)
                     .await?;
             }
-            if session_path.exists() {
-                fs::remove_file(&session_path)?;
-            }
+            auth_store.as_mut().expect("logout session lock").clear()?;
             show(&json!({"authenticated":false}))?;
         }
         Command::Report { message, pr } => {
@@ -1241,6 +1226,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         | Command::SelfUpdate
         | Command::Service { .. } => unreachable!(),
     }
+    drop(auth_store);
     if automatic_updates_enabled(settings.auto_update) {
         progress.stage("Checking scheduled updates");
     }
@@ -1532,24 +1518,12 @@ async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) 
         return Ok(());
     }
     let mut client = context.client(telemetry)?;
-    let session_path = directory.join("session.json");
-    let mut session: Session = read(&session_path)?;
-    if session.access_token.is_some() && session.expires_at <= now() + 30 {
-        let refresh = session
-            .refresh_token
-            .as_ref()
-            .context("Package update requires renewed login")?;
-        let tokens = client.refresh(refresh, &Mutation::new()).await?;
-        session = Session {
-            access_token: tokens["access_token"].as_str().map(str::to_owned),
-            refresh_token: tokens["refresh_token"].as_str().map(str::to_owned),
-            expires_at: now() + tokens["expires_in"].as_i64().unwrap_or(0),
-        };
-        write_private(&session_path, &session)?;
-    }
-    if let Some(token) = session.access_token {
+    let mut store = SessionStore::open(&directory)?;
+    store.renew(&client).await?;
+    if let Some(token) = &store.session.access_token {
         client = client.with_token(token);
     }
+    drop(store);
     let mut failed = false;
     for id in records.keys() {
         // Failure for one package must not prevent other installed packages updating.
@@ -1950,6 +1924,7 @@ mod tests {
                 access_token: Some(token.into()),
                 refresh_token: None,
                 expires_at: now() + 3600,
+                pending_refresh: None,
             },
         )
         .unwrap();
