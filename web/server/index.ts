@@ -4,13 +4,12 @@ import packageInfo from "../package.json" with { type: "json" };
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
-  createCipheriv,
-  createDecipheriv,
   createHash,
   timingSafeEqual,
 } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { Sessions } from "./sessions.ts";
 
 const production = process.env.NODE_ENV === "production";
 const port = Number(process.env.PORT || 4173),
@@ -43,9 +42,11 @@ const key = rawKey ? Buffer.from(rawKey, "hex") : randomBytes(32);
 const dbPath = process.env.WEB_SESSION_DB || "data/web-sessions.db";
 mkdirSync(dirname(resolve(dbPath)), { recursive: true });
 const db = new DatabaseSync(dbPath);
-db.exec(
-  "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, tokens TEXT NOT NULL, expires INTEGER NOT NULL)",
-);
+const sessions = new Sessions(db, key, (refresh_token, idempotencyKey) => api("auth/refresh", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+  body: JSON.stringify({ refresh_token }),
+}));
 const app = express();
 const telemetryContext = new AsyncLocalStorage<boolean>();
 app.use((req, _res, next) => telemetryContext.run(req.get("x-honeycomb-telemetry") !== "false" && cookie(req, "honeycomb_telemetry") !== "false", next));
@@ -80,44 +81,13 @@ function setCookie(
     `${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${age}${production ? "; Secure" : ""}`,
   );
 }
-function encrypt(value: unknown) {
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, nonce);
-  const bytes = Buffer.concat([
-    cipher.update(JSON.stringify(value), "utf8"),
-    cipher.final(),
-  ]);
-  return Buffer.concat([nonce, cipher.getAuthTag(), bytes]).toString("base64");
-}
-function decrypt(value: string) {
-  const bytes = Buffer.from(value, "base64");
-  const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12));
-  decipher.setAuthTag(bytes.subarray(12, 28));
-  return JSON.parse(
-    Buffer.concat([
-      decipher.update(bytes.subarray(28)),
-      decipher.final(),
-    ]).toString(),
-  );
-}
-function session(
-  req: express.Request,
-): { id: string; tokens: any } | undefined {
+function sessionId(req: express.Request) {
   const id = cookie(req, sessionCookie);
-  if (!id) return;
-  const hash = createHash("sha256").update(id).digest("hex");
-  const row = db
-    .prepare("SELECT tokens,expires FROM sessions WHERE id=?")
-    .get(hash) as { tokens: string; expires: number } | undefined;
-  if (!row || row.expires < Date.now()) {
-    if (row) db.prepare("DELETE FROM sessions WHERE id=?").run(hash);
-    return;
-  }
-  try {
-    return { id: hash, tokens: decrypt(row.tokens) };
-  } catch {
-    return;
-  }
+  return id ? createHash("sha256").update(id).digest("hex") : undefined;
+}
+function session(req: express.Request) {
+  const id = sessionId(req);
+  return id ? sessions.load(id) : undefined;
 }
 async function api(path: string, options: RequestInit = {}, version: "v1" | "v2" = "v1") {
   const headers = new Headers(options.headers);
@@ -131,57 +101,9 @@ async function api(path: string, options: RequestInit = {}, version: "v1" | "v2"
     signal: AbortSignal.timeout(300000),
   });
 }
-// Refresh once per session even when several browser requests arrive together.
-const refreshing = new Map<string, Promise<any>>();
-async function currentSession(req: express.Request) {
-  const active = session(req);
-  if (!active) return;
-  if (active.tokens.expires_at >= Date.now() + 30000) return active;
-  let pending = refreshing.get(active.id);
-  if (!pending) {
-    pending = (async () => {
-      if (!active.tokens.refresh_token) {
-        db.prepare("DELETE FROM sessions WHERE id=?").run(active.id);
-        return;
-      }
-      const response = await api("auth/refresh", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": randomBytes(16).toString("hex"),
-        },
-        body: JSON.stringify({ refresh_token: active.tokens.refresh_token }),
-      });
-      if ([400, 401, 403].includes(response.status)) {
-        db.prepare("DELETE FROM sessions WHERE id=?").run(active.id);
-        return;
-      }
-      if (!response.ok)
-        throw new Error("IAM could not renew this session. Please retry.");
-      const tokens = (await response.json()) as any;
-      if (
-        typeof tokens.access_token !== "string" ||
-        !tokens.access_token ||
-        !Number.isFinite(tokens.expires_in) ||
-        tokens.expires_in <= 0
-      )
-        throw new Error("IAM returned an invalid session response.");
-      tokens.refresh_token ||= active.tokens.refresh_token;
-      tokens.expires_at = Date.now() + tokens.expires_in * 1000;
-      const update = db
-        .prepare("UPDATE sessions SET tokens=? WHERE id=?")
-        .run(encrypt(tokens), active.id);
-      // A concurrent sign-out must never recreate a session.
-      if (!update.changes) return;
-      return { id: active.id, tokens };
-    })();
-    refreshing.set(active.id, pending);
-  }
-  try {
-    return await pending;
-  } finally {
-    if (refreshing.get(active.id) === pending) refreshing.delete(active.id);
-  }
+async function currentSession(req: express.Request, rejectedToken?: string) {
+  const id = sessionId(req);
+  return id ? sessions.current(id, rejectedToken) : undefined;
 }
 function fail(res: express.Response, error: unknown) {
   res.status(502).json({
@@ -215,19 +137,22 @@ app.get("/api/config", (_req, res) =>
 );
 app.get("/api/session", async (req, res) => {
   try {
-    const active = await currentSession(req);
+    let active = await currentSession(req);
     if (!active) {
       res.json({ authenticated: false });
       return;
     }
-    const response = await api("auth/status", {
+    let response = await api("auth/status", {
       headers: { Authorization: `Bearer ${active.tokens.access_token}` },
     });
     if (response.status === 401) {
-      db.prepare("DELETE FROM sessions WHERE id=?").run(active.id);
-      setCookie(res, sessionCookie, "", 0);
-      res.json({ authenticated: false });
-      return;
+      active = await currentSession(req, active.tokens.access_token);
+      if (!active) {
+        setCookie(res, sessionCookie, "", 0);
+        res.json({ authenticated: false });
+        return;
+      }
+      response = await api("auth/status", { headers: { Authorization: `Bearer ${active.tokens.access_token}` } });
     }
     res
       .status(response.status)
@@ -277,6 +202,7 @@ app.get("/auth/callback", async (req, res) => {
       return;
     }
     setCookie(res, stateCookie, "", 0, "/auth");
+    const startedAt = Date.now();
     const response = await api("auth/login", {
       method: "POST",
       headers: {
@@ -289,17 +215,8 @@ app.get("/auth/callback", async (req, res) => {
       throw new Error(
         "IAM could not exchange this sign-in token. Please start sign-in again.",
       );
-    const tokens = (await response.json()) as any;
-    if (
-      typeof tokens.access_token !== "string" || !tokens.access_token ||
-      !Number.isFinite(tokens.expires_in) || tokens.expires_in <= 0
-    ) throw new Error("IAM returned an invalid session response.");
     const id = randomBytes(32).toString("hex");
-    db.prepare("INSERT INTO sessions(id,tokens,expires) VALUES(?,?,?)").run(
-      createHash("sha256").update(id).digest("hex"),
-      encrypt({ ...tokens, expires_at: Date.now() + tokens.expires_in * 1000 }),
-      Date.now() + 30 * 86400000,
-    );
+    sessions.create(createHash("sha256").update(id).digest("hex"), await response.json(), startedAt, Date.now() + 30 * 86400000);
     setCookie(res, sessionCookie, id, 30 * 86400);
     res.redirect("/");
   } catch (e) {
@@ -319,7 +236,7 @@ app.post("/auth/logout", csrf, async (req, res) => {
         },
         body: JSON.stringify({ refresh_token: active.tokens.refresh_token }),
       });
-      if (!response.ok && response.status !== 401) {
+      if (!response.ok) {
         res.status(502).json({
           error: {
             message:
@@ -332,7 +249,7 @@ app.post("/auth/logout", csrf, async (req, res) => {
       fail(res, e);
       return;
     }
-    db.prepare("DELETE FROM sessions WHERE id=?").run(active.id);
+    sessions.remove(active.id);
   }
   setCookie(res, sessionCookie, "", 0);
   res.json({ authenticated: false });
@@ -358,11 +275,18 @@ app.use(
       }
       if (active)
         headers.set("authorization", `Bearer ${active.tokens.access_token}`);
-      const response = await api(req.url.replace(/^\//, ""), {
-        method: req.method,
-        headers,
+      const send = () => api(req.url.replace(/^\//, ""), {
+        method: req.method, headers,
         body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
       }, req.baseUrl === "/api/v2" ? "v2" : "v1");
+      let response = await send();
+      if (response.status === 401 && active) {
+        const renewed = await currentSession(req, active.tokens.access_token);
+        if (renewed) {
+          headers.set("authorization", `Bearer ${renewed.tokens.access_token}`);
+          response = await send();
+        }
+      }
       res.status(response.status);
       for (const name of ["content-type", "etag", "x-checksum-sha256", "honeycomb-api-version", "honeycomb-contract-state"]) {
         const value = response.headers.get(name);

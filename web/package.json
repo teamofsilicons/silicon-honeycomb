@@ -10,7 +10,7 @@
     "build:vercel": "tsc --noEmit && vite build && node scripts/build-vercel.mjs",
     "start": "NODE_ENV=production node --env-file-if-exists=.env dist-server/index.js",
     "test:e2e": "playwright test",
-    "test:unit": "node --import tsx --test src/sent-requests.test.ts"
+    "test:unit": "node --import tsx --test src/sent-requests.test.ts server/sessions.test.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",

@@ -49,6 +49,15 @@ session databases or server functions are uploaded to Vercel. `deploy/Caddyfile`
 routes these two prefixes to the correct service. IAM callbacks remain on each
 frontend's `/auth/callback`; cookies are host-only, HttpOnly, Secure and SameSite=Lax.
 
+Access tokens renew automatically, including when IAM rejects an otherwise unexpired
+access token. A refresh attempt is saved in the encrypted database before contacting
+IAM, so retries after a lost response or a server restart reuse the same operation.
+Concurrent requests share the rotation, and database comparisons prevent late replies
+from overwriting a newer token or undoing sign-out. Temporary provider failures retain
+the session; an explicit invalid refresh grant ends it. Keep each website's SQLite
+file and `WEB_SESSION_KEY` stable during deployments. Browser sessions retain the
+existing 30-day maximum; IAM revocation still ends access immediately.
+
 ## Repeatable browser tests
 
 Review requests is the incoming queue for eligible reviewers. Sent requests shows
