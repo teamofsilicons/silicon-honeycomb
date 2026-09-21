@@ -4,7 +4,7 @@ use wiremock::{
     matchers::{header, method, path, query_param},
 };
 const APP: &str = "alpha>app";
-const SOURCE: &str = "00000000-0000-4000-8000-000000000001";
+const SOURCE: &str = APP;
 const ENV: &str = "00000000-0000-4000-8000-000000000002";
 fn authorization() -> String {
     format!("Basic {}", STANDARD.encode("alpha>app:ask_fixture_secret"))
@@ -66,6 +66,19 @@ async fn production_identity_uses_official_protected_credentials_and_rejects_wro
     wrong["app_id"] = json!("other>app");
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(wrong))
+        .mount(&server)
+        .await;
+    assert!(
+        adapter
+            .testing_verify_application(&authorization())
+            .await
+            .is_err()
+    );
+    server.reset().await;
+    let mut legacy = identity();
+    legacy["application_id"] = json!("00000000-0000-4000-8000-000000000001");
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(legacy))
         .mount(&server)
         .await;
     assert!(

@@ -80,12 +80,12 @@ impl Management for Apps {
             "Basic owner-credential" => (
                 "alpha>app",
                 if self.recreated.load(Ordering::SeqCst) {
-                    "00000000-0000-4000-8000-000000000003"
+                    "alpha>other"
                 } else {
-                    "00000000-0000-4000-8000-000000000001"
+                    "alpha>app"
                 },
             ),
-            "Basic attached-credential" => ("beta>app", "00000000-0000-4000-8000-000000000002"),
+            "Basic attached-credential" => ("beta>app", "beta>app"),
             _ => return Err(Error::unauthorized()),
         };
         Ok(TestingApplicationIdentity {
@@ -152,6 +152,9 @@ fn receipt(app: &str, o: &Value) -> Value {
     json!({"state":"completed","operation_id":o["operation_id"],"environment_id":o["environment_id"],"app_id":app,"environment_revision":o["environment_revision"],"generation":o["generation"],"key_version":o["key_version"]})
 }
 async fn setup() -> (State, Arc<Apps>) {
+    setup_at("sqlite::memory:").await
+}
+async fn setup_at(database: &str) -> (State, Arc<Apps>) {
     let apps = Arc::new(Apps {
         revoked: AtomicBool::new(false),
         recreated: AtomicBool::new(false),
@@ -161,9 +164,7 @@ async fn setup() -> (State, Arc<Apps>) {
     });
     let s = State {
         telemetry: Default::default(),
-        db: silicon_honeycomb_server::database("sqlite::memory:")
-            .await
-            .unwrap(),
+        db: silicon_honeycomb_server::database(database).await.unwrap(),
         identity: Arc::new(Users),
         management: apps.clone(),
         storage: Arc::new(Storage),
@@ -316,16 +317,16 @@ async fn app_owned_setup_preserves_identity_permissions_and_secret_boundaries() 
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     apps.revoked.store(false, Ordering::SeqCst);
     apps.recreated.store(true, Ordering::SeqCst);
-    let (_, listed) = call(
+    let (status, _) = call(
         &s,
         "GET",
         "/api/v1/environments",
         "Basic owner-credential",
         json!({}),
-        "recreated-list001",
+        "mismatched-list001",
     )
     .await;
-    assert_eq!(listed["items"], json!([]));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     let (status, _) = call(
         &s,
         "POST",
@@ -335,7 +336,7 @@ async fn app_owned_setup_preserves_identity_permissions_and_secret_boundaries() 
         "recreated-key-001",
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 #[tokio::test]
 async fn invalid_or_conflicting_attachment_never_creates_an_environment() {
@@ -573,5 +574,199 @@ async fn iam_dependency_links_allow_listing_only_and_discovery_failures_are_expl
         .await;
         assert_eq!(owned["linkage_discovery"], "pending");
         assert_eq!(owned["items"][0]["can_manage"], true);
+    }
+}
+
+#[tokio::test]
+async fn migrated_application_owner_keeps_the_same_world_key_and_create_retry() {
+    for edited in [false, true] {
+        migrated_application_owner_case(edited).await;
+    }
+}
+async fn migrated_application_owner_case(edited: bool) {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let database = temp.path().join("retained.sqlite");
+    let (mut s, _) = setup_at(database.to_str().unwrap()).await;
+    let body = json!({"name":"Retained world"});
+    let (_, created) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        "Basic owner-credential",
+        body.clone(),
+        "retained-create001",
+    )
+    .await;
+    let id = created["environment_id"].as_str().unwrap().to_owned();
+    let original: (String, String) =
+        sqlx::query_as("SELECT encrypted_key,key_hash FROM environments WHERE id=?")
+            .bind(&id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    let legacy = "44444444-4444-4444-8444-444444444444";
+    sqlx::query("UPDATE environments SET creator=?,creator_application_id=? WHERE id=?")
+        .bind(format!("application:{legacy}"))
+        .bind(legacy)
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE environment_application_links SET application_id=? WHERE environment_id=?")
+        .bind(legacy)
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE operations SET actor=? WHERE actor='application:alpha>app'")
+        .bind(format!("application:{legacy}"))
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let old_digest = hex::encode(Sha256::digest(json!({"kind":"application.environment.create","application_id":legacy,"org":"alpha","name":"Retained world","description":""}).to_string()));
+    sqlx::query(
+        "UPDATE operations SET request_hash=? WHERE resource=? AND kind='environment.prepare'",
+    )
+    .bind(old_digest)
+    .bind(&id)
+    .execute(&s.db)
+    .await
+    .unwrap();
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("/api/v1/environments/{id}"),
+        "Basic owner-credential",
+        json!({}),
+        "before-import001",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "Canonical authentication must not fall back to an old UUID owner"
+    );
+    if edited {
+        sqlx::query("UPDATE environments SET name='Edited after creation' WHERE id=?")
+            .bind(&id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+    }
+    // Rehearse the deployed schema22 path: the offline importer creates the
+    // private context table, and normal startup later records migration23.
+    sqlx::query("DROP TABLE application_create_hash_contexts")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=23")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    s.db.close().await;
+    let mapping = temp.path().join("mapping.json");
+    std::fs::write(&mapping, json!({"production":[{"legacy_id":legacy,"kind":"application","public_id":"alpha>app","testing_environment_id":null}]}).to_string()).unwrap();
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/import-iam-identities.py");
+    for repeat in [false, true] {
+        let result = std::process::Command::new("python3")
+            .arg(&script)
+            .arg("--database")
+            .arg(&database)
+            .arg("--identity-map")
+            .arg(&mapping)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        if repeat {
+            assert!(String::from_utf8_lossy(&result.stdout).contains("Updated 0 "));
+        }
+    }
+    s.db = silicon_honeycomb_server::database(&format!("sqlite://{}", database.display()))
+        .await
+        .unwrap();
+    let contexts: i64 = sqlx::query_scalar("SELECT count(*) FROM application_create_hash_contexts")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(contexts, i64::from(edited));
+    let migrated: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version=23 AND success=1)",
+    )
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert!(migrated);
+    let (status, found) = call(
+        &s,
+        "GET",
+        &format!("/api/v1/environments/{id}"),
+        "Basic owner-credential",
+        json!({}),
+        "after-import001",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["environment_id"], id);
+    let (status, key) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/environments/{id}/key"),
+        "Basic owner-credential",
+        json!({}),
+        "migrated-key-0001",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(key["testing_key"], s.decrypt(&original.0).unwrap());
+    let retained: (String, String) =
+        sqlx::query_as("SELECT encrypted_key,key_hash FROM environments WHERE id=?")
+            .bind(&id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(retained, original);
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        "Basic owner-credential",
+        json!({"name":"Different input"}),
+        "retained-create001",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, replay) = call(
+        &s,
+        "POST",
+        "/api/v1/environments",
+        "Basic owner-credential",
+        body,
+        "retained-create001",
+    )
+    .await;
+    assert!(status.is_success(), "{replay}");
+    assert_eq!(replay["environment_id"], id);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM environments")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    for suffix in ["", "/key"] {
+        let (status, _) = call(
+            &s,
+            if suffix.is_empty() { "GET" } else { "POST" },
+            &format!("/api/v1/environments/{id}{suffix}"),
+            "Basic attached-credential",
+            json!({}),
+            "not-owner-key-0001",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }
