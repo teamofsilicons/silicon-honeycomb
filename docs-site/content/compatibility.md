@@ -1,5 +1,5 @@
 ## Current contract
-The CLI and Rust client are **0.3.2**. General APIs use **HTTP v1**; release-channel APIs use **HTTP v2**. Website release screens use v2 while other screens stay on v1. Package manifests remain **format_version: 1**. Each application maintains independent prod and dev release histories.
+The CLI and Rust client are **0.3.3**. General APIs use **HTTP v1**; release-channel APIs use **HTTP v2**. Website release screens use v2 while other screens stay on v1. Package manifests remain **format_version: 1**. Each application maintains independent prod and dev release histories.
 
 Call `GET /api/contracts` to discover supported versions. Its legacy `selected_version` remains `v1`; `release_version` identifies `v2`. Each version includes its scope, lifecycle state, and minimum client. `GET /api/v2/contract` selects v2 explicitly. Responses identify `Honeycomb-API-Version` and `Honeycomb-Contract-State`. Existing raw callers may omit negotiation headers and use the version in their URL.
 

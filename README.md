@@ -53,7 +53,7 @@ IAM and Briefcase; it is excluded from the production image.
 
 ## Install the CLI
 
-Version 0.3.2 retains separate release channels and the shared minute updater, serializes saved session rotation across CLI processes, and renews access rejected before its expected expiry. Published CLI versions are distributed as six native release binaries and on crates.io. Honeycomb also packages those same native binaries for its own `tos>honeycomb` catalog entry.
+Version 0.3.3 fixes secret rotation and reconciliation for imported testing applications, including recovery of rotations rejected for an IAM configuration revision mismatch. It retains the release channels, shared minute updater and durable session recovery. Published CLI versions are distributed as six native release binaries and on crates.io. Honeycomb also packages those same native binaries for its own `tos>honeycomb` catalog entry.
 
 ```sh
 printf "Starting Honeycomb installer…\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"

@@ -1908,6 +1908,195 @@ async fn lost_rotation_response_recovers_original_result_and_unblocks_configurat
     );
 }
 
+struct TestRotationIdentity;
+#[async_trait]
+impl IdentityProvider for TestRotationIdentity {
+    async fn login(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unauthorized())
+    }
+    async fn refresh(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unauthorized())
+    }
+    async fn revoke(&self, _: &str, _: &str, _: Option<&str>) -> Result<()> {
+        Err(Error::unauthorized())
+    }
+    async fn authenticate(&self, token: &str, environment: Option<&str>) -> Result<Identity> {
+        let mut identity = Idp {
+            revoked: Arc::new(AtomicBool::new(false)),
+        }
+        .authenticate(token, environment)
+        .await?;
+        if environment.is_some() {
+            identity.testing_environment_id = Some("rotation-test".into());
+        }
+        Ok(identity)
+    }
+}
+struct TestRotationManager {
+    error: std::sync::Mutex<Option<&'static str>>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+#[async_trait]
+impl Management for TestRotationManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("unused"))
+    }
+    async fn rotate_secret(
+        &self,
+        o: &Value,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(code) = *self.error.lock().unwrap() {
+            return Err(Error::new(StatusCode::CONFLICT, code, "fixture"));
+        }
+        Ok(
+            json!({"operation_id":o["operation_id"],"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"state":"accepted","iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"credential_version":2,"app_secret":"fixture-replacement"}),
+        )
+    }
+    async fn operation_result(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(Error::new(
+            StatusCode::CONFLICT,
+            self.error.lock().unwrap().unwrap(),
+            "fixture",
+        ))
+    }
+}
+async fn test_rotation_call(s: &State, path: &str, actor: &str, key: &str) -> (StatusCode, Value) {
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {actor}"))
+                .header("x-testing-environment-key", "rotation-test-key")
+                .header("if-match", "1")
+                .header("idempotency-key", key)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn definitive_test_rotation_rejection_preserves_original_request_and_unblocks_new_rotation() {
+    use sha2::{Digest, Sha256};
+    let (mut s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("test-secrets"),
+        "test-secrets-create-0001",
+        None,
+    )
+    .await;
+    sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES('rotation-test','tos','admin','Testing','','fixture',?,'ready',1,1)")
+        .bind(hex::encode(Sha256::digest("rotation-test-key"))).execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,state,created_at,updated_at) SELECT 'rotation-test',app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,state,created_at,updated_at FROM applications WHERE app_id='tos>test-secrets'")
+        .execute(&s.db).await.unwrap();
+    s.identity = Arc::new(TestRotationIdentity);
+    let manager = Arc::new(TestRotationManager {
+        error: std::sync::Mutex::new(Some("integration_unavailable")),
+        calls: Default::default(),
+    });
+    s.management = manager.clone();
+    let path = "/api/v1/apps/tos%3Etest-secrets/secret-rotations";
+    let (_, pending) = test_rotation_call(&s, path, "admin", "test-rotation-original-0001").await;
+    assert_eq!(pending["state"], "pending");
+    let id = pending["id"].as_str().unwrap();
+    let original: (String, String) =
+        sqlx::query_as("SELECT request_json,request_hash FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    let recovery = format!("/api/v1/operations/{id}/result");
+    assert_eq!(
+        test_rotation_call(&s, &recovery, "outsider", "test-recovery-other-0001")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // A generic revision conflict may conceal committed work and stays pending.
+    *manager.error.lock().unwrap() = Some("revision_conflict");
+    assert_eq!(
+        test_rotation_call(&s, &recovery, "admin", "test-recovery-pending-0001")
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "pending"
+    );
+    *manager.error.lock().unwrap() = Some("testing_configuration_revision_conflict");
+    let (_, rejected) =
+        test_rotation_call(&s, &recovery, "admin", "test-recovery-reject-0001").await;
+    assert_eq!(rejected["state"], "rejected");
+    assert_eq!(rejected["id"], id);
+    assert!(rejected.get("app_secret").is_none());
+    let unchanged: (String, String) =
+        sqlx::query_as("SELECT request_json,request_hash FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(original, unchanged);
+    let calls = manager.calls.load(Ordering::SeqCst);
+    assert_eq!(
+        test_rotation_call(&s, path, "admin", "test-rotation-original-0001")
+            .await
+            .1["state"],
+        "rejected"
+    );
+    assert_eq!(
+        test_rotation_call(&s, &recovery, "admin", "test-recovery-repeat-0001")
+            .await
+            .1["state"],
+        "rejected"
+    );
+    assert_eq!(manager.calls.load(Ordering::SeqCst), calls);
+    *manager.error.lock().unwrap() = None;
+    let (_, accepted) = test_rotation_call(&s, path, "admin", "test-rotation-fresh-0001").await;
+    assert_eq!(accepted["state"], "accepted");
+    assert_ne!(accepted["id"], id);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM operations WHERE plane='rotation-test' AND state='pending'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit WHERE action='application.secret.reject'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        1
+    );
+}
+
 struct ReviewIdentity;
 #[async_trait]
 impl IdentityProvider for ReviewIdentity {

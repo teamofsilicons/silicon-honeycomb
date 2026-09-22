@@ -268,7 +268,7 @@ impl IamManagement {
         .bind(app)
         .fetch_one(&self.db)
         .await?;
-        let accepted = positive(record, "configuration_revision")?;
+        let accepted = self.testing_projection_revision(app, plane, record).await?;
         let base: String = if accepted == row.get::<i64, _>("revision") {
             row.get("config")
         } else {
@@ -324,6 +324,49 @@ impl IamManagement {
         config["app_scope"] = scopes;
         Ok(config)
     }
+    /// An import has its own accepted Honeycomb revision. IAM retains a separate
+    /// configuration counter, including zero for an imported, unconfigured app.
+    /// Only an accepted import may translate that counter into our projection.
+    async fn testing_projection_revision(
+        &self,
+        app: &str,
+        plane: Uuid,
+        record: &Value,
+    ) -> Result<i64> {
+        let revision = record["configuration_revision"]
+            .as_i64()
+            .filter(|v| *v >= 0)
+            .ok_or_else(|| {
+                Error::unavailable("IAM omitted its accepted test configuration revision")
+            })?;
+        let imported: Option<(String, i64)> = sqlx::query_as(
+            "SELECT i.snapshot,a.effective_revision FROM environment_imports i JOIN applications a ON a.plane=i.environment_id AND a.app_id=i.app_id WHERE i.environment_id=? AND i.app_id=? AND a.iam_revision>0 AND a.effective_config IS NOT NULL",
+        )
+        .bind(plane.to_string())
+        .bind(app)
+        .fetch_optional(&self.db)
+        .await?;
+        if let Some((snapshot, effective)) = imported {
+            let snapshot: Value =
+                serde_json::from_str(&snapshot).map_err(|e| anyhow::anyhow!(e))?;
+            // Historical import receipts did not retain IAM's configuration
+            // counter. Only their known zero baseline is safe to translate.
+            let imported_iam = snapshot["iam_configuration_revision"].as_i64().unwrap_or(0);
+            if snapshot["app_id"] == app
+                && effective > 0
+                && snapshot["configuration_revision"] == effective
+                && revision == imported_iam
+            {
+                return Ok(effective);
+            }
+        }
+        if revision == 0 {
+            return Err(Error::conflict(
+                "No accepted import matches IAM configuration revision zero",
+            ));
+        }
+        Ok(revision)
+    }
     pub(super) async fn testing_snapshot(&self, app: &str, environment_key: &str) -> Result<Value> {
         let plane = self.testing_plane(environment_key).await?;
         self.testing_snapshot_plane(app, &plane.to_string()).await
@@ -342,9 +385,12 @@ impl IamManagement {
             .await
             .map_err(map_error)?;
         let configuration = self.testing_configuration(app, plane, &record).await?;
+        let accepted = self
+            .testing_projection_revision(app, plane, &record)
+            .await?;
         let publication:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane=? AND app_id=? AND revision=? AND id=? AND state IN ('activating','published')").bind(plane.to_string()).bind(app).bind(record["configuration_revision"].as_i64().unwrap_or(-1)).bind(record["publication_request_id"].as_str().unwrap_or("")).fetch_optional(&self.db).await?;
         Ok(
-            json!({"app_id":app,"environment_id":plane,"configuration_revision":record["configuration_revision"],"iam_revision":record["iam_revision"],"visibility":record["visibility"],"availability":if record["availability"]=="verified" && record["ready"]!=false {"active"} else {"disabled"},"effective_configuration":configuration,"publication_request_id":publication,"credential_version":record["credential_version"]}),
+            json!({"app_id":app,"environment_id":plane,"configuration_revision":accepted,"iam_revision":record["iam_revision"],"visibility":record["visibility"],"availability":if record["availability"]=="verified" && record["ready"]!=false {"active"} else {"disabled"},"effective_configuration":configuration,"publication_request_id":publication,"credential_version":record["credential_version"]}),
         )
     }
     pub(super) async fn testing_configure(
@@ -382,6 +428,32 @@ impl IamManagement {
             .filter(|v| honeycomb_core::valid_app_id(v))
             .ok_or_else(|| Error::bad("Invalid app ID"))?;
         let c = &o["configuration"];
+        let mut configuration_revision = positive(o, "configuration_revision")?;
+        let saved: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM management_requests WHERE operation_id=?)",
+        )
+        .bind(id.to_string())
+        .fetch_one(&self.db)
+        .await?;
+        if rotation && !saved {
+            let record = self
+                .client
+                .testing_application(plane, app, &versions)
+                .await
+                .map_err(map_error)?;
+            if record["app_id"] != app
+                || record["iam_revision"] != o["expected_iam_revision"]
+                || self
+                    .testing_projection_revision(app, plane, &record)
+                    .await?
+                    != configuration_revision
+            {
+                return Err(Error::conflict(
+                    "IAM test application changed before secret rotation; reconcile its accepted state",
+                ));
+            }
+            configuration_revision = record["configuration_revision"].as_i64().unwrap();
+        }
         let configuration = if rotation {
             None
         } else {
@@ -399,7 +471,7 @@ impl IamManagement {
                 .as_i64()
                 .filter(|v| *v >= 0)
                 .ok_or_else(|| Error::bad("Missing IAM revision"))?,
-            configuration_revision: positive(o, "configuration_revision")?,
+            configuration_revision,
             configuration,
         };
         let body = self
@@ -602,7 +674,19 @@ impl IamManagement {
                 .configure_testing_application(app, &authority, input, &m)
                 .await
         }
-        .map_err(map_error)?;
+        .map_err(|error| match error {
+            // IAM checks the exact target-plane operation receipt before this
+            // precondition. This specific rejection proves this immutable request
+            // did not rotate a secret. Other conflicts can hide an accepted target
+            // transaction and must remain recoverable/pending.
+            silicon_iam_client::Error::Api(api)
+                if rotation && api.status == 409 && api.code == "configuration_revision_conflict" =>
+            {
+                Error::new(axum::http::StatusCode::CONFLICT, "testing_configuration_revision_conflict",
+                    "IAM rejected this test rotation before changing the credential. Reconcile the application and start a new rotation with a new idempotency key.")
+            }
+            error => map_error(error),
+        })?;
         let mut response = serde_json::to_value(receipt).map_err(|e| anyhow::anyhow!(e))?;
         if response["operation_id"] != id.to_string()
             || response["environment_id"] != plane.to_string()
@@ -632,6 +716,13 @@ impl IamManagement {
             self.testing_configure_participant(app, input, &response["effective_configuration"])
                 .await?;
             response["ready"] = json!(true);
+        }
+        if rotation {
+            // Keep the public, actor-bound Honeycomb revision while validating
+            // IAM's distinct revision against the immutable wire request above.
+            let revision: i64 = sqlx::query_scalar("SELECT revision FROM operations WHERE id=? AND plane=? AND resource=? AND kind='secret.rotate'")
+                .bind(id.to_string()).bind(plane.to_string()).bind(app).fetch_one(&self.db).await?;
+            response["configuration_revision"] = json!(revision);
         }
         Ok(response)
     }

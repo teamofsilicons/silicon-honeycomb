@@ -422,6 +422,9 @@ fn map_imports(operation: &Value, receipt: &Value) -> Result<Value> {
         let accepted = candidates[0];
         if accepted["source_revision"] != source["source_iam_revision"]
             || positive(accepted, "iam_revision").is_err()
+            || accepted["configuration_revision"]
+                .as_i64()
+                .is_none_or(|v| v < 0)
         {
             return Err(failure());
         }
@@ -451,7 +454,7 @@ fn map_imports(operation: &Value, receipt: &Value) -> Result<Value> {
         }
         // The source IAM revision binds all remaining security fields. Catalog fields
         // and the isolated Honeycomb projection revision remain Honeycomb-owned.
-        mapped.push(json!({"app_id":source["app_id"],"source_revision":source["source_revision"],"configuration_revision":source["configuration_revision"],"iam_revision":accepted["iam_revision"],"effective_configuration":source["configuration"],"visibility":"private"}));
+        mapped.push(json!({"app_id":source["app_id"],"source_revision":source["source_revision"],"configuration_revision":source["configuration_revision"],"iam_configuration_revision":accepted["configuration_revision"],"iam_revision":accepted["iam_revision"],"effective_configuration":source["configuration"],"visibility":"private"}));
     }
     Ok(json!(mapped))
 }
