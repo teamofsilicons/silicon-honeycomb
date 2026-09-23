@@ -111,7 +111,44 @@ class IdentifierMigration(unittest.TestCase):
         db.execute('UPDATE operations SET request_json=?,result=?',(body,body));db.commit()
         m.migrate_database(db,MAP,True)
         self.assertEqual(db.execute('SELECT request_json,result FROM operations').fetchone(),(body,body))
+    def test_system_audit_attribution_is_preserved_without_granting_identity(self):
+        db=self.database()
+        db.execute("INSERT INTO audit VALUES('system','production','authorized-operator','release.placeholder.materialize','tos>hello@1.0.0',1)")
+        db.execute("UPDATE operations SET actor='operator:user-requested-honeycomb-publication',kind='iam.adopt'")
+        db.commit();m.migrate_database(db,MAP,True)
+        self.assertEqual(db.execute('SELECT actor FROM audit').fetchone()[0],'authorized-operator')
+        self.assertEqual(db.execute('SELECT actor FROM operations').fetchone()[0],'operator:user-requested-honeycomb-publication')
+        db.execute("UPDATE audit SET action='configure'");db.commit()
+        with self.assertRaisesRegex(ValueError,'Missing IAM identity'):m.migrate_database(db,MAP,True)
+        db.execute("DELETE FROM audit");db.execute("UPDATE operations SET kind='configure'");db.commit()
+        with self.assertRaisesRegex(ValueError,'Missing IAM identity'):m.migrate_database(db,MAP,True)
+    def test_unregistered_draft_keeps_requested_handle_and_explicit_owner(self):
+        db=self.database()
+        body=json.dumps({'org_id':'tos','local_app_id':'new-proposal','description':'original','draft_edit_app_id':'tos>hello'})
+        db.execute("INSERT INTO drafts VALUES('production','tos','draft',1,?,1)",(body,));db.commit()
+        m.migrate_database(db,MAP,True)
+        value=json.loads(db.execute('SELECT body FROM drafts').fetchone()[0])
+        self.assertEqual(value,{'org_id':'tos','app_id':'new-proposal','description':'original','draft_edit_app_id':'hello'})
+        self.assertEqual(db.execute('SELECT count(*) FROM applications').fetchone()[0],1)
+        db.execute('UPDATE drafts SET body=?',(json.dumps({'org_id':'tos','local_app_id':''}),));db.commit()
+        m.migrate_database(db,MAP,True)
+        self.assertEqual(json.loads(db.execute('SELECT body FROM drafts').fetchone()[0])['app_id'],'')
+        db.execute('UPDATE drafts SET body=?',(json.dumps({'org_id':'other','local_app_id':'new-proposal'}),));db.commit()
+        with self.assertRaisesRegex(ValueError,'owning organization'):m.migrate_database(db,MAP,True)
+    def test_terminal_review_provider_namespaces_do_not_merge(self):
+        db=self.database()
+        db.execute("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot) VALUES('final','production','tos>hello',1,'published','saket',1,?)",(' {"app_id":"tos>hello"} ',))
+        for provider in ('honeycomb','tos>honeycomb'):
+            db.execute("INSERT INTO review_gates(request_id,provider,scopes,state) VALUES('final',?,?,'approved')",(provider,' ["obo:tos>honeycomb:read"] '))
+        db.commit()
+        mapping={**MAP,'applications':MAP['applications']+[{'legacy_id':'tos>honeycomb','app_id':'honeycomb','org_id':'tos'}]}
+        m.migrate_database(db,mapping,True)
+        self.assertEqual(db.execute('SELECT provider FROM review_gates ORDER BY provider').fetchall(),[('honeycomb',),('tos>honeycomb',)])
+        self.assertEqual(db.execute('SELECT config_snapshot FROM publication_requests').fetchone()[0],' {"app_id":"tos>hello"} ')
+        db.execute("UPDATE publication_requests SET state='awaiting_scope_review'");db.commit()
+        with self.assertRaisesRegex(ValueError,'in-flight'):m.migrate_database(db,mapping,True)
     def test_installed_registry_preserves_physical_paths_and_channels(self):
+        # Physical package directories are immutable release evidence.
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/'installed.json'
             record = {'app_id':'tos>hello','channel':'dev','directory':'/old/packages/tos/hello/dev/1.0.0-abcd','commands':{'hello':'/old/bin/hello'},'sha256':'unchanged'}

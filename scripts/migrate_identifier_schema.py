@@ -20,7 +20,7 @@ import identifier_holds
 
 HANDLE = re.compile(r"[a-z][a-z0-9_-]{0,79}\Z")
 ORG = re.compile(r"[a-z0-9_-]{3,50}\Z")
-APP_FIELDS = {'app_id', 'issuer_app_id', 'audience', 'client_id', 'creator_app', 'provider', 'application_id', 'creator_application_id'}
+APP_FIELDS = {'app_id', 'issuer_app_id', 'audience', 'client_id', 'creator_app', 'provider', 'application_id', 'creator_application_id', 'draft_edit_app_id'}
 APP_ARRAYS = {'app_ids', 'retired_apps', 'review_providers'}
 # These are arbitrary user content or cryptographic material, even inside JSON.
 OPAQUE_FIELDS = {'metadata', 'message', 'description', 'name', 'app_name', 'reason',
@@ -29,6 +29,30 @@ OPAQUE_FIELDS = {'metadata', 'message', 'description', 'name', 'app_name', 'reas
 JSON_COLUMNS = {'config', 'effective_config', 'snapshot', 'body', 'result', 'payload',
                 'receipt', 'scopes', 'request', 'configuration', 'config_snapshot', 'request_json'}
 ACTOR_COLUMNS = {'actor', 'principal_id', 'requested_by', 'creator', 'authorizing_manager'}
+TERMINAL_PUBLICATIONS = {'published', 'denied', 'rejected', 'cancelled', 'withdrawn'}
+
+
+def historical_system_actor(table, row):
+    """Retain observed maintenance attribution, never grant it IAM identity."""
+    actor = row.get('actor')
+    if table == 'discussions':
+        return actor == 'provider-review-guidance'
+    if row.get('plane') != 'production':
+        return False
+    maintenance = {
+        ('shubham:user-requested-starter-catalog-recovery', 'iam.catalog.restore'),
+        ('operator:user-requested-honeycomb-publication', 'iam.adopt'),
+    }
+    if table == 'operations':
+        return row.get('state') == 'accepted' and (actor, row.get('kind')) in maintenance
+    if table == 'audit':
+        return (actor, row.get('action')) in maintenance | {
+            ('authorized-operator', 'release.placeholder.materialize'),
+            ('operator:silicon-production', 'application.catalog.delete'),
+            ('authorized-test-reset-operator', 'testing.import.cancel'),
+            ('authorized-test-reset-operator', 'testing.application.cancel'),
+        }
+    return False
 
 
 def mapping(document):
@@ -147,20 +171,42 @@ def migrate_database(db, document, apply=False):
             for raw in db.execute(f'SELECT rowid,* FROM "{table}"').fetchall():
                 row = dict(zip(names, raw))
                 plane = row.get(plane_column) or 'production'
-                if table in {'discussions', 'decisions', 'publication_authorizations'}:
-                    parent = db.execute('SELECT plane FROM publication_requests WHERE id=?', (row['request_id'],)).fetchone()
+                terminal_review = table == 'publication_requests' and row['state'] in TERMINAL_PUBLICATIONS
+                if table in {'discussions', 'decisions', 'publication_authorizations', 'review_gates'}:
+                    parent = db.execute('SELECT plane,state FROM publication_requests WHERE id=?', (row['request_id'],)).fetchone()
                     if parent:
                         plane = parent[0]
+                        terminal_review = parent[1] in TERMINAL_PUBLICATIONS
                 for column in columns:
                     value, new = row[column], row[column]
                     if value is None:
                         continue
-                    if column in APP_FIELDS or column in ACTOR_COLUMNS:
+                    if terminal_review and (column == 'provider' or column in JSON_COLUMNS):
+                        # Final review evidence can contain both a coordinator
+                        # role and an app provider with the same new spelling.
+                        # Retain its original authority namespace and bytes.
+                        pass
+                    elif column == 'actor' and historical_system_actor(table, row):
+                        pass
+                    elif column in APP_FIELDS or column in ACTOR_COLUMNS:
                         new = transform(value, apps, people, plane, column)
                     elif column == 'resource' and value in apps:
                         new = apps[value]
                     elif column in JSON_COLUMNS and isinstance(value, str) and (table, row.get(identifier_holds.PRIMARY.get(table, 'id'))) not in held and table != 'operations' and not (table == 'downloads' and column == 'receipt'):
-                        new = json.dumps(transform(json.loads(value), apps, people, plane, column), separators=(',', ':'))
+                        content = json.loads(value)
+                        if table == 'drafts' and column == 'body' and isinstance(content, dict) and 'local_app_id' in content:
+                            # A draft is an unregistered proposal. Its requested
+                            # handle is not an IAM-owned application yet.
+                            org, proposed = content.get('org_id'), content['local_app_id']
+                            if org != row['org_id'] or not isinstance(proposed, str) or (proposed and not HANDLE.fullmatch(proposed)):
+                                raise ValueError('Draft application handle or owning organization is invalid')
+                            old = org + '>' + proposed
+                            target = apps.get(old, proposed)
+                            if content.get('app_id', target) not in (old, target):
+                                raise ValueError('Draft application identity is contradictory')
+                            content = {**content, 'app_id': target}
+                            del content['local_app_id']
+                        new = json.dumps(transform(content, apps, people, plane, column), separators=(',', ':'))
                     if new != value:
                         db.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (new, row['rowid']))
                         changed += 1
