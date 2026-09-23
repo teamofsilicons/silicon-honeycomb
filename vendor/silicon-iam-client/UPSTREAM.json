@@ -34,7 +34,7 @@
     "src/honeycomb/contracts.rs": "2374b3f5c0df6f7496cff70fe6183a3fd0ea3cc58217c82562131eb63af32a8e",
     "src/honeycomb.rs": "0df98c97ded4ef0a8fe2dce0b3524d485f62756161965da680dea28f09856e06",
     "src/lib.rs": "3dc274bcb6f24d871b39f2c6f6d74e56f3d250b6a9ead38b2aae4446848d1963",
-    "src/models.rs": "cf0bab82e07ffd206ed78c29df2222bc475dbd49240544ab31c06ebc049362fd",
+    "src/models.rs": "07e18b70fbc566230e43bf6990d02455fa289332750e0f1b4dc39fc229142225",
     "src/models_manual.rs": "5dcb6e7f8631040812d3c1685f73aa18c53227c5b6fa427b1e2bd2a3a54368a7",
     "src/request.rs": "02fd1654392df0823f0db891080d75e6baf11939786f7d26f688ba6ce0bebfa0",
     "src/support.rs": "a5c8b6bf7b94ec7d138244a3303dc2bbab9503b1277c9fef679cd5ce61dd22a6",
@@ -42,5 +42,10 @@
     "src/telemetry_routes.json": "f9e8a37b79f6da9d06b3a6efb0840e95c936bd60a2a076261a7a3adfe0c6831e",
     "src/update.rs": "21e7aa2d379783a50981d094d133e1993cce653e619fcf6f837530448c1013c9",
     "src/webhook.rs": "19d5d10f5fb3aa10da1378c84114921ff62d0651d1730d5233046396a872e89e"
+  },
+  "documentation_patch": {
+    "upstream_commit": "05f9e36",
+    "file": "src/models.rs",
+    "note": "Two membership example rustdoc comments fixed upstream; no runtime changes."
   }
 }

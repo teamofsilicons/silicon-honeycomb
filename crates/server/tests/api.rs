@@ -6020,3 +6020,117 @@ async fn publication_preserves_both_channels_when_they_share_a_version() {
             && archive["state"] == "ready"));
     }
 }
+
+#[tokio::test]
+async fn identifier_cutover_holds_never_retry_mutations_or_deliver_notifications() {
+    let (s, _) = setup(true).await;
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("held"),
+        "held-create-original",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    sqlx::query("UPDATE operations SET state='held_identifier_migration' WHERE resource='held'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let operation: String = sqlx::query_scalar("SELECT id FROM operations WHERE resource='held'")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at) VALUES('held-publication','production','held',1,'held_identifier_migration','admin',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,state,created_at) VALUES('held-mail','production','held-mail','release.created',' {\"app_id\":\"tos>held\"} ','held_identifier_migration',1)").execute(&s.db).await.unwrap();
+    for (method, path) in [
+        ("POST", format!("/api/v1/operations/{operation}/retry")),
+        ("POST", format!("/api/v1/operations/{operation}/result")),
+        (
+            "POST",
+            "/api/v1/review-requests/held-publication/plan".into(),
+        ),
+        (
+            "POST",
+            "/api/v1/review-requests/held-publication/activate".into(),
+        ),
+    ] {
+        let (status, body) = call(
+            &s,
+            method,
+            &path,
+            Some("admin"),
+            json!({}),
+            "held-never-replay",
+            Some(1),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{path}: {body}");
+        assert_eq!(
+            body["error"]["code"], "identifier_migration_hold",
+            "{path}: {body}"
+        );
+    }
+    let (status, replay) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("held"),
+        "held-create-original",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(replay["error"]["code"], "identifier_migration_hold");
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/apps/held/secret-rotations",
+        Some("admin"),
+        json!({}),
+        "held-new-rotation",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, publication) = call(
+        &s,
+        "GET",
+        "/api/v1/apps/held/publication",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(
+        publication["items"][0]["state"],
+        "held_identifier_migration"
+    );
+    let mailbox = Mailbox::default();
+    // There is no delivery queued by the un-published fixture application.
+    assert!(
+        !silicon_honeycomb_server::notifications::dispatch_once(&s, Some(&mailbox))
+            .await
+            .unwrap()
+    );
+    assert!(mailbox.0.lock().unwrap().is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM operations WHERE id=?")
+            .bind(operation)
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "held_identifier_migration"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM publication_authorizations")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
+}

@@ -26,7 +26,7 @@ The file is explicit authorization to preserve each identity under its new publi
 
 ## Backend sequence
 
-1. Freeze registration/configuration/release writes. Drain pending operations, decisions, publication requests and outbox notifications. Explicitly cancel any operation that cannot complete, using its owning service's cancellation semantics. The migration refuses pending work because encrypted replay bodies and their hashes cannot be casually rewritten.
+1. Freeze registration/configuration/release writes. Drain pending operations, decisions, publication requests and outbox notifications, or preserve explicitly authorized unresolved work using the verified cutover hold below. A cancellation is valid only through its owning service's cancellation semantics. The migration refuses unheld pending work because replay bodies and hashes cannot be casually rewritten.
 2. Stop Honeycomb API and all workers. Back up IAM and Honeycomb, then apply schema migrations through `0026_identifier_schema.sql` using the normal migration mechanism. Starting the new binary applies schema migrations but refuses to start workers while qualified application IDs remain.
 3. Preview the exact IAM mapping:
 
@@ -60,3 +60,19 @@ Registry entries and channel keys change (`tos>briefcase>test` → `briefcase>te
 On failed verification keep writers stopped and restore the complete coordinated IAM/Honeycomb backups and old binaries/configuration. Restoring only one database while other services accept new-schema writes is not a supported rollback.
 
 The migration preserves the deployed SQLx history exactly: `0023_application_create_hash_contexts.sql`, `0024_release_channels.sql` and `0025_release_contract.sql`. The new namespace schema is `0026_identifier_schema.sql`. Never reuse an applied migration number or change its checksum. App-owned environment actors and ownership links move to the bare application ID; accepted create operations keep their exact request hashes and retain an operation-bound legacy hash context, including any older UUID context, so matching retries still resolve to the same environment.
+
+## Preserving unresolved work on a cutover hold
+
+The coordinated September 23 cutover may preserve unresolved historical work on the explicit state `held_identifier_migration`. This is neither success nor cancellation. It authorizes no replay or delivery. Stop all writers and take the coordinated backup before creating an exact inventory manifest:
+
+```sh
+python3 scripts/hold_identifier_cutover.py --database data/honeycomb.db --manifest private/hold-manifest.json --capture
+python3 scripts/hold_identifier_cutover.py --database data/honeycomb.db --manifest private/hold-manifest.json
+python3 scripts/hold_identifier_cutover.py --database data/honeycomb.db --manifest private/hold-manifest.json --apply --stopped --backup-dir private/hold-backups
+```
+
+Capture is read-only and writes a new restricted hashes-only manifest. Preview rolls back all changes. Apply rechecks the complete inventory under a write transaction, verifies a SQLite backup, archives all original column values and hashes in `_identifier_cutover_holds`, and changes only each selected state. Encrypted `management_requests` belonging to held operations are archived too. Live leases, remaining test operations, activated publications, and publication authority/decision children are blockers requiring reconciliation; the tool cannot bypass them.
+
+The ID mapper verifies each archived hash and current row before accepting held records. It changes only IAM-mapped actor/application routing columns; held notification payloads, publication snapshots, operation requests/results, request hashes, ciphertext and original receipt bytes remain exact. SQLite triggers block modification/deletion of that evidence and prevent unholding by a generic update. The server rejects configure/rotation recovery and publication-plan/activation retries with HTTP 409 `identifier_migration_hold`. Background dispatch only selects pending work and never sends held records.
+
+Do not change held records back to pending. Reconciliation requires the original operation's authoritative IAM/provider outcome, a review of preserved request/hash context, the canonical identity mapping, and a separately reviewed transactional release procedure. A new publication request needs fresh current-revision authority and normal approvals; an old hold cannot be treated as approved. Notifications remain held until an operator determines how to deliver or retire the original event without changing its identity or implying prior delivery. Keep the hold manifest, exact original evidence, coordinated backups and migration receipts throughout this process.

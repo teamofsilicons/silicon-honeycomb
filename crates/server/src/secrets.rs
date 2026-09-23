@@ -50,6 +50,7 @@ pub async fn rotate(
             .fetch_optional(&mut *tx)
             .await?;
     let (id, request) = if let Some(row) = existing {
+        Error::require_unheld(&row.get::<String, _>("state"))?;
         if row.get::<String, _>("request_hash") != digest {
             return Err(Error::conflict(
                 "Idempotency key already used for another operation",
@@ -83,7 +84,7 @@ pub async fn rotate(
                 ));
             }
         }
-        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','configure','publication.activate'))")
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state IN ('pending','held_identifier_migration') AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','configure','publication.activate'))")
             .bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
         if pending {
             return Err(Error::conflict(
@@ -199,6 +200,7 @@ pub async fn recover(S(s): S<State>, h: HeaderMap, Path(id): Path<String>) -> Re
     Ok(Json(recover_result(&s, &c, &row).await?))
 }
 async fn recover_result(s: &State, c: &Context, row: &SqliteRow) -> Result<Value> {
+    Error::require_unheld(&row.get::<String, _>("state"))?;
     let id: String = row.get("id");
     let app: String = row.get("resource");
     if row.get::<String, _>("state") == "rejected"

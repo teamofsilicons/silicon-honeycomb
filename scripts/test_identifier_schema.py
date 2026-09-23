@@ -67,6 +67,50 @@ class IdentifierMigration(unittest.TestCase):
         db.execute("UPDATE operations SET state='pending'")
         db.commit()
         with self.assertRaisesRegex(ValueError, 'in-flight'): m.migrate_database(db, MAP, True)
+    def held_database(self):
+        db=self.database()
+        db.execute("UPDATE operations SET state='pending',request_json=?", (' {"app_id":"tos>hello","secret":"opaque"} ',))
+        db.execute("INSERT INTO management_requests VALUES('op','configure','tos>hello','unchanged-encrypted-body',1)")
+        db.execute("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot) VALUES('pub','production','tos>hello',1,'awaiting_review_plan','saket',1,?)", (' {"app_id":"tos>hello"} ',))
+        db.execute("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES('mail','production','stable-event','release.created',?,1)", (' {"app_id":"tos>hello","message":"untouched"} ',))
+        db.commit()
+        return db
+    def test_verified_holds_preserve_bytes_refs_and_refuse_replay(self):
+        h=m.identifier_holds
+        db=self.held_database()
+        manifest=h.inventory(db)
+        original={ (r['table'],r['id']):h.packed(h.row(db,r['table'],r['id'])) for r in manifest['records'] }
+        self.assertEqual(h.hold(db,manifest),4)
+        self.assertEqual(db.execute("SELECT state FROM operations").fetchone()[0],'pending')
+        h.hold(db,manifest,True)
+        m.migrate_database(db, MAP, True)
+        self.assertEqual(db.execute("SELECT resource,actor,state,request_json FROM operations").fetchone(),('hello','c:saket',h.STATE,' {"app_id":"tos>hello","secret":"opaque"} '))
+        self.assertEqual(db.execute("SELECT app_id,encrypted_body FROM management_requests").fetchone(),('hello','unchanged-encrypted-body'))
+        self.assertEqual(db.execute("SELECT app_id,config_snapshot FROM publication_requests").fetchone(),('hello',' {"app_id":"tos>hello"} '))
+        self.assertEqual(db.execute("SELECT payload FROM outbox").fetchone()[0],' {"app_id":"tos>hello","message":"untouched"} ')
+        self.assertEqual({(t,k):v for t,k,v in db.execute(f'SELECT table_name,row_id,original_row FROM {h.TABLE}')}, original)
+        self.assertEqual(m.migrate_database(db, MAP, True),0)
+        for sql in ["UPDATE operations SET state='accepted'", "UPDATE outbox SET payload='{}'", "DELETE FROM publication_requests"]:
+            with self.assertRaises(sqlite3.IntegrityError):db.execute(sql)
+            db.rollback()
+    def test_hold_manifest_changes_and_unverified_state_fail_closed(self):
+        h=m.identifier_holds
+        db=self.held_database();manifest=h.inventory(db)
+        db.execute("UPDATE outbox SET attempts=1");db.commit()
+        with self.assertRaisesRegex(ValueError,'manifest'):h.hold(db,manifest,True)
+        self.assertEqual(db.execute('SELECT state FROM outbox').fetchone()[0],'pending')
+        db.execute("UPDATE operations SET state=?",(h.STATE,));db.commit()
+        with self.assertRaisesRegex(ValueError,'evidence'):m.migrate_database(db,MAP,True)
+    def test_hold_corrupted_evidence_blocks_migration(self):
+        h=m.identifier_holds
+        db=self.held_database();h.hold(db,h.inventory(db),True)
+        db.execute(f"UPDATE {h.TABLE} SET original_row='{{}}'");db.commit()
+        with self.assertRaisesRegex(ValueError,'hash'):m.migrate_database(db,MAP,True)
+    def test_accepted_request_bytes_remain_historical_evidence(self):
+        db=self.database();body=' {"app_id":"tos>hello"} '
+        db.execute('UPDATE operations SET request_json=?,result=?',(body,body));db.commit()
+        m.migrate_database(db,MAP,True)
+        self.assertEqual(db.execute('SELECT request_json,result FROM operations').fetchone(),(body,body))
     def test_installed_registry_preserves_physical_paths_and_channels(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/'installed.json'

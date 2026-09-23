@@ -28,6 +28,7 @@ pub async fn activate(
         .fetch_optional(&s.db)
         .await?
         .ok_or_else(Error::missing)?;
+    Error::require_unheld(&publication.get::<String, _>("state"))?;
     let app_id: String = publication.get("app_id");
     let app = find_app(&s, &c, &app_id, true).await?;
     let digest = hex::encode(Sha256::digest(
@@ -66,7 +67,7 @@ pub async fn activate(
                 "All provider and Honeycomb approvals must be accepted",
             ));
         }
-        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','release','publication.activate'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state IN ('pending','held_identifier_migration') AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','release','publication.activate'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
         if busy {
             return Err(Error::conflict(
                 "Finish the application's pending release or secret operation first",

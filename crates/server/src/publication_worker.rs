@@ -20,7 +20,7 @@ pub(crate) async fn remember(s: &State, c: &Context, id: &str) -> Result<()> {
     if !identity.admin(&row.get::<String, _>("org_id"))
         || matches!(
             row.get::<String, _>("state").as_str(),
-            "published" | "denied"
+            "published" | "denied" | "held_identifier_migration"
         )
         || row.get::<i64, _>("revision") != row.get::<i64, _>("current_revision")
         || row

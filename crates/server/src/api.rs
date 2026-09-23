@@ -643,6 +643,7 @@ async fn existing_operation(
             .fetch_optional(&s.db)
             .await?;
     if let Some(row) = row {
+        Error::require_unheld(&row.get::<String, _>("state"))?;
         if row.get::<String, _>("request_hash") != request_hash {
             return Err(Error::conflict(
                 "Idempotency key was already used for a different request",
@@ -797,7 +798,7 @@ async fn save_app(
             ));
         }
     }
-    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate') AND state IN ('pending','held_identifier_migration'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
     if rotating {
         return Err(Error::conflict(
             "Finish or retry the pending credential, webhook or publication operation before changing application configuration",
@@ -845,6 +846,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
         .bind(&c.plane)
         .fetch_one(&s.db)
         .await?;
+    Error::require_unheld(&op.get::<String, _>("state"))?;
     let app_id: String = op.get("resource");
     let app = find_app(s, c, &app_id, true).await?;
     if app.revision != op.get::<i64, _>("revision") {

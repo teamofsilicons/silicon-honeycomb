@@ -14,6 +14,9 @@ import re
 import sqlite3
 import time
 import uuid
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import identifier_holds
 
 HANDLE = re.compile(r"[a-z][a-z0-9_-]{0,79}\Z")
 ORG = re.compile(r"[a-z0-9_-]{3,50}\Z")
@@ -44,7 +47,7 @@ def mapping(document):
     for row in document.get('identities', []):
         plane = row.get('testing_environment_id') or 'production'
         old, new = row['legacy_id'], row['public_id']
-        if not re.fullmatch(r'(?:c|si):[a-z0-9][a-z0-9_-]{0,63}(?:\[[a-z0-9][a-z0-9-]{0,63}\])?', new):
+        if not re.fullmatch(r'(?:c:[a-z0-9_-]{3,30}|si:[a-z0-9_-]{3,50})(?:\[[a-z0-9_-]{3,50}\])?', new):
             raise ValueError('Identity mapping must contain canonical typed public IDs')
         if (plane, old) in people and people[plane, old] != new:
             raise ValueError('Conflicting IAM identity mapping')
@@ -99,11 +102,12 @@ def migrate_database(db, document, apply=False):
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if 'migrated_release_identities' not in tables:
         raise ValueError('Apply Honeycomb schema migration 0026 before this offline migration')
+    held = identifier_holds.verify(db, lambda value, column, plane: apps.get(value, value) if column == 'resource' else transform(value, apps, people, plane, column))
     # Encrypted operation bodies are immutable replay records. Drain them before
     # cutover instead of silently rewriting requests or their idempotency hashes.
-    for table, condition in [('operations', "state='pending'"), ('outbox', "state='pending'"),
+    for table, condition in [('operations', "state='pending'"), ('outbox', "state IN ('pending','sending','uncertain')"),
                              ('decisions', "state='pending'"), ('publication_requests',
-                              "state NOT IN ('published','rejected','cancelled','withdrawn')")]:
+                              "state NOT IN ('published','denied','rejected','cancelled','withdrawn','held_identifier_migration')")]:
         if table in tables and db.execute(f'SELECT 1 FROM {table} WHERE {condition} LIMIT 1').fetchone():
             raise ValueError(f'Drain or explicitly cancel in-flight {table} before ID migration')
     existing = db.execute('SELECT plane,app_id,org_id FROM applications').fetchall()
@@ -155,11 +159,12 @@ def migrate_database(db, document, apply=False):
                         new = transform(value, apps, people, plane, column)
                     elif column == 'resource' and value in apps:
                         new = apps[value]
-                    elif column in JSON_COLUMNS and isinstance(value, str) and not (table == 'downloads' and column == 'receipt'):
+                    elif column in JSON_COLUMNS and isinstance(value, str) and (table, row.get(identifier_holds.PRIMARY.get(table, 'id'))) not in held and table != 'operations' and not (table == 'downloads' and column == 'receipt'):
                         new = json.dumps(transform(json.loads(value), apps, people, plane, column), separators=(',', ':'))
                     if new != value:
                         db.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (new, row['rowid']))
                         changed += 1
+        identifier_holds.verify(db, lambda value, column, plane: apps.get(value, value) if column == 'resource' else transform(value, apps, people, plane, column))
         if 'catalog_search' in tables:
             db.execute('DELETE FROM catalog_search')
             db.execute("INSERT INTO catalog_search(plane,app_id,variant,name,description) SELECT plane,app_id,'desired',name,description FROM applications")
