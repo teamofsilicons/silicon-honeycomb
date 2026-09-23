@@ -38,14 +38,31 @@ key also matched. The diagnostic proof was neither consumed nor persisted, and
 no alternate credential was substituted.
 
 The older operation `a2b700ff-90dd-4795-b6c1-27e98871ba9c` in environment
-`d70c8674-6d2e-41d4-bf8d-96ddd882edbd` is still pending. A supported recovery under
-its original `dm-ting-tester` actor returned a generic revision conflict. A
-read-only inspection found its immutable environment revision is 19 while IAM
-is now at 21, with generation and key version still 1. IAM 3.0.2 checks this
-lifecycle fence before looking up the target-plane receipt, so it cannot yet
-reach the definitive configuration-revision rejection handled by Honeycomb
-0.3.3. The saved request and operation were not modified. IAM follow-up and a
-supported retry are required before claiming this older recovery is complete.
+`d70c8674-6d2e-41d4-bf8d-96ddd882edbd` was recovered on 2026-09-23 after IAM
+3.0.3 source `9fd370c5589e099399a377e5667b9408cc2d13fd` was verified live on
+both main and scoped APIs with a healthy worker. Supported exact-operation
+recovery under the original `dm-ting-tester` actor returned `rejected` with
+`testing_configuration_revision_conflict`; a fresh read confirmed the terminal
+state. Its immutable environment revision remained 19 while IAM was at 21,
+with generation and key version still 1. Receipt-first recovery reached the
+authoritative rejection without authorizing a new mutation under stale lifecycle
+state.
+
+Supported reconciliation then returned accepted. A new authorized rotation with
+a new saved idempotency key, `344d03bc-1d3d-45f7-a363-42b1464088ce`, was accepted
+as credential version 2. A fresh official IAM Rust SDK 3.1.0 DM login and signed
+OBO exchange returned exactly that new Ting credential and the matching IAM key.
+The returned credential authenticated IAM's testing-context endpoint for the
+original environment and `tos>ting`. No saved request or database state was
+manually changed; no alternate credential was substituted. The diagnostic proof
+was neither consumed nor persisted. The earlier generic revision-conflict
+recovery attempt under IAM 3.0.2 remains retained as historical evidence.
+
+Sanitized current proof is in
+`credential-recovery/original-obo-validation-iam303.json` under the task evidence
+directory. Both original-operation recovery and fresh-environment audience
+credential consistency are now verified; these checks do not alone establish
+DM message delivery.
 
 ## Published artifacts and checks
 
