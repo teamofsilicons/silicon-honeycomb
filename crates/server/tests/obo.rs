@@ -37,7 +37,7 @@ impl Management for Manager {
         Err(Error::forbidden())
     }
     async fn recover_testing_application_credential(&self, id: &str, _: &str) -> Result<Value> {
-        Ok(json!({"environment_id":id,"app_id":"tos>honeycomb","app_secret":TEST_SECRET}))
+        Ok(json!({"environment_id":id,"app_id":"honeycomb","app_secret":TEST_SECRET}))
     }
 }
 struct Store;
@@ -45,6 +45,7 @@ struct Store;
 impl ArchiveStorage for Store {
     async fn put(
         &self,
+        _org: &str,
         _: &str,
         _: &str,
         _: &std::path::Path,
@@ -71,15 +72,15 @@ async fn setup(server: &MockServer) -> State {
     State {
         telemetry: Default::default(),
         identity: Arc::new(
-            Iam::new(&server.uri(), "tos>honeycomb", "production-secret")
+            Iam::new(&server.uri(), "honeycomb", "production-secret")
                 .unwrap()
                 .with_testing_context(db.clone(), management.clone()),
         ),
         db,
         management,
         storage: Arc::new(Store),
-        app_id: "tos>honeycomb".into(),
-        iam_app_id: "tos>iam".into(),
+        app_id: "honeycomb".into(),
+        iam_app_id: "iam".into(),
         iam_login_url: server.uri(),
         encryption_key: [1; 32],
         webhook_secret: "unused".into(),
@@ -91,7 +92,7 @@ async fn app(s: &State, plane: &str, id: &str, org: &str, visibility: &str) {
         .bind(plane).bind(id).bind(org).bind(visibility).bind(&config).bind(&config).execute(&s.db).await.unwrap();
 }
 fn proof(env: Option<&str>) -> Value {
-    json!({"valid":true,"proof_id":"11111111-1111-4111-8111-111111111111","issuer_app_id":"caller>app","audience":"tos>honeycomb","actor":{"type":"carbon","public_id":"carbon-user"},"authorization":{"actor_type":"carbon","public_id":"carbon-user","organization_id":"22222222-2222-4222-8222-222222222222","org_id":"tos","membership_id":"33333333-3333-4333-8333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"tos>honeycomb","testing_environment_id":env,"scopes":["obo:tos>honeycomb:honeycomb.apps.list"],"org_role":null,"tags":null},"org_id":"tos","endpoint":{"endpoint_id":ENDPOINT_ID,"path":ENDPOINT_PATH},"metadata":{},"expires_at":"2099-01-01T00:00:00Z","consumed_at":"2026-09-22T00:00:00Z"})
+    json!({"valid":true,"proof_id":"11111111-1111-4111-8111-111111111111","issuer_app_id":"app","audience":"honeycomb","actor":{"type":"carbon","public_id":"carbon-user"},"authorization":{"actor_type":"carbon","public_id":"carbon-user","organization_id":"22222222-2222-4222-8222-222222222222","org_id":"tos","membership_id":"33333333-3333-4333-8333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"honeycomb","testing_environment_id":env,"scopes":["obo:honeycomb:honeycomb.apps.list"],"org_role":null,"tags":null},"org_id":"tos","endpoint":{"endpoint_id":ENDPOINT_ID,"path":ENDPOINT_PATH},"metadata":{},"expires_at":"2099-01-01T00:00:00Z","consumed_at":"2026-09-22T00:00:00Z"})
 }
 async fn wire(server: &MockServer, response: Value) {
     server.reset().await;
@@ -128,19 +129,19 @@ async fn send(
 async fn delegates_current_org_private_catalog_with_exact_request_binding_and_safe_projection() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
-    app(&s, "production", "tos>private", "tos", "private").await;
-    app(&s, "production", "tos>public", "tos", "public").await;
-    app(&s, "production", "other>private", "other", "private").await;
-    app(&s, "production", "other>public", "other", "public").await;
-    app(&s, ENV, "tos>isolated", "tos", "private").await;
+    app(&s, "production", "private", "tos", "private").await;
+    app(&s, "production", "public", "tos", "public").await;
+    app(&s, "production", "other-private", "other", "private").await;
+    app(&s, "production", "other-public", "other", "public").await;
+    app(&s, ENV, "isolated", "tos", "private").await;
     wire(&server, proof(None)).await;
     let body = "{ \"org_id\": \"tos\", \"limit\": 1 }";
     let (status, first) = send(&s, body, Some("opaque-proof"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
-    assert_eq!(first["items"][0]["app_id"], "tos>private");
+    assert_eq!(first["items"][0]["app_id"], "private");
     assert_eq!(first["items"][0]["name"], "Accepted name");
-    assert_eq!(first["next_cursor"], "tos>private");
+    assert_eq!(first["next_cursor"], "private");
     assert_eq!(first["items"][0].as_object().unwrap().len(), 6);
     assert!(!first.to_string().contains("never-expose"));
     let requests = server.received_requests().await.unwrap();
@@ -157,12 +158,12 @@ async fn delegates_current_org_private_catalog_with_exact_request_binding_and_sa
     );
     let (_, next) = send(
         &s,
-        r#"{"org_id":"tos","after":"tos>private","limit":1}"#,
+        r#"{"org_id":"tos","after":"private","limit":1}"#,
         Some("next-proof"),
         None,
     )
     .await;
-    assert_eq!(next["items"][0]["app_id"], "tos>public");
+    assert_eq!(next["items"][0]["app_id"], "public");
     assert!(next["next_cursor"].is_null());
     let (status, _) = send(&s, r#"{"org_id":"other"}"#, Some("other-proof"), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -219,8 +220,8 @@ async fn validates_verified_audience_actor_endpoint_org_metadata_and_environment
     for (pointer, wrong) in [
         ("/valid", json!(false)),
         ("/authorization/scopes", json!([])),
-        ("/audience", json!("other>app")),
-        ("/authorization/audience", json!("other>app")),
+        ("/audience", json!("app")),
+        ("/authorization/audience", json!("app")),
         ("/authorization/public_id", json!("other-user")),
         ("/authorization/actor_type", json!("silicon")),
         ("/authorization/org_id", json!("other")),
@@ -246,12 +247,12 @@ async fn testing_uses_recovered_recipient_credential_and_never_falls_back_to_pro
     use base64::Engine as _;
     let server = MockServer::start().await;
     let s = setup(&server).await;
-    app(&s, ENV, "tos>test-only", "tos", "private").await;
-    app(&s, "production", "tos>production-only", "tos", "private").await;
+    app(&s, ENV, "test-only", "tos", "private").await;
+    app(&s, "production", "production-only", "tos", "private").await;
     wire(&server, proof(Some(ENV))).await;
     let (status, result) = send(&s, r#"{"org_id":"tos"}"#, Some("test-proof"), Some(KEY)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["items"][0]["app_id"], "tos>test-only");
+    assert_eq!(result["items"][0]["app_id"], "test-only");
     assert_eq!(result["items"].as_array().unwrap().len(), 1);
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests[0].headers["x-testing-environment-key"], KEY);
@@ -259,8 +260,7 @@ async fn testing_uses_recovered_recipient_credential_and_never_falls_back_to_pro
         requests[0].headers["authorization"],
         format!(
             "Basic {}",
-            base64::engine::general_purpose::STANDARD
-                .encode(format!("tos>honeycomb:{TEST_SECRET}"))
+            base64::engine::general_purpose::STANDARD.encode(format!("honeycomb:{TEST_SECRET}"))
         )
     );
     wire(&server, proof(None)).await;
@@ -310,11 +310,11 @@ async fn testing_uses_recovered_recipient_credential_and_never_falls_back_to_pro
 async fn direct_user_catalog_requires_current_membership_and_publishes_critical_definition() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
-    app(&s, "production", "tos>private", "tos", "private").await;
+    app(&s, "production", "private", "tos", "private").await;
     let mut snapshot = proof(None)["authorization"].clone();
     snapshot["org_role"] = json!("member");
     Mock::given(method("POST")).and(path("/api/v1/oauth/introspect"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"public_id":"carbon-user","client_id":"tos>honeycomb","actor_type":"carbon","authorizations":[snapshot]}))).mount(&server).await;
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"public_id":"carbon-user","client_id":"honeycomb","actor_type":"carbon","authorizations":[snapshot]}))).mount(&server).await;
     for (org, token, expected) in [
         ("tos", None, StatusCode::UNAUTHORIZED),
         ("tos", Some("oat_member"), StatusCode::OK),
@@ -371,7 +371,7 @@ async fn direct_user_catalog_requires_current_membership_and_publishes_critical_
 async fn silicon_delegation_accepts_undisclosed_identity_and_role_with_current_obo_scope() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
-    app(&s, "production", "tos>private", "tos", "private").await;
+    app(&s, "production", "private", "tos", "private").await;
     let mut result = proof(None);
     result["actor"] = json!({"type":"silicon","public_id":"silicon-user"});
     result["authorization"]
@@ -454,8 +454,8 @@ async fn key_rotation_during_proof_verification_rejects_the_old_request_context(
 async fn rust_client_preserves_signed_json_and_supports_direct_and_testing_inventories() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
-    app(&s, "production", "tos>private", "tos", "private").await;
-    app(&s, ENV, "tos>testing", "tos", "private").await;
+    app(&s, "production", "private", "tos", "private").await;
+    app(&s, ENV, "testing", "tos", "private").await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client =
         honeycomb_client::Client::new(&format!("http://{}", listener.local_addr().unwrap()))
@@ -476,22 +476,22 @@ async fn rust_client_preserves_signed_json_and_supports_direct_and_testing_inven
         .organization_apps_obo(&request, "client-proof")
         .await
         .unwrap();
-    assert_eq!(result["items"][0]["app_id"], "tos>private");
+    assert_eq!(result["items"][0]["app_id"], "private");
     let mut snapshot = proof(None)["authorization"].clone();
     snapshot["org_role"] = json!("member");
     Mock::given(method("POST")).and(path("/api/v1/oauth/introspect"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"public_id":"carbon-user","client_id":"tos>honeycomb","actor_type":"carbon","authorizations":[snapshot]}))).expect(2).mount(&server).await;
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"public_id":"carbon-user","client_id":"honeycomb","actor_type":"carbon","authorizations":[snapshot]}))).expect(2).mount(&server).await;
     let member = client.with_token("oat_member");
     assert_eq!(
         member
             .organization_apps("tos", None, Some(1))
             .await
             .unwrap()["items"][0]["app_id"],
-        "tos>private"
+        "private"
     );
     assert!(
         member
-            .organization_apps("tos", Some("tos>private"), Some(1))
+            .organization_apps("tos", Some("private"), Some(1))
             .await
             .unwrap()["items"]
             .as_array()
@@ -506,6 +506,6 @@ async fn rust_client_preserves_signed_json_and_supports_direct_and_testing_inven
         .organization_apps_obo(&request, "test-proof")
         .await
         .unwrap();
-    assert_eq!(result["items"][0]["app_id"], "tos>testing");
+    assert_eq!(result["items"][0]["app_id"], "testing");
     task.abort();
 }

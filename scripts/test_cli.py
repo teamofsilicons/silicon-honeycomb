@@ -54,24 +54,24 @@ def main():
                 if role != 'anonymous':
                     assert run('login', 'fixture-' + role, role=role)['authenticated']
             assert run('login', 'status', role='anonymous') == {'authenticated': False}
-            assert run('iam')['app_id'] == 'tos>honeycomb'
-            webhook = run('apps', 'webhook', 'status', 'tos>briefcase')
+            assert run('iam')['app_id'] == 'honeycomb'
+            webhook = run('apps', 'webhook', 'status', 'briefcase')
             proof = root / 'webhook-proof'; proof.write_text('fixture-webhook-proof')
             secret_file = root / 'webhook-secret'; secret_file.write_text('replacement-fixture-webhook-signing-secret')
-            pending_webhook = run('apps', 'webhook', 'approve', 'tos>briefcase', '--endpoint', webhook['pending_endpoint_id'], '--revision', '1')
+            pending_webhook = run('apps', 'webhook', 'approve', 'briefcase', '--endpoint', webhook['pending_endpoint_id'], '--revision', '1')
             assert pending_webhook['error_code'] == 'step_up_required'
             accepted_webhook = run('apps', 'webhook', 'retry', pending_webhook['id'], '--step-up-file', str(proof))
             assert accepted_webhook['state'] == 'accepted'
-            rotated_webhook = run('apps', 'webhook', 'rotate-secret', 'tos>briefcase', '--revision', '1', '--secret-file', str(secret_file), '--step-up-file', str(proof))
+            rotated_webhook = run('apps', 'webhook', 'rotate-secret', 'briefcase', '--revision', '1', '--secret-file', str(secret_file), '--step-up-file', str(proof))
             assert rotated_webhook['state'] == 'accepted'
             assert 'replacement-fixture-webhook' not in json.dumps(rotated_webhook)
             cleanup = run('environments', 'retention', 'fixture-cleanup-desktop')['automatic_cleanup']
             assert cleanup['state'] == 'pending' and cleanup['kind'] == 'environment.retire'
-            assert cleanup['applications'] == ['tos>briefcase']
+            assert cleanup['applications'] == ['briefcase']
             retention_id = 'fixture-retention-desktop'
             assert run('environments', 'retention', retention_id)['idle_days'] == 30
             assert run('environments', 'set-retention', retention_id, '--days', '60', '--revision', '1')['revision'] == 2
-            activity = run('environments', 'activity', retention_id, 'tos>briefcase', '--generation', '1', '--key-version', '1')
+            activity = run('environments', 'activity', retention_id, 'briefcase', '--generation', '1', '--key-version', '1')
             assert activity['replayed'] is False
             assert run('environments', 'retention', retention_id)['idle_days'] == 60
             logo_file = REPO / 'web/tests/fixtures/logo.png'
@@ -79,8 +79,8 @@ def main():
             logo = run('--idempotency-key', 'cli-logo-upload-0001', 'apps', 'upload-logo', 'tos', str(logo_file))
             assert logo['state'] == 'accepted' and logo['logo_url'].startswith('https://briefcase.fixture.invalid/')
             assert run('--idempotency-key', 'cli-logo-upload-0001', 'apps', 'upload-logo', 'tos', str(logo_file)) == logo
-            app_id = 'tos>cli-e2e'
-            app = {'org_id': 'tos', 'local_app_id': 'cli-e2e', 'name': 'CLI integration',
+            app_id = 'cli-e2e'
+            app = {'org_id': 'tos', 'app_id': 'cli-e2e', 'name': 'CLI integration',
                    'description': 'This application exercises the complete local Honeycomb release installation workflow. ' * 7,
                    'webhook_scope': ['membership'], 'webhook_url': 'https://example.com/webhook/', 'webhook_secret': 'test-signing-secret-000000000000000000'}
             app['logo_url'] = logo['logo_url']
@@ -143,9 +143,12 @@ def main():
             details = run('apps', 'get', app_id, role='member')
             assert details['stars'] == 1 and details['reviews'] == 1 and details['rating'] == 4.7
             assert details['installs'] == 2
-            # The first production release already starts the saved publication intent.
-            request = run('publication', 'get', app_id)['items'][0]
-            assert request
+            # Default-public intent submits once after the first valid upload;
+            # later releases reuse that request until its revision changes.
+            publications = run('publication', 'get', app_id)
+            assert len(publications['items']) == 1
+            request = publications['items'][0]
+            assert request['revision'] == 1
             assert run('apps', 'get', app_id, role='member')['visibility'] == 'private'
             published = run('publication', 'decide', request['id'], 'honeycomb', 'approve', '--revision', '1', role='validator')
             assert published['publication_state'] == 'published'
@@ -160,14 +163,14 @@ def main():
             assert not run('installed', role='member')
             inbox = run('publication', 'inbox')
             assert any(r['id'] == 'fixture-review-desktop' for r in inbox['items'])
-            run('publication', 'review-reply', 'fixture-review-desktop', 'tos>briefcase', '--message', 'The requested scopes have been reviewed.')
-            decision = run('publication', 'decide', 'fixture-review-desktop', 'tos>briefcase', 'approve', '--reason', 'Appropriate declared file access.', '--revision', '1')
+            run('publication', 'review-reply', 'fixture-review-desktop', 'briefcase', '--message', 'The requested scopes have been reviewed.')
+            decision = run('publication', 'decide', 'fixture-review-desktop', 'briefcase', 'approve', '--reason', 'Appropriate declared file access.', '--revision', '1')
             assert decision['publication_state'] == 'awaiting_validator'
-            reconciled = run('apps', 'reconcile', 'tos>briefcase')
+            reconciled = run('apps', 'reconcile', 'briefcase')
             assert reconciled['state'] == 'pending' and 'not yet available' in reconciled['error']
-            rotation = run('apps', 'rotate-secret', 'tos>briefcase', '--revision', '1')
+            rotation = run('apps', 'rotate-secret', 'briefcase', '--revision', '1')
             assert rotation['state'] == 'pending' and rotation['error_code'] == 'integration_unavailable'
-            imported = run('environments', 'import', 'fixture-import-desktop', 'tos>briefcase', '--revision', '1')
+            imported = run('environments', 'import', 'fixture-import-desktop', 'briefcase', '--revision', '1')
             assert imported['operation_state'] == 'pending' and imported['state'] == 'ready'
             report = run('report', 'The local test report reproduces a CLI issue.', role='member')
             assert report['saved'] and report['notification'] == 'pending'

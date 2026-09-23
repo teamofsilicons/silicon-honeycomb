@@ -6,7 +6,7 @@ use wiremock::{
     matchers::{body_string_contains, header_exists, method, path},
 };
 fn adapter(server: &MockServer) -> Iam {
-    Iam::new(&server.uri(), "tos>honeycomb", "fixture-app-secret").unwrap()
+    Iam::new(&server.uri(), "honeycomb", "fixture-app-secret").unwrap()
 }
 #[tokio::test]
 async fn sdk_invalid_grants_are_authentication_failures_not_service_outages() {
@@ -44,7 +44,7 @@ async fn sdk_invalid_grants_are_authentication_failures_not_service_outages() {
     }
 }
 fn snapshot(role: Option<&str>) -> Value {
-    json!({"active":true,"public_id":"test-carbon","client_id":"tos>honeycomb","actor_type":"carbon","authorizations":[{"public_id":"test-carbon","organization_id":"22222222-2222-2222-2222-222222222222","org_id":"tos","membership_id":"33333333-3333-3333-3333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"tos>honeycomb","testing_environment_id":null,"scopes":["self.identity.read","self.membership.read"],"org_role":role,"tags":null}]})
+    json!({"active":true,"public_id":"test-carbon","client_id":"honeycomb","actor_type":"carbon","authorizations":[{"public_id":"test-carbon","organization_id":"22222222-2222-2222-2222-222222222222","org_id":"tos","membership_id":"33333333-3333-3333-3333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"honeycomb","testing_environment_id":null,"scopes":["self.identity.read","self.membership.read"],"org_role":role,"tags":null}]})
 }
 async fn introspection(server: &MockServer, body: Value) {
     server.reset().await;
@@ -78,7 +78,7 @@ async fn sdk_live_membership_disclosure_revocation_and_plane_checks() {
     assert!(!actor.admin("tos"));
     assert!(!actor.validator);
     let mut wrong = snapshot(Some("admin"));
-    wrong["client_id"] = json!("other>app");
+    wrong["client_id"] = json!("app");
     introspection(&server, wrong).await;
     assert!(iam.authenticate("oat_fixture", None).await.is_err());
     let mut testing = snapshot(Some("admin"));

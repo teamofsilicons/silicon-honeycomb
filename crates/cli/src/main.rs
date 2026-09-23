@@ -26,7 +26,7 @@ use std::{
     name = "honeycomb",
     version,
     about = "Discover, publish and install Silicon applications.",
-    long_about = "Honeycomb is the application library for Carbons and Silicons.\n\nStart: honeycomb search briefcase\nAuthenticate: honeycomb login <slt>\nPublish: honeycomb validate → honeycomb pack → honeycomb apps create → honeycomb releases upload\n\nRepository: https://github.com/teamofsilicons/silicon-honeycomb\nLibrary: https://honeycomb.teamofsilicons.com\nRust client: https://crates.io/crates/silicon-honeycomb-client\n\nEvery command supports --help. Quote app identifiers: 'tos>briefcase'."
+    long_about = "Honeycomb is the application library for Carbons and Silicons.\n\nStart: honeycomb search briefcase\nAuthenticate: honeycomb login <slt>\nPublish: honeycomb validate → honeycomb pack → honeycomb apps create → honeycomb releases upload\n\nRepository: https://github.com/teamofsilicons/silicon-honeycomb\nLibrary: https://honeycomb.teamofsilicons.com\nRust client: https://crates.io/crates/silicon-honeycomb-client\n\nEvery command supports --help. Quote app identifiers: 'briefcase'."
 )]
 struct Cli {
     /// Honeycomb backend origin. HTTPS required outside localhost.
@@ -238,7 +238,7 @@ enum Apps {
     Get {
         app_id: String,
     },
-    /// Submit application.json containing org_id, local_app_id, details, webhook and scopes.
+    /// Submit application.json containing org_id, app_id, details, webhook and scopes.
     Create {
         file: PathBuf,
     },
@@ -680,7 +680,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         return Ok(());
     }
     if matches!(cli.command, Command::Service { .. }) {
-        honeycomb_client::maintenance::install_service(&base_home()?, &invocation_path()?)?;
+        honeycomb_client::maintenance::install_service(&base_home()?, &worker_executable()?)?;
         show(&json!({"service":"installed"}))?;
         return Ok(());
     }
@@ -697,8 +697,17 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
         if daemon_lock.try_lock_exclusive().is_err() {
             return Ok(());
         }
-        let executable = std::env::current_exe()?;
-        let running_digest = package::sha256(&executable)?;
+        // One-shot workers always exit after maintenance. Fingerprints are only needed
+        // when a persistent worker must detect replacement and ask its supervisor to restart.
+        let running = if once {
+            None
+        } else {
+            let executable = std::env::current_exe()?;
+            let running_digest = package::sha256(&executable)?;
+            let launcher = worker_executable()?;
+            let launcher_revision = command_revision(&launcher)?;
+            Some((executable, running_digest, launcher, launcher_revision))
+        };
         loop {
             if !once {
                 tokio::time::sleep(next_update_delay(std::time::SystemTime::now())).await;
@@ -722,7 +731,12 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 }
             }
             // Supervisors relaunch the newly installed executable after self-update.
-            if once || package::sha256(&executable).is_ok_and(|digest| digest != running_digest) {
+            if running.as_ref().is_none_or(
+                |(executable, running_digest, launcher, launcher_revision)| {
+                    executable_replaced(executable, running_digest)
+                        || command_revision(launcher).ok().as_ref() != Some(launcher_revision)
+                },
+            ) {
                 return Ok(());
             }
         }
@@ -741,9 +755,11 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             | Command::Installed
             | Command::Uninstall { .. }
     );
-    if !auth_mutation && !local_only {
-        store.renew(&client).await?;
-    }
+    let verified_status = if !auth_mutation && !local_only {
+        store.verified(&client).await?
+    } else {
+        None
+    };
     // Login/logout retain the same lock through the remote operation and local save.
     // Release it before package maintenance acquires its own locks.
     let session = store.session.clone();
@@ -758,7 +774,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             if session.access_token.is_none() {
                 show(&json!({"authenticated":false}))?;
             } else {
-                show(&client.login_status().await?)?;
+                show(&verified_status.expect("stored session was verified"))?;
             }
         }
         Command::Login { slt_or_status } => {
@@ -1359,9 +1375,10 @@ async fn install(
         if let Some(progress) = progress {
             progress.stage("Unpacking and activating commands");
         }
-        match installer::install_archive_channel_resolving(
+        match installer::install_catalog_archive(
             id,
             selection.channel,
+            release.legacy_manifest_app_id.as_deref(),
             &stage,
             root,
             &aliases,
@@ -1382,9 +1399,10 @@ async fn install(
                                 .join(", ")
                         );
                     }
-                    installer::install_archive_channel_resolving(
+                    installer::install_catalog_archive(
                         id,
                         selection.channel,
+                        release.legacy_manifest_app_id.as_deref(),
                         &stage,
                         root,
                         &aliases,
@@ -1519,7 +1537,7 @@ async fn update_context(root: &Path, context: &InstallContext, telemetry: bool) 
     }
     let mut client = context.client(telemetry)?;
     let mut store = SessionStore::open(&directory)?;
-    store.renew(&client).await?;
+    store.verified(&client).await?;
     if let Some(token) = &store.session.access_token {
         client = client.with_token(token);
     }
@@ -1620,6 +1638,17 @@ async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> R
         }
         return Ok(());
     }
+    let executable = std::env::current_exe()?;
+    // Windows .cmd launchers invoke a regular payload directly; argv[0] is not a link.
+    // Package payloads belong to the catalog updater even when launched directly.
+    if managed_package_state(root, &executable).is_some() {
+        if force {
+            bail!(
+                "Honeycomb is running from a managed package payload; update it through its original package manager"
+            );
+        }
+        return Ok(());
+    }
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1638,7 +1667,6 @@ async fn self_update(root: &Path, force: bool, progress: Option<&Progress>) -> R
     }
     settings.last_update_check = now();
     write_private(&root.join("config.json"), &settings)?;
-    let executable = std::env::current_exe()?;
     let updated = honeycomb_client::maintenance::update_cli_with_progress(
         &root.join("system"),
         &executable,
@@ -1689,13 +1717,81 @@ fn ensure_update_worker(enabled: bool) -> Value {
         return json!({"status":"disabled"});
     }
     let result = (|| -> Result<()> {
-        honeycomb_client::maintenance::install_service(&base_home()?, &invocation_path()?)
+        honeycomb_client::maintenance::install_service(&base_home()?, &worker_executable()?)
     })();
     match result {
         Ok(()) => json!({"status":"enabled","schedule":"every minute at second 01"}),
         Err(error) => {
             json!({"status":"manual","message":format!("Automatic update worker could not start: {error:#}. Run honeycomb service install to retry, or honeycomb daemon under your process supervisor.")})
         }
+    }
+}
+/// Identify the package namespace without scanning other contexts. The registry also
+/// recognizes a payload started with a different SILICON_HOME. Retired payloads remain
+/// managed even when their installation record already points at a newer version.
+fn managed_package_state(root: &Path, executable: &Path) -> Option<PathBuf> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let executable = executable
+        .canonicalize()
+        .unwrap_or_else(|_| executable.to_path_buf());
+    executable.ancestors().find_map(|ancestor| {
+        if ancestor.file_name()? != "packages" {
+            return None;
+        }
+        let state = ancestor.parent()?;
+        let rooted = state == root
+            || state.parent().is_some_and(|contexts| {
+                contexts.file_name().is_some_and(|name| name == "contexts")
+                    && contexts.parent() == Some(root.as_path())
+            });
+        (rooted || state.join("installed.json").is_file()).then(|| state.to_path_buf())
+    })
+}
+
+/// A supervisor must follow the stable launcher, including on Windows where argv[0]
+/// identifies the package executable instead of the .cmd file that invoked it.
+fn worker_executable() -> Result<PathBuf> {
+    let invocation = invocation_path()?;
+    if fs::symlink_metadata(&invocation).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Ok(invocation);
+    }
+    let executable = std::env::current_exe()?;
+    managed_worker_launcher(&root()?, &executable).map(|launcher| launcher.unwrap_or(invocation))
+}
+fn managed_worker_launcher(root: &Path, executable: &Path) -> Result<Option<PathBuf>> {
+    let Some(state) = managed_package_state(root, executable) else {
+        return Ok(None);
+    };
+    let executable = executable.canonicalize()?;
+    let records: BTreeMap<String, Installed> = read(&state.join("installed.json"))?;
+    let record = records
+        .values()
+        .find(|record| executable.starts_with(&record.directory))
+        .context("Managed Honeycomb installation record is missing; reinstall the package before registering its update worker")?;
+    let launcher = record
+        .commands
+        .get("honeycomb")
+        .or_else(|| {
+            (record.commands.len() == 1)
+                .then(|| record.commands.values().next())
+                .flatten()
+        })
+        .context("Managed Honeycomb command launcher is missing; reinstall the package")?;
+    if launcher.parent() != Some(state.join("bin").as_path()) || !launcher.is_file() {
+        bail!("Managed Honeycomb command launcher is unavailable; reinstall the package");
+    }
+    Ok(Some(launcher.clone()))
+}
+fn command_revision(path: &Path) -> Result<String> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Ok(fs::read_link(path)?.to_string_lossy().into_owned());
+    }
+    package::sha256(path)
+}
+fn executable_replaced(path: &Path, running_digest: &str) -> bool {
+    match package::sha256(path) {
+        Ok(digest) => digest != running_digest,
+        Err(_) => !path.exists(),
     }
 }
 /// Preserve managed command links in service definitions instead of resolving to their payload.
@@ -1841,7 +1937,7 @@ mod tests {
                 json!({"root":format!("targets/{target}"),"executables":{"app":"bin/app"}}),
             );
         }
-        fs::write(root.join("honeycomb.yaml"), json!({"format_version":1,"app_id":"fixture>package","version":version,"bin":{"honeycomb-fixture-command":"app"},"targets":targets}).to_string()).unwrap();
+        fs::write(root.join("honeycomb.yaml"), json!({"format_version":1,"app_id":"package","version":version,"bin":{"honeycomb-fixture-command":"app"},"targets":targets}).to_string()).unwrap();
         package::pack(root, None).unwrap()
     }
     async fn release_server(
@@ -1854,11 +1950,11 @@ mod tests {
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let sha = package::sha256(archive).unwrap();
         let bytes = fs::read(archive).unwrap();
-        let release = json!({"items":[{"app_id":"fixture>package","version":"1.1.0","sha256":sha,"size":bytes.len(),"created_at":1}]}).to_string().into_bytes();
+        let release = json!({"items":[{"app_id":"package","version":"1.1.0","sha256":sha,"size":bytes.len(),"created_at":1}]}).to_string().into_bytes();
         let key = key.map(str::to_owned);
         let token = token.to_owned();
         let task = tokio::spawn(async move {
-            for step in 0..2 {
+            for step in 0..3 {
                 let (mut stream, _) =
                     tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
                         .await
@@ -1886,12 +1982,14 @@ mod tests {
                 } else {
                     assert!(!request.contains("x-testing-environment-key:"));
                 }
-                assert!(request.contains(if step == 0 {
-                    "/releases?channel=prod "
-                } else {
-                    "/download?version=1.1.0&channel=prod "
+                assert!(request.contains(match step {
+                    0 => "/auth/status ",
+                    1 => "/releases?channel=prod ",
+                    _ => "/download?version=1.1.0&channel=prod ",
                 }));
                 let body = if step == 0 {
+                    br#"{"authenticated":true}"#.to_vec()
+                } else if step == 1 {
                     release.clone()
                 } else if corrupt {
                     b"corrupted archive".to_vec()
@@ -2013,8 +2111,8 @@ mod tests {
         testing_server.await.unwrap();
         let after: BTreeMap<String, Installed> =
             read(&production.directory(&root.0).join("installed.json")).unwrap();
-        assert_eq!(after["fixture>package"].version, "1.1.0");
-        assert_eq!(after["fixture>package"].aliases, before_prod.aliases);
+        assert_eq!(after["package"].version, "1.1.0");
+        assert_eq!(after["package"].aliases, before_prod.aliases);
         assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
         assert_eq!(
             fs::read(&before_test.commands["honeycomb-fixture-command"]).unwrap(),
@@ -2065,6 +2163,56 @@ mod tests {
 
 #[cfg(test)]
 mod auto_update_tests {
+    #[test]
+    fn managed_worker_tracks_launcher_and_removed_payload() {
+        use super::*;
+        let scratch =
+            std::env::temp_dir().join(format!("honeycomb-managed-worker-{}", uuid::Uuid::new_v4()));
+        let root = scratch.join("state");
+        let state = root.join("contexts/origin");
+        let directory = state.join("packages/tos/honeycomb/0.3.0-123456789012");
+        fs::create_dir_all(&directory).unwrap();
+        fs::create_dir_all(state.join("bin")).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        let state = state.canonicalize().unwrap();
+        let executable = directory.join("honeycomb.exe");
+        let launcher = state.join("bin/honeycomb.cmd");
+        fs::write(&executable, b"immutable executable").unwrap();
+        fs::write(&launcher, b"old package launcher").unwrap();
+        let record = Installed {
+            app_id: "honeycomb".into(),
+            channel: ReleaseChannel::Prod,
+            version: "0.3.0".into(),
+            target: "windows-arm64".into(),
+            directory,
+            commands: BTreeMap::from([("honeycomb".into(), launcher.clone())]),
+            aliases: BTreeMap::new(),
+            sha256: "test".into(),
+            resolved: vec![],
+            rewritten: BTreeMap::new(),
+        };
+        write_private(
+            &state.join("installed.json"),
+            &BTreeMap::from([("honeycomb", record)]),
+        )
+        .unwrap();
+        // A directly invoked .exe still registers its stable .cmd launcher, even under another home.
+        assert_eq!(
+            managed_worker_launcher(&scratch.join("other-home"), &executable).unwrap(),
+            Some(launcher.clone())
+        );
+        let digest = package::sha256(&executable).unwrap();
+        let revision = command_revision(&launcher).unwrap();
+        assert!(!executable_replaced(&executable, &digest));
+        fs::write(&launcher, b"new package launcher").unwrap();
+        assert_ne!(command_revision(&launcher).unwrap(), revision);
+        // Windows can retain the running old payload; Unix may already have removed it.
+        assert!(!executable_replaced(&executable, &digest));
+        fs::remove_file(&executable).unwrap();
+        assert!(executable_replaced(&executable, &digest));
+        assert_eq!(managed_package_state(&root, &executable), Some(state));
+        fs::remove_dir_all(scratch).unwrap();
+    }
     #[test]
     fn schedule_aligns_to_second_one_and_checks_each_minute() {
         use std::time::{Duration, UNIX_EPOCH};

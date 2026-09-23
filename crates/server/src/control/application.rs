@@ -20,13 +20,12 @@ pub(crate) async fn authenticate(s: &State, h: &HeaderMap) -> Result<TestingAppl
         .management
         .verify_testing_application(authorization)
         .await?;
-    if uuid::Uuid::parse_str(&identity.application_id).is_err()
-        || uuid::Uuid::parse_str(&identity.organization_id).is_err()
+    if identity.application_id != identity.app_id
+        || uuid::Uuid::parse_str(&identity.organization_id)
+            .ok()
+            .is_none_or(|id| id.is_nil())
         || !honeycomb_core::valid_app_id(&identity.app_id)
-        || identity
-            .app_id
-            .split_once('>')
-            .is_none_or(|(org, _)| org != identity.org_id)
+        || !honeycomb_core::valid_org_id(&identity.org_id)
         || identity.iam_revision <= 0
     {
         return Err(Error::unavailable(
@@ -48,6 +47,9 @@ pub(crate) fn owns(row: &SqliteRow, authority: &TestingApplicationAuthority) -> 
 }
 pub(crate) fn actor(authority: &TestingApplicationAuthority) -> String {
     format!("application:{}", authority.identity.application_id)
+}
+fn create_digest(application_id: &str, org: &str, body: &CreateEnvironment) -> String {
+    hex::encode(Sha256::digest(json!({"kind":"application.environment.create","application_id":application_id,"org":org,"name":body.name,"description":body.description}).to_string()))
 }
 pub(crate) async fn coordinate(
     s: &State,
@@ -151,13 +153,26 @@ pub(crate) async fn create(
         operation = k.to_owned();
         authority.attachment_key = Some(key.to_owned());
     } else {
-        let digest = hex::encode(Sha256::digest(json!({"kind":"application.environment.create","application_id":authority.identity.application_id,"org":authority.identity.org_id,"name":body.name,"description":body.description}).to_string()));
+        let digest = create_digest(
+            &authority.identity.application_id,
+            &authority.identity.org_id,
+            &body,
+        );
         let existing = sqlx::query("SELECT id,resource,request_hash FROM operations WHERE plane='production' AND actor=? AND idempotency_key=?").bind(&owner_actor).bind(k).fetch_optional(&s.db).await?;
         if let Some(existing) = existing {
             if existing.get::<String, _>("request_hash") != digest {
-                return Err(Error::conflict(
-                    "Idempotency key already used for different input",
-                ));
+                // This old identity is cryptographic input only. Authentication,
+                // operation ownership and the context binding are canonical.
+                let context: Option<String> = sqlx::query_scalar("SELECT legacy_hash_application_id FROM application_create_hash_contexts WHERE operation_id=? AND application_id=?")
+                    .bind(existing.get::<String,_>("id")).bind(&authority.identity.application_id).fetch_optional(&s.db).await?;
+                if context.is_none_or(|context| {
+                    create_digest(&context, &authority.identity.org_id, &body)
+                        != existing.get::<String, _>("request_hash")
+                }) {
+                    return Err(Error::conflict(
+                        "Idempotency key already used for different input",
+                    ));
+                }
             }
             id = existing.get("resource");
             operation = existing.get("id");

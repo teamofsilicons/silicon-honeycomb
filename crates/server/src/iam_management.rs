@@ -161,15 +161,19 @@ impl IamManagement {
         Ok(response)
     }
     async fn configuration(&self, app: &str, record: &Value) -> Result<Value> {
-        let (org, local) = app
-            .split_once('>')
-            .ok_or_else(|| Error::bad("Invalid app ID"))?;
-        if record["app_id"] != app || record["org_id"] != org {
+        if !honeycomb_core::valid_app_id(app) {
+            return Err(Error::bad("Invalid app ID"));
+        }
+        let org = record["org_id"]
+            .as_str()
+            .filter(|org| honeycomb_core::valid_org_id(org))
+            .ok_or_else(|| Error::unavailable("IAM omitted the owning organization"))?;
+        if record["app_id"] != app {
             return Err(Error::unavailable(
                 "IAM returned another application's record",
             ));
         }
-        let row = sqlx::query("SELECT revision,config,effective_config FROM applications WHERE plane='production' AND app_id=?")
+        let row = sqlx::query("SELECT org_id,revision,config,effective_config FROM applications WHERE plane='production' AND app_id=?")
             .bind(app).fetch_one(&self.db).await?;
         let accepted_revision = record["configuration_revision"]
             .as_i64()
@@ -181,8 +185,13 @@ impl IamManagement {
                 .ok_or_else(|| Error::unavailable("No matching accepted catalog metadata exists"))?
         };
         let mut config: Value = serde_json::from_str(&base).map_err(|e| anyhow::anyhow!(e))?;
+        if row.get::<String, _>("org_id") != org {
+            return Err(Error::unavailable(
+                "IAM returned another owning organization",
+            ));
+        }
         config["org_id"] = json!(org);
-        config["local_app_id"] = json!(local);
+        config["app_id"] = json!(app);
         for (to, from) in [
             ("name", "app_name"),
             ("logo_url", "app_logo"),
@@ -626,12 +635,7 @@ mod participant_tests {
             [7; 32],
         )
         .unwrap();
-        for app in [
-            "vendor>storage",
-            "vendor>identity",
-            "tos>briefcase",
-            "tos>iam",
-        ] {
+        for app in ["storage", "identity", "briefcase", "iam"] {
             assert!(
                 adapter
                     .service_lifecycle(app, &json!({}), "actor")

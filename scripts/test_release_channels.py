@@ -16,7 +16,7 @@ import urllib.parse
 
 REPO = Path(__file__).resolve().parents[1]
 CLI = REPO / 'target/debug/honeycomb'
-APP = 'tos>channel-fixture'
+APP = 'channel-fixture'
 COMMAND = 'honeycomb-channel-fixture'
 
 

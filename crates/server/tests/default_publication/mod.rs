@@ -34,7 +34,7 @@ fn archive() -> Vec<u8> {
 async fn upload(s: &State, id: &str, bytes: &[u8], actor: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("POST")
-        .uri(format!("/api/v1/apps/tos%3E{id}/releases?channel=prod"))
+        .uri(format!("/api/v1/apps/{id}/releases?channel=prod"))
         .header("authorization", format!("Bearer {actor}"))
         .header("if-match", "1")
         .header("idempotency-key", "default-publication-upload")
@@ -90,7 +90,7 @@ async fn default_requests_review_on_valid_upload_and_replays_without_duplicates(
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Eauto",
+        "/api/v1/apps/auto",
         Some("admin"),
         Value::Null,
         "",
@@ -133,7 +133,7 @@ async fn explicit_private_and_legacy_choices_survive_updates_and_can_opt_in() {
         let (status, updated) = call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Eprivate",
+            "/api/v1/apps/private",
             Some("admin"),
             input("private"),
             "private-update-0001",
@@ -148,7 +148,7 @@ async fn explicit_private_and_legacy_choices_survive_updates_and_can_opt_in() {
         let (_, updated) = call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Eprivate",
+            "/api/v1/apps/private",
             Some("admin"),
             config,
             "public-opt-in-0001",

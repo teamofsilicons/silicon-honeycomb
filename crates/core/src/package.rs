@@ -80,6 +80,9 @@ pub fn safe_command(s: &str) -> bool {
 }
 
 pub fn validate_dir(root: &Path) -> Validation {
+    validate_dir_with_legacy(root, None)
+}
+fn validate_dir_with_legacy(root: &Path, legacy: Option<&str>) -> Validation {
     let mut errors = vec![];
     let manifest_path = root.join("honeycomb.yaml");
     if fs::symlink_metadata(&manifest_path).is_ok_and(|m| m.file_type().is_symlink()) {
@@ -123,11 +126,16 @@ pub fn validate_dir(root: &Path) -> Validation {
     if m.format_version != 1 {
         errors.push("format_version: only version 1 is supported".into());
     }
-    if m.app_id
-        .as_deref()
-        .is_some_and(|id| !crate::valid_app_id(id))
-    {
-        errors.push("app_id: expected org>app using lowercase handles".into());
+    if m.app_id.as_deref().is_some_and(|id| {
+        !crate::valid_app_id(id)
+            && !legacy.is_some_and(|expected| {
+                expected == id
+                    && id.split_once('>').is_some_and(|(org, app)| {
+                        crate::valid_handle(org) && crate::valid_handle(app)
+                    })
+            })
+    }) {
+        errors.push("app_id: expected a globally unique lowercase handle".into());
     }
     // Format 1 retains its semantic-version contract for existing archives.
     // New release-channel creation enforces x.y.z at the versioned API boundary.
@@ -245,6 +253,14 @@ pub fn validate_dir(root: &Path) -> Validation {
 }
 
 pub fn unpack(archive: &Path, destination: &Path) -> Result<Manifest> {
+    unpack_with_legacy_identity(archive, destination, None)
+}
+/// Read an immutable historical archive only for its verified exact catalog alias.
+pub fn unpack_with_legacy_identity(
+    archive: &Path,
+    destination: &Path,
+    legacy: Option<&str>,
+) -> Result<Manifest> {
     if fs::metadata(archive)?.len() > MAX_ARCHIVE_BYTES {
         bail!("archive exceeds 512 MiB compressed limit");
     }
@@ -314,7 +330,7 @@ pub fn unpack(archive: &Path, destination: &Path) -> Result<Manifest> {
             }
         }
     }
-    let result = validate_dir(destination);
+    let result = validate_dir_with_legacy(destination, legacy);
     if !result.valid {
         bail!("archive validation failed:\n{}", result.errors.join("\n"));
     }
@@ -365,7 +381,6 @@ pub fn pack(root: &Path, output: Option<&Path>) -> Result<PathBuf> {
         "{}-{}.tar.gz",
         m.app_id
             .as_deref()
-            .and_then(|id| id.split('>').next_back())
             .unwrap_or_else(|| m.bin.keys().next().unwrap()),
         m.version
     ));
@@ -430,11 +445,35 @@ pub fn current_target() -> Result<&'static str> {
 /// Create a deterministic, revalidated archive with the requested release version.
 /// Executable bytes remain unchanged; the package manifest records the new version.
 pub fn repack_version(source: &Path, version: &str, output: &Path) -> Result<()> {
+    repack_catalog_release(source, version, output, None)
+}
+/// Repack a catalog release, translating only its verified historical manifest ID.
+pub fn repack_catalog_release(
+    source: &Path,
+    version: &str,
+    output: &Path,
+    identity: Option<(&str, Option<&str>)>,
+) -> Result<()> {
     if !crate::valid_release_version(version) {
         bail!("version: expected x.y.z without prerelease or build suffixes");
     }
     let directory = tempfile::tempdir()?;
-    let mut manifest = unpack(source, directory.path())?;
+    let mut manifest = unpack_with_legacy_identity(
+        source,
+        directory.path(),
+        identity.and_then(|(_, legacy)| legacy),
+    )?;
+    if let Some((app, legacy)) = identity {
+        if !crate::valid_app_id(app)
+            || manifest
+                .app_id
+                .as_deref()
+                .is_some_and(|id| id != app && Some(id) != legacy)
+        {
+            bail!("Source archive belongs to another application");
+        }
+        manifest.app_id = Some(app.to_owned());
+    }
     manifest.version = version.to_owned();
     fs::write(
         directory.path().join("honeycomb.yaml"),

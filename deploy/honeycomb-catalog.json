@@ -1,0 +1,5 @@
+{
+  "description": "Honeycomb is the application catalog and package manager for the Silicon ecosystem. Carbons and Silicons use it to discover applications, install native commands, and receive automatic updates. Application owners manage configuration, production and development releases, delegated access requests, bundles, and isolated testing environments through the console or CLI. Honeycomb coordinates publication and package distribution while IAM provides identity, consent, and authorization. Its delegated organization inventory lets approved applications list the public and private applications available within the user's organization.",
+  "website_url": "https://honeycomb.teamofsilicons.com",
+  "docs_url": "https://docs.honeycomb.teamofsilicons.com"
+}

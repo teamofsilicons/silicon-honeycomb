@@ -38,7 +38,7 @@ def main():
         packed = subprocess.run([str(CLI), 'pack', str(package)], env=env, capture_output=True, text=True)
         assert packed.returncode == 0, packed.stderr
         archive = (package / 'honeycomb-progress-fixture-1.0.0.tar.gz').read_bytes()
-        release = dict(app_id='tos>progress-fixture', version='1.0.0', sha256=hashlib.sha256(archive).hexdigest(), size=len(archive), created_at=0)
+        release = dict(app_id='progress-fixture', version='1.0.0', sha256=hashlib.sha256(archive).hexdigest(), size=len(archive), created_at=0)
         gate = threading.Event()
         requested = threading.Event()
 

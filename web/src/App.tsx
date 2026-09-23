@@ -121,7 +121,7 @@ function Empty(props: { title: string; text: string; children?: JSX.Element }) {
 }
 const blank = () => ({
   org_id: "",
-  local_app_id: "",
+  app_id: "",
   name: "",
   description: "",
   visibility: "public",
@@ -421,7 +421,7 @@ export default function App() {
       };
       const archive = editingId ? undefined : firstRelease();
       const channel = form().draft_release_channel as ReleaseChannel | undefined;
-      const appId = `${payload.org_id}>${payload.local_app_id}`;
+      const appId = payload.app_id;
       if (archive) {
         if (channel !== "prod" && channel !== "dev") throw new Error("Choose production or development for the first CLI release.");
         if (archive.size > 512 * 1024 * 1024) throw new Error("CLI archives must be no larger than 512 MiB.");
@@ -1124,7 +1124,7 @@ export default function App() {
                     <span class="step-number">02</span>
                     <h2>Find your next tool</h2>
                     <Code text="honeycomb search briefcase" />
-                    <Code text="honeycomb install 'tos>briefcase'" />
+                    <Code text="honeycomb install 'briefcase'" />
                     <p>
                       Sign in with a short-lived token from IAM to access your
                       organization’s private applications.
@@ -1451,6 +1451,7 @@ export default function App() {
                   await load();
                 }} />
                 <div class="section-divider" />
+                <Show when={!publication()?.items?.some((request: { revision: number }) => request.revision === app().revision)}>
                 <h3>{app().visibility === "public" ? "Request scope review" : "Request public release"}</h3>
                 <p class="muted">
                   Provider scope approvals and Honeycomb verification are
@@ -1459,7 +1460,6 @@ export default function App() {
                 <Show when={app().config.visibility === "public" && !app().latest_version}>
                   <p class="muted">Public approval will be requested automatically after your first valid production CLI release is uploaded and IAM accepts the configuration. Upload a production release or promote a development release when it is ready.</p>
                 </Show>
-                <Show when={!(publication()?.items || []).some((p: any) => p.revision === app().revision)}>
                 <form
                   class="review-form"
                   onSubmit={(e) => {
@@ -1593,16 +1593,15 @@ export default function App() {
               Application handle
               <input
                 required
-                pattern="[a-z0-9][a-z0-9-]{0,63}"
-                maxLength={64}
+                pattern="[a-z][a-z0-9_-]{0,79}"
+                maxLength={80}
                 disabled={!!editing()}
                 placeholder="my-application"
-                value={form().local_app_id}
-                onInput={(e) => edit("local_app_id", e.currentTarget.value)}
+                value={form().app_id}
+                onInput={(e) => edit("app_id", e.currentTarget.value)}
               />
               <small>
-                {form().org_id || "organization"}&gt;
-                {form().local_app_id || "my-application"} · Cannot change after
+                {form().app_id || "my-application"} · Cannot change after
                 creation
               </small>
             </label>
@@ -1882,7 +1881,7 @@ export default function App() {
                     }, "Import requested. Check service progress for readiness.");
                   }}>
                     <p class="muted">Dependencies are included automatically. Private applications require current production access. Imports keep their organization and start private in this environment.</p>
-                    <label>Application ID<input required placeholder="tos>briefcase" value={importApp()} onInput={(e) => setImportApp(e.currentTarget.value)} /></label>
+                    <label>Application ID<input required placeholder="briefcase" value={importApp()} onInput={(e) => setImportApp(e.currentTarget.value)} /></label>
                     <label>Release (optional)<input placeholder="Latest available" value={importRelease()} onInput={(e) => setImportRelease(e.currentTarget.value)} /></label>
                     <label class="check"><input type="checkbox" checked={refreshImport()} onChange={(e) => setRefreshImport(e.currentTarget.checked)} />Refresh existing pins from production</label>
                     <button class="button primary" disabled={busy()}>Import application</button>

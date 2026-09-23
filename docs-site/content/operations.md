@@ -29,5 +29,34 @@ honeycomb operations recover-secret OPERATION_ID
 ```
 Creation and rotation secrets are returned through explicit credential-returning workflows. IAM controls their short recovery/replay window. Honeycomb does not save a plaintext result for unlimited recovery. If the window has expired, use an authorized secret rotation, not a duplicate creation.
 
+Imported test applications have a Honeycomb application revision and a separate
+IAM configuration revision, which may be zero immediately after import. Use the
+Honeycomb revision reported by `apps get`; Honeycomb translates it into IAM's
+accepted revision and preserves the exact request for retries.
+
+An older pending test rotation may report `revision_conflict`. Recover that
+original operation using the same test environment and acting account:
+
+```sh
+honeycomb --test ENVIRONMENT_ID operations recover-secret OPERATION_ID
+```
+
+If recovery returns `testing_configuration_revision_conflict`, the
+operation becomes `rejected`: no credential was changed by that operation. Its
+identity and request remain unchanged, and retrying its key returns that same
+rejection. Reconcile the application, read its current Honeycomb revision, and
+start a new rotation with a new idempotency key:
+
+```sh
+honeycomb --test ENVIRONMENT_ID apps reconcile 'my-org>my-app'
+honeycomb --test ENVIRONMENT_ID apps get 'my-org>my-app'
+honeycomb --test ENVIRONMENT_ID --idempotency-key NEW_UNIQUE_KEY apps rotate-secret 'my-org>my-app' --revision CURRENT_REVISION
+```
+
+Other revision conflicts, lifecycle changes, timeouts and lost responses remain
+pending because they do not prove whether IAM already changed the credential.
+Keep recovering the original operation; do not replace its request or assume
+that an uncertain rotation was rejected.
+
 ## Reconciliation and notifications
 IAM's signed management notifications identify accepted revision changes. Honeycomb deduplicates receipts and reconciles authorized current state. Event receipt alone does not prove that an application was adopted or that all downstream work completed. Administrators can explicitly reconcile through the console or CLI.

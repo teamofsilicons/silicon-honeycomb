@@ -5,10 +5,10 @@ test("webhook approval and signing-secret rotation use transient verification an
   await page.goto(consoleSite);
   await page.getByRole("link", { name: "Continue with IAM" }).click();
   const handle = `webhook-${info.project.name}-${Date.now()}`;
-  const name = `Webhook test ${info.project.name}`, appId = `tos>${handle}`;
+  const name = `Webhook test ${info.project.name}`, appId = `${handle}`;
   const created = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
     headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
-    data: { org_id: "tos", local_app_id: handle, name,
+    data: { org_id: "tos", app_id: handle, name,
       description: "This application exercises isolated webhook configuration and verified signing key rotation for the Silicon ecosystem. ".repeat(7),
       webhook_scope: ["membership"], webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
   });
@@ -49,7 +49,7 @@ test("environment retention persists and reports per-application activity", asyn
   await row.getByRole("button", { name: "Manage", exact: true }).click();
   const section=page.getByRole("region", { name:"Environment retention" });
   await expect(section.getByLabel("Environment idle days")).toHaveValue("30");
-  await expect(section).toContainText("tos>briefcase");
+  await expect(section).toContainText("briefcase");
   await section.getByLabel("Environment idle days").fill("60");
   await section.getByRole("button", { name:"Save retention", exact:true }).click();
   await expect(section.getByRole("button", { name:"Save retention", exact:true })).toBeEnabled();
@@ -71,7 +71,7 @@ test("automatic cleanup exposes pending service receipts and preserves its retry
   await row.getByRole("button",{name:"Manage",exact:true}).click();
   const dialog=page.getByRole("dialog"), cleanup=dialog.getByRole("article",{name:"Automatic cleanup"});
   await expect(cleanup).toContainText("Waiting for participating services");
-  await expect(cleanup).toContainText("tos>briefcase");
+  await expect(cleanup).toContainText("briefcase");
   const operation=await cleanup.locator(".app-id").textContent();
   await dialog.getByRole("button",{name:"Retry setup",exact:true}).click();
   await expect(cleanup.locator(".app-id")).toHaveText(operation!);

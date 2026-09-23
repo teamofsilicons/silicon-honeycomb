@@ -1,5 +1,5 @@
 ## Current contract
-The CLI and Rust client are **0.3.0**. General APIs use **HTTP v1**; release-channel APIs use **HTTP v2**. Website release screens use v2 while other screens stay on v1. Package manifests remain **format_version: 1**. Each application maintains independent prod and dev release histories.
+The CLI and Rust client are **0.3.3**. General APIs use **HTTP v1**; release-channel APIs use **HTTP v2**. Website release screens use v2 while other screens stay on v1. Package manifests remain **format_version: 1**. Each application maintains independent prod and dev release histories.
 
 Call `GET /api/contracts` to discover supported versions. Its legacy `selected_version` remains `v1`; `release_version` identifies `v2`. Each version includes its scope, lifecycle state, and minimum client. `GET /api/v2/contract` selects v2 explicitly. Responses identify `Honeycomb-API-Version` and `Honeycomb-Contract-State`. Existing raw callers may omit negotiation headers and use the version in their URL.
 
@@ -25,7 +25,7 @@ A deprecated contract can retire only after **seven full days after both depreca
 
 Both v1 and v2 initially remain active. V1 retains its minimum declared client of 0.1.0; v2 requires 0.3.0 when a client version is declared. Traffic, deprecation, and retirement are tracked separately: a v2 request cannot keep v1 alive or reactivate it. Contract lifecycle accounting is essential server state and is independent of optional diagnostics.
 
-In 0.2.0, `Manifest.app_id` is `Option<String>`. Manifests may omit `app_id`; an explicit value must match the selected application. Use `installer::install_archive_for` to supply the selected identity when installing an archive without it. Existing manifests remain valid, but older CLIs require the field.
+In 0.2.0, `Manifest.app_id` is `Option<String>`. Manifests may omit `app_id`; an explicit value must match the selected application. Use `installer::install_archive_for` to supply the selected identity when installing an archive without it. Historical archives retain their bytes. For the identifier-schema cutover, the migrated catalog supplies an exact legacy manifest alias to the updated installer; new manifests use bare application IDs. Older CLIs require an explicit field and must be upgraded for the identifier cutover.
 
 
 ## Release-channel migration

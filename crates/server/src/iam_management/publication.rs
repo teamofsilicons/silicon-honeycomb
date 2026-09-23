@@ -292,11 +292,11 @@ mod tests {
     };
 
     const ACTOR: &str = "oat_fixture_actor";
-    const APP: &str = "vendor>app";
+    const APP: &str = "app";
     async fn setup() -> (MockServer, IamManagement, Value) {
         let server = MockServer::start().await;
         let db = crate::database("sqlite::memory:").await.unwrap();
-        let config = json!({"org_id":"vendor","local_app_id":"app","name":"Example","description":"Catalog description stays local","webhook_url":"https://example.com/webhook/","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"testing_idle_days":30});
+        let config = json!({"org_id":"vendor","app_id":"app","name":"Example","description":"Catalog description stays local","webhook_url":"https://example.com/webhook/","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"testing_idle_days":30});
         sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES('production',?,'vendor','Example','Catalog description stays local',?,?,1,1)")
             .bind(APP).bind(config.to_string()).bind(crate::encrypt(&[7;32],"fixture-webhook-secret-keep-private").unwrap()).execute(&db).await.unwrap();
         let adapter = IamManagement::new(
@@ -317,7 +317,7 @@ mod tests {
             .bind(id).bind(id).bind(APP).execute(&adapter.db).await.unwrap();
     }
     async fn plan_mock(server: &MockServer, request: &Value, plan: Uuid, count: u64) {
-        Mock::given(method("POST")).and(path("/api/v1/honeycomb/applications/vendor%3Eapp/publication-plans"))
+        Mock::given(method("POST")).and(path("/api/v1/honeycomb/applications/app/publication-plans"))
             .and(header("x-honeycomb-actor-token",ACTOR)).and(header("idempotency-key",request["request_id"].as_str().unwrap()))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"state":"accepted","request_id":request["request_id"],"plan_id":plan,"app_id":APP,"configuration_revision":1,"visibility":"public","gates":[{"provider":"honeycomb","scopes":[]}],"reused_approvals":[]})))
             .expect(count).mount(server).await;
@@ -363,7 +363,7 @@ mod tests {
         let receipt = json!({"state":"accepted","operation_id":operation,"request_id":request["request_id"],"publication_request_id":request["request_id"],"plan_id":plan,"app_id":APP,"configuration_revision":1,"iam_revision":4,"visibility":"public","effective_configuration":record});
         Mock::given(method("POST"))
             .and(path(
-                "/api/v1/honeycomb/applications/vendor%3Eapp/publication-activations",
+                "/api/v1/honeycomb/applications/app/publication-activations",
             ))
             .and(header("idempotency-key", operation.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(receipt))
@@ -402,14 +402,14 @@ mod tests {
         let (server, adapter, request) = setup().await;
         let id = Uuid::new_v4();
         operation_row(&adapter, &id.to_string()).await;
-        let operation = json!({"operation_id":id,"request_id":request["request_id"],"plan_id":Uuid::new_v4(),"app_id":APP,"configuration_revision":1,"provider":"vendor>storage","scopes":["obo:vendor>storage:files.read"],"decision":"approve","reason":""});
+        let operation = json!({"operation_id":id,"request_id":request["request_id"],"plan_id":Uuid::new_v4(),"app_id":APP,"configuration_revision":1,"provider":"storage","scopes":["obo:storage:files.read"],"decision":"approve","reason":""});
         let mut receipt = operation.clone();
         receipt["state"] = json!("accepted");
         receipt["reason"] = Value::Null;
         receipt["decision_id"] = json!(Uuid::new_v4());
         Mock::given(method("POST"))
             .and(path(
-                "/api/v1/honeycomb/applications/vendor%3Eapp/publication-decisions",
+                "/api/v1/honeycomb/applications/app/publication-decisions",
             ))
             .and(header("idempotency-key", id.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(receipt.clone()))

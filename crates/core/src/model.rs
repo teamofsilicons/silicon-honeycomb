@@ -39,7 +39,8 @@ fn enabled() -> bool {
 #[serde(deny_unknown_fields)]
 pub struct AppInput {
     pub org_id: String,
-    pub local_app_id: String,
+    #[serde(alias = "local_app_id")]
+    pub app_id: String,
     pub name: String,
     pub description: String,
     /// Desired publication visibility. New production apps default to public review;
@@ -74,7 +75,7 @@ fn default_idle_days() -> u32 {
 }
 impl AppInput {
     pub fn app_id(&self) -> String {
-        format!("{}>{}", self.org_id, self.local_app_id)
+        self.app_id.clone()
     }
     pub fn validate(&self) -> Vec<String> {
         let mut errors = vec![];
@@ -88,12 +89,13 @@ impl AppInput {
         if !(1..=36500).contains(&self.testing_idle_days) {
             errors.push("testing_idle_days: must be between 1 and 36500".into());
         }
-        for (field, value) in [
-            ("org_id", &self.org_id),
-            ("local_app_id", &self.local_app_id),
-        ] {
-            if !valid_handle(value) {
-                errors.push(format!("{field}: use 1–64 lowercase letters, numbers or hyphens, starting with a letter or number"));
+        for (field, value) in [("org_id", &self.org_id), ("app_id", &self.app_id)] {
+            if !(if field == "app_id" {
+                valid_app_id(value)
+            } else {
+                valid_org_id(value)
+            }) {
+                errors.push(format!("{field}: app IDs use 1–80 lowercase letters, numbers, underscores or hyphens starting with a letter; org IDs use 3–50 lowercase letters, numbers, underscores or hyphens"));
             }
         }
         if self.name.trim().is_empty() || self.name.len() > 100 {
@@ -188,7 +190,7 @@ impl AppInput {
         for e in &self.app_scope.external {
             if !valid_app_id(&e.app_id) || e.endpoint_id.is_empty() {
                 errors.push(
-                    "app_scope.external: each scope requires an org>app identifier and endpoint_id"
+                    "app_scope.external: each scope requires a bare app identifier and endpoint_id"
                         .into(),
                 );
             }
@@ -210,8 +212,15 @@ pub fn valid_handle(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 pub fn valid_app_id(s: &str) -> bool {
-    s.split_once('>')
-        .is_some_and(|(a, b)| valid_handle(a) && valid_handle(b))
+    (1..=80).contains(&s.len())
+        && s.as_bytes()[0].is_ascii_lowercase()
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
+}
+pub fn valid_org_id(s: &str) -> bool {
+    (3..=50).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -274,6 +283,9 @@ pub fn valid_release_version(value: &str) -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Release {
+    /// Exact historical manifest identity, supplied only from migration records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_manifest_app_id: Option<String>,
     #[serde(default)]
     pub channel: ReleaseChannel,
     pub app_id: String,

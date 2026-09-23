@@ -5,7 +5,7 @@ const archive = { name: "release.tar.gz", mimeType: "application/gzip", buffer: 
 
 async function fixture(page: Page) {
   const app = {
-    app_id: "tos>channels", org_id: "tos", name: "Channel fixture", description: "Tools with independent release channels.",
+    app_id: "channels", org_id: "tos", name: "Channel fixture", description: "Tools with independent release channels.",
     visibility: "private", state: "active", revision: 4, iam_revision: 1, effective_revision: 4,
     effective_config: {}, config: { visibility: "private" }, latest_version: "1.0.0", rating: 0, reviews: 0, stars: 0, installs: 0,
   };
@@ -60,7 +60,7 @@ test("registration requires a channel for its first archive and preserves develo
   const { uploads, creations } = await fixture(page);
   let validations = 0;
   await page.route("**/api/v1/packages/validate", route => route.fulfill({ json: {
-    valid: true, errors: [], manifest: { app_id: "tos>channels", version: ++validations === 1 ? "7.4.2-beta" : "7.4.2" },
+    valid: true, errors: [], manifest: { app_id: "channels", version: ++validations === 1 ? "7.4.2-beta" : "7.4.2" },
   } }));
   await page.goto(consoleSite);
   await page.getByRole("button", { name: "Create application", exact: true }).click();
@@ -97,11 +97,11 @@ test("channel histories stay separate and promotion asks for a production versio
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
   await page.getByRole("button", { name: "Releases & publication" }).click();
   const history = page.getByRole("region", { name: "Release history" });
-  await expect(history).toContainText("tos>channels@1.0.0");
+  await expect(history).toContainText("channels@1.0.0");
   await expect(history).not.toContainText("7.4.2");
   await history.getByLabel("Release history channel").selectOption("dev");
-  await expect(history).toContainText("tos>channels>test@7.4.2");
-  await expect(history).not.toContainText("tos>channels@1.0.0");
+  await expect(history).toContainText("channels>test@7.4.2");
+  await expect(history).not.toContainText("channels@1.0.0");
   await history.getByRole("button", { name: "Promote 7.4.2 to production" }).click();
   await expect(history.getByLabel("Production version")).toHaveValue("");
   await history.getByLabel("Production version").fill("2.0.0-beta");
@@ -117,14 +117,14 @@ test("channel histories stay separate and promotion asks for a production versio
   await history.getByRole("button", { name: "Create production release" }).click();
   await expect(history.getByRole("status")).toContainText("Production release 2.0.0 created");
   await expect(history.getByLabel("Release history channel")).toHaveValue("prod");
-  await expect(history).toContainText("tos>channels@2.0.0");
+  await expect(history).toContainText("channels@2.0.0");
   expect(promotions).toHaveLength(2);
   expect(promotions[0]).toEqual(promotions[1]);
   expect(promotions[0].key).toBeTruthy();
   expect(promotions[0].revision).toBe("4");
   await history.getByLabel("Release history channel").selectOption("dev");
-  await expect(history).toContainText("tos>channels>test@7.4.2");
-  await expect(history).not.toContainText("tos>channels@2.0.0");
+  await expect(history).toContainText("channels>test@7.4.2");
+  await expect(history).not.toContainText("channels@2.0.0");
 });
 
 test("uploads require an explicit channel and retain it when retrying", async ({ page }) => {
@@ -157,10 +157,10 @@ test("library defaults to official installs and explains experimental opt-in", a
   await page.goto("http://localhost:19173");
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
   const detail = page.getByRole("dialog", { name: "Channel fixture", exact: true });
-  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'tos>channels'" })).toBeVisible();
+  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels'" })).toBeVisible();
   await expect(detail).toContainText("follows production updates");
   await detail.getByText("Experimental development releases", { exact: true }).click();
-  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'tos>channels>test'" })).toBeVisible();
+  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels>test'" })).toBeVisible();
   await expect(detail).toContainText("append @x.x.x");
 });
 

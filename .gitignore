@@ -16,3 +16,6 @@ web/data/
 /release-assets/
 **/.vercel/
 __pycache__/
+
+# Dependency directories and local dependency symlinks
+**/node_modules

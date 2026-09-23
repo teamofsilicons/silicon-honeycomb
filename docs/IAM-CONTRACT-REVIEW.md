@@ -1,15 +1,18 @@
 # IAM integration status
 
-Updated 2026-09-16. This records implementation and verification separately;
+Contract updated 2026-09-23; live evidence below remains dated 2026-09-16.
+This records implementation and verification separately;
 local fixtures do not establish production readiness. Requirements remain in the
 human-owned [UNDERSTANDING.md](../UNDERSTANDING.md).
 
 ## Official contract
 
-Honeycomb pins unchanged official IAM SDK 1.11.0 source at
-`21e61b4f6de0b35e1588db9ea651a27409dc7b0e`. Its source hashes and standalone
+Honeycomb vendors the official IAM SDK 4.0.0 working-tree snapshot based on
+`8111d3206a4d86b3c562e5556af304d428b9fced`, including the public identifier
+migration changes. Its source hashes, dirty-tree provenance and standalone
 manifest are recorded in `vendor/silicon-iam-client/UPSTREAM.json` and verified by
-`scripts/verify_vendored_iam.py`. IAM also published this SDK version to crates.io.
+`scripts/verify_vendored_iam.py`. This snapshot has not been published to crates.io.
+Local verification does not deploy the new identifier contract.
 The upstream contract is IAM's `docs/HONEYCOMB_INTEGRATION.md` and OpenAPI.
 
 The production management credential is separate from acting-user authority.
@@ -36,12 +39,12 @@ scope check does not establish user consent, resource authorization, or upload s
 Repeat the read-only check with the configured storage application ID:
 
 ```sh
-BRIEFCASE_APP_ID='<organization>storage' python3 scripts/check_iam_management.py \
+BRIEFCASE_APP_ID='storage' python3 scripts/check_iam_management.py \
   /path/to/protected-iam-handoff.env --require-ready
 ```
 
-The helper parses the handoff without shell evaluation. Do not shell-source it:
-application IDs contain `>`. Credentials and root keys stay outside the repository.
+The helper parses the handoff without shell evaluation. Do not shell-source it.
+Credentials and root keys stay outside the repository.
 
 ## Implemented integration
 

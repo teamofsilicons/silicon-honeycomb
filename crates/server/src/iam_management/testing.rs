@@ -422,6 +422,9 @@ fn map_imports(operation: &Value, receipt: &Value) -> Result<Value> {
         let accepted = candidates[0];
         if accepted["source_revision"] != source["source_iam_revision"]
             || positive(accepted, "iam_revision").is_err()
+            || accepted["configuration_revision"]
+                .as_i64()
+                .is_none_or(|v| v < 0)
         {
             return Err(failure());
         }
@@ -451,7 +454,7 @@ fn map_imports(operation: &Value, receipt: &Value) -> Result<Value> {
         }
         // The source IAM revision binds all remaining security fields. Catalog fields
         // and the isolated Honeycomb projection revision remain Honeycomb-owned.
-        mapped.push(json!({"app_id":source["app_id"],"source_revision":source["source_revision"],"configuration_revision":source["configuration_revision"],"iam_revision":accepted["iam_revision"],"effective_configuration":source["configuration"],"visibility":"private"}));
+        mapped.push(json!({"app_id":source["app_id"],"source_revision":source["source_revision"],"configuration_revision":source["configuration_revision"],"iam_configuration_revision":accepted["configuration_revision"],"iam_revision":accepted["iam_revision"],"effective_configuration":source["configuration"],"visibility":"private"}));
     }
     Ok(json!(mapped))
 }
@@ -507,7 +510,7 @@ mod tests {
             [7; 32],
         )
         .unwrap();
-        let operation = json!({"operation_id":op,"environment_id":env,"app_id":"platform>identity","org_id":"alpha","name":"Testing","description":"","environment_revision":8,"generation":generation,"key_version":key,"testing_key":"K".repeat(32),"action":action,"snapshot":{}});
+        let operation = json!({"operation_id":op,"environment_id":env,"app_id":"identity","org_id":"alpha","name":"Testing","description":"","environment_revision":8,"generation":generation,"key_version":key,"testing_key":"K".repeat(32),"action":action,"snapshot":{}});
         (manager, server, operation)
     }
     fn endpoint(op: &Value) -> String {
@@ -689,7 +692,7 @@ mod tests {
             .execute(&manager.db)
             .await
             .unwrap();
-        for app in ["platform>identity", "vendor>storage"] {
+        for app in ["identity", "storage"] {
             sqlx::query("INSERT INTO environment_services(environment_id,app_id,state,operation_id,source_revision,snapshot,generation) VALUES(?,?,'pending',?,0,'{}',1)")
                 .bind(env).bind(app).bind(operation).execute(&manager.db).await.unwrap();
         }
@@ -700,14 +703,13 @@ mod tests {
             participants: 0.into(),
         });
         let identity =
-            crate::auth::Iam::new("https://identity.example", "platform>catalog", "fixture")
-                .unwrap();
+            crate::auth::Iam::new("https://identity.example", "catalog", "fixture").unwrap();
         let storage = crate::storage::Briefcase {
             iam: identity.client.clone(),
             http: reqwest::Client::new(),
             base_url: "https://storage.example".into(),
-            app_id: "platform>catalog".into(),
-            audience: "vendor>storage".into(),
+            app_id: "catalog".into(),
+            audience: "storage".into(),
         };
         let state = crate::State {
             telemetry: Default::default(),
@@ -715,8 +717,8 @@ mod tests {
             identity: Arc::new(identity),
             management: mock.clone(),
             storage: Arc::new(storage),
-            app_id: "platform>catalog".into(),
-            iam_app_id: "platform>identity".into(),
+            app_id: "catalog".into(),
+            iam_app_id: "identity".into(),
             iam_login_url: "https://identity.example".into(),
             encryption_key: [7; 32],
             webhook_secret: "fixture".into(),
@@ -788,15 +790,15 @@ mod tests {
 
     #[test]
     fn import_receipts_pin_iam_revision_but_keep_catalog_revision_separate() {
-        let source = json!({"app_id":"alpha>app","org_id":"alpha","source_revision":3,"source_iam_revision":17,"source_visibility":"public","configuration_revision":2,"configuration":{"name":"App","logo_url":null,"base_url":"https://app.example","app_scope":{"iam":[],"external":[]},"webhook_scope":[],"description":"Catalog only"}});
+        let source = json!({"app_id":"app","org_id":"alpha","source_revision":3,"source_iam_revision":17,"source_visibility":"public","configuration_revision":2,"configuration":{"name":"App","logo_url":null,"base_url":"https://app.example","app_scope":{"iam":[],"external":[]},"webhook_scope":[],"description":"Catalog only"}});
         let mut config = source["configuration"].clone();
         config["app_name"] = config["name"].clone();
         config["app_logo"] = Value::Null;
         config["org_id"] = json!("alpha");
-        config["app_id"] = json!("alpha>app");
+        config["app_id"] = json!("app");
         config["visibility"] = json!("public");
         let op = json!({"snapshot":{"imports":[source]}});
-        let mut receipt = json!({"imports":[{"app_id":"alpha>app","source_revision":17,"configuration_revision":0,"iam_revision":4,"effective_configuration":config}]});
+        let mut receipt = json!({"imports":[{"app_id":"app","source_revision":17,"configuration_revision":0,"iam_revision":4,"effective_configuration":config}]});
         let mapped = map_imports(&op, &receipt).unwrap();
         assert_eq!(mapped[0]["source_revision"], 3);
         assert_eq!(mapped[0]["configuration_revision"], 2);

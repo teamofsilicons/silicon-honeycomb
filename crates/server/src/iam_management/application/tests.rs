@@ -3,11 +3,11 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{header, method, path, query_param},
 };
-const APP: &str = "alpha>app";
-const SOURCE: &str = "00000000-0000-4000-8000-000000000001";
+const APP: &str = "app";
+const SOURCE: &str = APP;
 const ENV: &str = "00000000-0000-4000-8000-000000000002";
 fn authorization() -> String {
-    format!("Basic {}", STANDARD.encode("alpha>app:ask_fixture_secret"))
+    format!("Basic {}", STANDARD.encode("app:ask_fixture_secret"))
 }
 fn identity() -> Value {
     json!({"application_id":SOURCE,"app_id":APP,"organization_id":"00000000-0000-4000-8000-000000000003","org_id":"alpha","iam_revision":7})
@@ -30,8 +30,8 @@ fn basic_application_parser_rejects_test_or_malformed_credentials_without_echoin
     for auth in [
         "Bearer secret".to_owned(),
         "Basic !!!!!secret".into(),
-        format!("Basic {}", STANDARD.encode("alpha>app:test_secret")),
-        format!("Basic {}", STANDARD.encode("alpha>app:ask_\nsecret")),
+        format!("Basic {}", STANDARD.encode("app:test_secret")),
+        format!("Basic {}", STANDARD.encode("app:ask_\nsecret")),
     ] {
         let error = credentials(&auth).err().unwrap();
         assert!(!error.1.message.contains("secret"));
@@ -63,9 +63,22 @@ async fn production_identity_uses_official_protected_credentials_and_rejects_wro
     assert_eq!(found.application_id, SOURCE);
     server.reset().await;
     let mut wrong = identity();
-    wrong["app_id"] = json!("other>app");
+    wrong["app_id"] = json!("another-app");
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(wrong))
+        .mount(&server)
+        .await;
+    assert!(
+        adapter
+            .testing_verify_application(&authorization())
+            .await
+            .is_err()
+    );
+    server.reset().await;
+    let mut legacy = identity();
+    legacy["application_id"] = json!("00000000-0000-4000-8000-000000000001");
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(legacy))
         .mount(&server)
         .await;
     assert!(
@@ -128,7 +141,7 @@ async fn recovery_binds_current_identity_environment_and_versions_without_persis
         .mount(&server)
         .await;
     Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}"))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"environment_id":ENV,"state":"active","generation":2,"key_version":3,"iam_revision":8}))).expect(1).mount(&server).await;
-    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/credential-recovery"))).and(header("x-honeycomb-application-authorization",authorization())).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(|r:&wiremock::Request| {
+    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/credential-recovery"))).and(header("x-honeycomb-application-authorization",authorization())).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(|r:&wiremock::Request| {
         let body:Value=serde_json::from_slice(&r.body).unwrap();
         assert_eq!(body["generation"],2);assert_eq!(body["key_version"],3);assert_eq!(body["expected_environment_revision"],8);
         ResponseTemplate::new(200).set_body_json(json!({"operation_id":body["operation_id"],"state":"accepted","environment_id":ENV,"app_id":APP,"application_id":"00000000-0000-4000-8000-000000000005","iam_revision":3,"configuration_revision":1,"app_secret":"test_secret_fixture","credential_version":2}))
@@ -149,10 +162,10 @@ async fn snapshot_keeps_test_scope_and_public_visibility_without_production_fall
     let server = MockServer::start().await;
     let adapter = setup(&server).await;
     seed(&adapter).await;
-    let config=json!({"name":"Test","description":"test","org_id":"alpha","local_app_id":"app","app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]}}).to_string();
+    let config=json!({"name":"Test","description":"test","org_id":"alpha","app_id":"app","app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]}}).to_string();
     sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,created_at,updated_at) VALUES(? ,?,'alpha','Test','test',?,?,'',1,1)").bind(ENV).bind(APP).bind(&config).bind(&config).execute(&adapter.db).await.unwrap();
     Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}"))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"environment_id":ENV,"state":"active","generation":2,"key_version":3,"iam_revision":8}))).expect(1).mount(&server).await;
-    Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp"))).and(query_param("generation","2")).and(query_param("key_version","3")).and(query_param("expected_environment_revision","8")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"app_id":APP,"org_id":"alpha","configuration_revision":1,"iam_revision":3,"app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"public","availability":"verified","ready":true,"credential_version":1}))).expect(1).mount(&server).await;
+    Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app"))).and(query_param("generation","2")).and(query_param("key_version","3")).and(query_param("expected_environment_revision","8")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"app_id":APP,"org_id":"alpha","configuration_revision":1,"iam_revision":3,"app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"public","availability":"verified","ready":true,"credential_version":1}))).expect(1).mount(&server).await;
     let snapshot = adapter.testing_snapshot(APP, &"K".repeat(32)).await;
     let snapshot = snapshot.unwrap();
     assert_eq!(snapshot["visibility"], "public");
@@ -180,9 +193,20 @@ async fn isolated_rotation_replays_same_request_and_stops_after_generation_chang
     let adapter = setup(&server).await;
     seed(&adapter).await;
     environment_mock(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/honeycomb/testing-environments/{ENV}/applications/app"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"app_id":APP,"configuration_revision":1,"iam_revision":3})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
     let id = Uuid::new_v4();
     operation(&adapter, id, "secret.rotate").await;
-    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/secret-rotations"))).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(move |r:&wiremock::Request|{
+    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/secret-rotations"))).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(move |r:&wiremock::Request|{
         assert!(!r.headers.contains_key("x-honeycomb-actor-token"));
         assert!(!r.headers.contains_key("x-honeycomb-application-authorization"));
         assert_eq!(r.headers.get("x-honeycomb-testing-key").unwrap(), "K".repeat(32).as_str());
@@ -236,9 +260,9 @@ async fn configured_app_waits_for_participant_and_reserves_revision_only_once() 
     environment_mock(&server).await;
     let id = Uuid::new_v4();
     operation(&adapter, id, "configure").await;
-    let config = json!({"org_id":"alpha","local_app_id":"app","name":"Application","description":"Test application","base_url":"https://app.invalid","webhook_url":"https://app.invalid/webhook","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"obo_review_message":"","testing_idle_days":30});
+    let config = json!({"org_id":"alpha","app_id":"app","name":"Application","description":"Test application","base_url":"https://app.invalid","webhook_url":"https://app.invalid/webhook","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"obo_review_message":"","testing_idle_days":30});
     sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES(?,?,'alpha','Application','Test',?,'',1,1)").bind(ENV).bind(APP).bind(config.to_string()).execute(&adapter.db).await.unwrap();
-    Mock::given(method("PUT")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/configuration"))).respond_with(move |r:&wiremock::Request| {
+    Mock::given(method("PUT")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/configuration"))).respond_with(move |r:&wiremock::Request| {
         assert!(!r.headers.contains_key("x-honeycomb-actor-token"));
         assert!(!r.headers.contains_key("x-honeycomb-application-authorization"));
         assert_eq!(r.headers.get("x-honeycomb-testing-key").unwrap(), "K".repeat(32).as_str());
@@ -332,4 +356,181 @@ async fn participant_receipt_allows_only_exact_application_activation() {
         .testing_configure_participant(APP, &input, &json!({}))
         .await
         .unwrap();
+}
+
+async fn imported_application(adapter: &IamManagement, revision: i64, iam: Option<i64>) {
+    let config = json!({"org_id":"alpha","local_app_id":"app","name":"Imported app","description":"Catalog metadata"});
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,revision,effective_revision,iam_revision,webhook_secret,created_at,updated_at) VALUES(?,?,'alpha','Imported app','Catalog metadata',?,?,?,?,3,'',1,1)")
+        .bind(ENV).bind(APP).bind(config.to_string()).bind(config.to_string()).bind(revision).bind(revision).execute(&adapter.db).await.unwrap();
+    let mut snapshot = json!({"app_id":APP,"configuration_revision":revision});
+    if let Some(iam) = iam {
+        snapshot["iam_configuration_revision"] = json!(iam);
+    }
+    sqlx::query("INSERT INTO environment_imports(environment_id,app_id,source_revision,snapshot,last_activity) VALUES(?,?,7,?,1)")
+        .bind(ENV).bind(APP).bind(snapshot.to_string()).execute(&adapter.db).await.unwrap();
+}
+
+#[tokio::test]
+async fn imported_configuration_revision_is_translated_once_for_rotation_and_replay() {
+    for (local, wire, recorded) in [(1, 0, None), (4, 0, Some(0)), (4, 2, Some(2))] {
+        let server = MockServer::start().await;
+        let adapter = setup(&server).await;
+        seed(&adapter).await;
+        imported_application(&adapter, local, recorded).await;
+        environment_mock(&server).await;
+        let id = Uuid::new_v4();
+        operation(&adapter, id, "secret.rotate").await;
+        sqlx::query("UPDATE operations SET revision=? WHERE id=?")
+            .bind(local)
+            .bind(id.to_string())
+            .execute(&adapter.db)
+            .await
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/api/v1/honeycomb/testing-environments/{ENV}/applications/app"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"app_id":APP,"configuration_revision":wire,"iam_revision":3}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/secret-rotations")))
+            .respond_with(move |request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                assert_eq!(body["configuration_revision"], wire);
+                assert_eq!(body["operation_id"], id.to_string());
+                assert_eq!(body["expected_iam_revision"], 3);
+                assert_eq!(body["generation"], 2);
+                assert_eq!(body["key_version"], 3);
+                ResponseTemplate::new(200).set_body_json(json!({"operation_id":id,"state":"accepted","environment_id":ENV,"app_id":APP,"configuration_revision":wire,"iam_revision":4,"credential_version":2,"app_secret":"fixture-rotated-secret"}))
+            }).expect(2).mount(&server).await;
+        let request = json!({"operation_id":id,"app_id":APP,"configuration_revision":local,"expected_iam_revision":3});
+        let response = adapter
+            .testing_rotate_secret(&request, "actor", None, &"K".repeat(32))
+            .await
+            .unwrap();
+        assert_eq!(response["configuration_revision"], local);
+        let replay = adapter
+            .testing_operation_result(&id.to_string(), "actor", &"K".repeat(32))
+            .await
+            .unwrap();
+        assert_eq!(response, replay);
+        let requests = server.received_requests().await.unwrap();
+        let sent: Vec<_> = requests.iter().filter(|r| r.method == "POST").collect();
+        assert_eq!(sent[0].body, sent[1].body);
+    }
+}
+
+#[tokio::test]
+async fn imported_zero_snapshot_requires_accepted_import_and_preserves_projection_revision() {
+    let server = MockServer::start().await;
+    let adapter = setup(&server).await;
+    seed(&adapter).await;
+    imported_application(&adapter, 4, None).await;
+    environment_mock(&server).await;
+    let record = json!({"app_id":APP,"org_id":"alpha","configuration_revision":0,"iam_revision":4,"app_scope":{"iam":["self.identity.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"private","availability":"verified","ready":true,"credential_version":2});
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/honeycomb/testing-environments/{ENV}/applications/app"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(record.clone()))
+        .mount(&server)
+        .await;
+    let snapshot = adapter
+        .testing_snapshot(APP, &"K".repeat(32))
+        .await
+        .unwrap();
+    assert_eq!(snapshot["configuration_revision"], 4);
+    assert_eq!(snapshot["iam_revision"], 4);
+    assert_eq!(
+        snapshot["effective_configuration"]["description"],
+        "Catalog metadata"
+    );
+    // A newer desired revision is not claimed as accepted by this import.
+    sqlx::query("UPDATE applications SET revision=5 WHERE plane=?")
+        .bind(ENV)
+        .execute(&adapter.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        adapter
+            .testing_snapshot(APP, &"K".repeat(32))
+            .await
+            .unwrap()["configuration_revision"],
+        4
+    );
+    sqlx::query("DELETE FROM environment_imports")
+        .execute(&adapter.db)
+        .await
+        .unwrap();
+    assert!(
+        adapter
+            .testing_snapshot(APP, &"K".repeat(32))
+            .await
+            .is_err()
+    );
+    assert!(
+        adapter
+            .testing_projection_revision(
+                APP,
+                Uuid::parse_str(ENV).unwrap(),
+                &json!({"configuration_revision":-1})
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn existing_rotation_replays_immutable_revision_and_only_classifies_exact_rejection() {
+    let server = MockServer::start().await;
+    let adapter = setup(&server).await;
+    seed(&adapter).await;
+    let id = Uuid::new_v4();
+    operation(&adapter, id, "secret.rotate").await;
+    let body = json!({"operation_id":id,"environment_id":ENV,"generation":2,"key_version":3,"expected_environment_revision":8,"expected_iam_revision":3,"configuration_revision":1});
+    adapter
+        .saved(&id.to_string(), "testing.secret.rotate", APP, body.clone())
+        .await
+        .unwrap();
+    for (code, expected) in [
+        (
+            "configuration_revision_conflict",
+            "testing_configuration_revision_conflict",
+        ),
+        ("testing_revision_or_state_conflict", "revision_conflict"),
+    ] {
+        server.reset().await;
+        environment_mock(&server).await;
+        let expected_body = body.clone();
+        Mock::given(method("POST"))
+            .respond_with(move |request: &wiremock::Request| {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&request.body).unwrap(),
+                    expected_body
+                );
+                ResponseTemplate::new(409)
+                    .set_body_json(json!({"error":{"code":code,"message":"rejected"}}))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = adapter
+            .testing_operation_result(&id.to_string(), "actor", &"K".repeat(32))
+            .await
+            .unwrap_err();
+        assert_eq!(error.1.code, expected);
+        let encrypted: String = sqlx::query_scalar(
+            "SELECT encrypted_body FROM management_requests WHERE operation_id=?",
+        )
+        .bind(id.to_string())
+        .fetch_one(&adapter.db)
+        .await
+        .unwrap();
+        let still: Value =
+            serde_json::from_str(&crate::decrypt(&[7; 32], &encrypted).unwrap()).unwrap();
+        assert_eq!(still, body);
+    }
 }

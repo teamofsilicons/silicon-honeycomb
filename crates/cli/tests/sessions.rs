@@ -22,6 +22,7 @@ struct Provider {
     drop_response: bool,
     malformed: bool,
     revoked: bool,
+    unavailable: bool,
 }
 struct Fixture {
     home: PathBuf,
@@ -142,6 +143,8 @@ fn success(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or(Value::Null)
 }
 fn respond(mut stream: TcpStream, provider: Arc<Mutex<Provider>>) {
+    // Accepted sockets inherit O_NONBLOCK on macOS; the fixture reads a whole request.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
@@ -205,8 +208,11 @@ fn respond(mut stream: TcpStream, provider: Arc<Mutex<Provider>>) {
             value
         }
     } else if headers.starts_with("get /api/v1/auth/status ") {
-        let valid = !headers.contains("bearer access-old") && !provider.lock().unwrap().revoked;
-        if !valid {
+        let state = provider.lock().unwrap();
+        let valid = !headers.contains("bearer access-old") && !state.revoked;
+        if state.unavailable {
+            status = 503;
+        } else if !valid {
             status = 401;
         }
         json!({"authenticated":valid})
@@ -216,7 +222,7 @@ fn respond(mut stream: TcpStream, provider: Arc<Mutex<Provider>>) {
     } else if headers.starts_with("post /api/v1/auth/login ") {
         json!({"access_token":"access-login", "refresh_token":"refresh-login", "expires_in":1800})
     } else if headers.starts_with("get /api/v1/iam ") {
-        json!({"app_id":"fixture>honeycomb"})
+        json!({"app_id":"honeycomb"})
     } else {
         status = 404;
         json!({"error":{"code":"not_found", "message":"fixture has no packages"}})
@@ -254,8 +260,8 @@ fn concurrent_commands_and_daemon_rotate_only_once() {
     .unwrap();
     fs::write(
         directory.join("installed.json"),
-        serde_json::to_vec(&json!({"fixture>app":{
-            "app_id":"fixture>app", "version":"1.0.0", "target":"fixture", "directory":directory,
+        serde_json::to_vec(&json!({"app":{
+            "app_id":"app", "version":"1.0.0", "target":"fixture", "directory":directory,
             "commands":{}, "aliases":{}, "sha256":"fixture"
         }}))
         .unwrap(),
@@ -314,9 +320,19 @@ fn logout_waits_for_rotation_and_cannot_be_undone_by_a_late_save() {
         }
         thread::sleep(Duration::from_millis(5));
     }
+    assert_eq!(fixture.provider.lock().unwrap().attempts.len(), 1);
     let logout = fixture.spawn(&["logout"], false);
-    success(refresh.wait_with_output().unwrap());
+    let status = refresh.wait_with_output().unwrap();
     success(logout.wait_with_output().unwrap());
+    // The session lock serializes rotation and deletion. Once rotation releases
+    // it, logout may revoke the token before the in-flight status HTTP read.
+    // Both a successful read and that explicit revocation are valid outcomes.
+    if status.status.success() {
+        assert_eq!(success(status)["authenticated"], true);
+    } else {
+        let error = String::from_utf8_lossy(&status.stderr);
+        assert!(error.contains("HTTP 401"), "{error}");
+    }
     assert!(!directory.join("session.json").exists());
     assert_eq!(
         success(fixture.run(&["login", "status"]))["authenticated"],
@@ -334,4 +350,30 @@ fn testing_context_does_not_borrow_or_overwrite_the_production_session() {
     success(fixture.run(&["--test", &test_key, "login", "status"]));
     assert_eq!(fixture.saved(None)["refresh_token"], "refresh-old");
     assert_eq!(fixture.saved(Some(&test_key))["refresh_token"], "refresh-1");
+}
+
+#[test]
+fn early_rejection_recovers_before_local_expiry_but_outage_retains_credentials() {
+    for unavailable in [false, true] {
+        let fixture = Fixture::new();
+        let directory = fixture.seed(None);
+        let mut saved = fixture.saved(None);
+        saved["expires_at"] = json!(now() + 3600);
+        fs::write(
+            directory.join("session.json"),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        fixture.provider.lock().unwrap().unavailable = unavailable;
+        let output = fixture.run(&["login", "status"]);
+        if unavailable {
+            assert!(!output.status.success());
+            assert_eq!(fixture.saved(None), saved);
+            assert!(fixture.provider.lock().unwrap().attempts.is_empty());
+        } else {
+            assert_eq!(success(output)["authenticated"], true);
+            assert_eq!(fixture.saved(None)["refresh_token"], "refresh-1");
+            assert_eq!(fixture.provider.lock().unwrap().attempts.len(), 1);
+        }
+    }
 }

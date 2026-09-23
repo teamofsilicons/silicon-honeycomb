@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn registry_requires_explicit_valid_destinations_and_secret_references() {
         let valid = configuration(
-            "vendor>storage",
+            "storage",
             "https://storage.example",
             "STORAGE_CONTROL_TOKEN",
         );
@@ -328,7 +328,7 @@ mod tests {
                 (name == "STORAGE_CONTROL_TOKEN").then(|| TOKEN.into())
             })
         };
-        assert!(load(json!([valid])).unwrap().contains("vendor>storage"));
+        assert!(load(json!([valid])).unwrap().contains("storage"));
         assert!(load(json!([])).unwrap().participants.is_empty());
         assert!(load(json!([valid, valid])).is_err());
         for base in [
@@ -343,7 +343,7 @@ mod tests {
             assert!(load(json!([entry])).is_err());
         }
         for (field, value) in [
-            ("app_id", "invalid"),
+            ("app_id", "invalid>app"),
             ("token_env", "MISSING"),
             ("token_env", "bad-ref"),
             ("token_env", "0_INVALID"),
@@ -369,8 +369,8 @@ mod tests {
         let worker_token = "dedicated-worker-lifecycle-service-token";
         let registry = ParticipantRegistry::build(
             &json!([
-                configuration("vendor>storage", &storage.uri(), "STORAGE_CONTROL_TOKEN"),
-                configuration("another>worker", &worker.uri(), "WORKER_CONTROL_TOKEN"),
+                configuration("storage", &storage.uri(), "STORAGE_CONTROL_TOKEN"),
+                configuration("worker", &worker.uri(), "WORKER_CONTROL_TOKEN"),
             ])
             .to_string(),
             |name| match name {
@@ -382,8 +382,8 @@ mod tests {
         )
         .unwrap();
         for (app, server, token) in [
-            ("vendor>storage", &storage, TOKEN),
-            ("another>worker", &worker, worker_token),
+            ("storage", &storage, TOKEN),
+            ("worker", &worker, worker_token),
         ] {
             let op = operation(app);
             let completed = receipt(&op, "completed");
@@ -401,15 +401,10 @@ mod tests {
             assert_eq!(requests[0].body, requests[1].body);
             assert!(!requests[0].headers.contains_key("x-honeycomb-actor-token"));
         }
+        assert!(registry.apply("app", &operation("app")).await.is_err());
         assert!(
             registry
-                .apply("unknown>app", &operation("unknown>app"))
-                .await
-                .is_err()
-        );
-        assert!(
-            registry
-                .apply("vendor>storage", &operation("another>worker"))
+                .apply("storage", &operation("worker"))
                 .await
                 .is_err()
         );
@@ -422,7 +417,7 @@ mod tests {
         let server = MockServer::start().await;
         let registry = ParticipantRegistry::build(
             &json!([configuration(
-                "vendor>storage",
+                "storage",
                 &server.uri(),
                 "STORAGE_CONTROL_TOKEN"
             )])
@@ -431,7 +426,7 @@ mod tests {
             false,
         )
         .unwrap();
-        let expected = operation("vendor>storage");
+        let expected = operation("storage");
         let mut coordinator = expected.clone();
         coordinator["name"] = json!("Shared environment");
         coordinator["description"] = json!("IAM-owned metadata");
@@ -443,14 +438,8 @@ mod tests {
             .expect(2)
             .mount(&server)
             .await;
-        registry
-            .apply("vendor>storage", &coordinator)
-            .await
-            .unwrap();
-        registry
-            .apply("vendor>storage", &coordinator)
-            .await
-            .unwrap();
+        registry.apply("storage", &coordinator).await.unwrap();
+        registry.apply("storage", &coordinator).await.unwrap();
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests[0].body, requests[1].body);
         assert!(!String::from_utf8_lossy(&requests[0].body).contains("previous-root"));
@@ -461,7 +450,7 @@ mod tests {
         let server = MockServer::start().await;
         let registry = ParticipantRegistry::build(
             &json!([configuration(
-                "vendor>storage",
+                "storage",
                 &server.uri(),
                 "STORAGE_CONTROL_TOKEN"
             )])
@@ -474,7 +463,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(409).set_body_json(json!({"error":{"code":"testing_environment_limit_reached","message":"secret root token","details":{"testing_key":"secret-root"}}})))
             .mount(&server).await;
         let error = registry
-            .apply("vendor>storage", &operation("vendor>storage"))
+            .apply("storage", &operation("storage"))
             .await
             .unwrap_err();
         assert_eq!(error.0, axum::http::StatusCode::CONFLICT);
@@ -489,7 +478,7 @@ mod tests {
         let redirect = MockServer::start().await;
         let registry = ParticipantRegistry::build(
             &json!([configuration(
-                "vendor>storage",
+                "storage",
                 &server.uri(),
                 "STORAGE_CONTROL_TOKEN"
             )])
@@ -498,7 +487,7 @@ mod tests {
             false,
         )
         .unwrap();
-        let op = operation("vendor>storage");
+        let op = operation("storage");
         for status in [401, 409, 503, 307] {
             server.reset().await;
             Mock::given(method("PUT"))
@@ -507,7 +496,7 @@ mod tests {
                 )
                 .mount(&server)
                 .await;
-            let error = registry.apply("vendor>storage", &op).await.unwrap_err();
+            let error = registry.apply("storage", &op).await.unwrap_err();
             assert_eq!(error.0, axum::http::StatusCode::SERVICE_UNAVAILABLE);
             assert!(!error.1.message.contains(TOKEN));
         }
@@ -530,7 +519,7 @@ mod tests {
                 .mount(&server)
                 .await;
             assert!(
-                registry.apply("vendor>storage", &op).await.is_err(),
+                registry.apply("storage", &op).await.is_err(),
                 "invalid {field} accepted"
             );
         }
@@ -544,14 +533,14 @@ mod tests {
         ] {
             let mut invalid = op.clone();
             invalid[field] = Value::Null;
-            assert!(registry.apply("vendor>storage", &invalid).await.is_err());
+            assert!(registry.apply("storage", &invalid).await.is_err());
         }
         assert!(server.received_requests().await.unwrap().is_empty());
         Mock::given(method("PUT"))
             .respond_with(ResponseTemplate::new(200).set_body_string("x".repeat(65_537)))
             .mount(&server)
             .await;
-        assert!(registry.apply("vendor>storage", &op).await.is_err());
+        assert!(registry.apply("storage", &op).await.is_err());
     }
 
     #[tokio::test]
@@ -559,7 +548,7 @@ mod tests {
         let server = MockServer::start().await;
         let registry = ParticipantRegistry::build(
             &json!([configuration(
-                "vendor>storage",
+                "storage",
                 &server.uri(),
                 "STORAGE_CONTROL_TOKEN"
             )])
@@ -568,7 +557,7 @@ mod tests {
             false,
         )
         .unwrap();
-        let op = operation("vendor>storage");
+        let op = operation("storage");
         for state in ["pending", "failed", "completed"] {
             server.reset().await;
             let expected = receipt(&op, state);
@@ -579,10 +568,7 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(echo))
                 .mount(&server)
                 .await;
-            assert_eq!(
-                registry.apply("vendor>storage", &op).await.unwrap(),
-                expected
-            );
+            assert_eq!(registry.apply("storage", &op).await.unwrap(), expected);
         }
     }
 }

@@ -8,7 +8,7 @@ isolated testing login, strict participant payloads, and actionable capacity err
 
 - Signed-in Carbon CLI authentication and authenticated console access.
 - Explicit Saket validator assignment and IAM-confirmed reviewer eligibility.
-- Fresh private `tos>iam` registration, IAM 1.11.0 archive upload, private installation
+- Fresh private `iam` registration, IAM 1.11.0 archive upload, private installation
   and executable version check.
 - Normal Briefcase revision-2 publication plan, validator decision and activation;
   anonymous Briefcase 1.1.0 installation, checksum and executable version check.

@@ -9,7 +9,7 @@ not a successful archive upload or remote package validation.
 
 ## Applied configuration
 
-- App: `tos>briefcase`, organization `tos`, name Silicon Briefcase.
+- App: `briefcase`, organization `tos`, name Silicon Briefcase.
 - Fresh IAM UUID: `12f4471e-f078-45a0-99c1-1484437d0cf1`.
 - IAM: public, verified, revision 3, configuration revision 1, credential version 1.
 - Honeycomb: public, active, desired/effective configuration revision 1.
@@ -31,7 +31,7 @@ and size 20,715,240 bytes. Its storage reference explicitly records `pending_upl
 and `remote_archive_validated: false`.
 
 Planned public bytes URL:
-<https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment>
+<https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/honeycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment>
 
 The archive has **not** been uploaded. Fresh credentials are now configured in
 the deployed Briefcase service. The matching archive still needs uploading at the

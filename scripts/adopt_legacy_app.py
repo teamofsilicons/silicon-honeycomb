@@ -6,9 +6,11 @@ Defaults to a preview. --apply requires a consistent SQLite backup and records
 an operator audit. Never creates, reconfigures, publishes, or rotates an IAM app.
 """
 import argparse
+import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -34,22 +36,36 @@ def read_record(settings, app):
         return json.load(response)
 
 
-def projection(record, app, expected_identity, metadata):
-    org, local = app.split(">")
+def preserved_visibility(record, preserve_public):
+    if not preserve_public:
+        return "private"
+    if (record.get("visibility") != "public" or record.get("availability") != "verified"
+            or type(record.get("configuration_revision")) is not int or record["configuration_revision"] != 0
+            or type(record.get("iam_revision")) is not int or record["iam_revision"] < 1
+            or type(record.get("credential_version")) is not int or record["credential_version"] < 1):
+        raise ValueError("Preserving public visibility requires an existing verified public IAM identity at configuration revision zero")
+    return "public"
+
+
+def projection(record, app, expected_identity, metadata, preserve_public=False):
+    org = metadata["org_id"]
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", app) or not re.fullmatch(r"[a-z0-9_-]{3,50}", org):
+        raise ValueError("Supply a bare app ID and explicit metadata org_id")
     if record.get("app_id") != app or record.get("org_id") != org:
         raise ValueError("IAM identity or owning organization mismatch")
     if record.get("application_id") != expected_identity:
         raise ValueError("IAM immutable application identity mismatch")
-    if record.get("configuration_revision") != 0 or not isinstance(record.get("iam_revision"), int) or record["iam_revision"] <= 0:
+    if type(record.get("configuration_revision")) is not int or record["configuration_revision"] != 0 or type(record.get("iam_revision")) is not int or record["iam_revision"] <= 0:
         raise ValueError("Only established legacy IAM applications at configuration revision zero can be adopted")
-    if record.get("availability") != "verified" or not isinstance(record.get("credential_version"), int) or record["credential_version"] < 1:
+    if record.get("availability") != "verified" or type(record.get("credential_version")) is not int or record["credential_version"] < 1:
         raise ValueError("IAM application must be verified with existing credentials")
+    visibility = preserved_visibility(record, preserve_public)
     description = metadata["description"].strip()
     if not 50 <= len(description.split()) <= 1000:
         raise ValueError("Catalog description must contain 50–1000 words")
     granted = {item["scope"] for item in record["effective_scopes"]}
     config = {
-        "org_id": org, "local_app_id": local, "name": record["app_name"],
+        "org_id": org, "app_id": app, "name": record["app_name"],
         "description": description,
         "app_scope": {
             "iam": [scope for scope in record["app_scope"]["iam"] if scope in granted],
@@ -66,24 +82,37 @@ def projection(record, app, expected_identity, metadata):
             if urllib.parse.urlparse(metadata[field]).scheme != "https":
                 raise ValueError("Catalog links must use HTTPS")
             config[field] = metadata[field]
+    if preserve_public:
+        # Preserve declarations, including pending requests, without granting them.
+        # insert() still limits the effective projection to IAM's granted scopes.
+        config["app_scope"] = copy.deepcopy(record["app_scope"])
+        config["visibility"] = visibility
     # IAM intentionally does not disclose accepted webhook URL or any secrets.
     return config
 
 
-def insert(db, record, config, actor):
+def insert(db, record, config, actor, preserve_public=False):
+    visibility = preserved_visibility(record, preserve_public)
+    effective = copy.deepcopy(config)
+    granted = {item["scope"] for item in record["effective_scopes"]}
+    effective["app_scope"]["iam"] = [scope for scope in effective["app_scope"]["iam"] if scope in granted]
+    effective["app_scope"]["external"] = [scope for scope in effective["app_scope"]["external"]
+        if "obo:" + scope["app_id"] + ":" + scope["endpoint_id"] in granted]
     now = int(time.time())
     app = record["app_id"]
     op = str(uuid.uuid4())
     serialized = json.dumps(config, sort_keys=True)
     receipt = {key: record[key] for key in ("app_id", "application_id", "iam_revision", "configuration_revision", "credential_version")}
-    receipt.update({"operation_id": op, "visibility": "private", "state": "active"})
+    receipt.update({"operation_id": op, "visibility": visibility, "state": "active"})
+    if preserve_public:
+        receipt["preserved_public_visibility"] = True
     # Plain INSERT deliberately rejects duplicates; never overwrite any local app.
     db.execute("""INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,
         revision,iam_revision,config,effective_config,webhook_secret,created_at,updated_at,
         effective_revision,credential_version,iam_check_after)
-        VALUES('production',?,?,?,?,'private','active',0,?,?,?,'',?,?,0,?,0)""",
-        (app, config["org_id"], config["name"], config["description"], record["iam_revision"],
-         serialized, serialized, now, now, record["credential_version"]))
+        VALUES('production',?,?,?,?,?,'active',0,?,?,?,'',?,?,0,?,0)""",
+        (app, config["org_id"], config["name"], config["description"], visibility, record["iam_revision"],
+         serialized, json.dumps(effective, sort_keys=True), now, now, record["credential_version"]))
     db.execute("""INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,result,created_at)
         VALUES(?,'production',?,?,'iam.adopt',?,?,0,'accepted',?,?)""",
         (op, actor, op, app, hashlib.sha256(serialized.encode()).hexdigest(), json.dumps(receipt), now))
@@ -102,17 +131,19 @@ def main():
     p.add_argument("--actor", required=True, help="Auditable operator identity/reason")
     p.add_argument("--backup-dir", type=Path)
     p.add_argument("--apply", action="store_true")
+    p.add_argument("--preserve-public-visibility", action="store_true",
+                   help="Preserve an IAM-confirmed existing public identity during catalog adoption; never publishes a private identity")
     args = p.parse_args()
     settings = dict(line.split("=", 1) for line in args.env_file.read_text().splitlines()
                     if line.strip() and not line.lstrip().startswith("#"))
     record = read_record(settings, args.app)
-    config = projection(record, args.app, args.expected_identity, json.loads(args.metadata.read_text()))
+    config = projection(record, args.app, args.expected_identity, json.loads(args.metadata.read_text()), args.preserve_public_visibility)
     db = sqlite3.connect(args.database.resolve().as_uri() + "?mode=rw", uri=True, timeout=30)
     db.execute("PRAGMA foreign_keys=ON")
     if db.execute("SELECT 1 FROM applications WHERE plane='production' AND app_id=?", (args.app,)).fetchone():
         raise ValueError("Application already exists in Honeycomb; refusing to overwrite")
     if not args.apply:
-        print(json.dumps({"preview": True, "app_id": args.app, "iam_revision": record["iam_revision"], "configuration": config}, indent=2))
+        print(json.dumps({"preview": True, "app_id": args.app, "iam_revision": record["iam_revision"], "visibility": preserved_visibility(record, args.preserve_public_visibility), "preserved_public_visibility": args.preserve_public_visibility, "configuration": config}, indent=2))
         return
     if not args.backup_dir:
         p.error("--apply requires --backup-dir")
@@ -127,7 +158,7 @@ def main():
     try:
         if read_record(settings, args.app) != record:
             raise RuntimeError("IAM changed during import; retry from a fresh preview")
-        receipt = insert(db, record, config, args.actor)
+        receipt = insert(db, record, config, args.actor, args.preserve_public_visibility)
         db.commit()
     except BaseException:
         db.rollback()

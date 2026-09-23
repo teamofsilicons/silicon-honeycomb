@@ -10,7 +10,7 @@ test("registration validates the first archive and retries its upload without re
   const { fileURLToPath } = await import("node:url");
   const { execFileSync } = await import("node:child_process");
   const root = mkdtempSync(join(tmpdir(), "honeycomb-registration-"));
-  const handle = `first-${info.project.name}-${Date.now()}`, appId = `tos>${handle}`;
+  const handle = `first-${info.project.name}-${Date.now()}`, appId = `${handle}`;
   const name = `First release ${info.project.name}`;
   const archive = join(root, "release.tar.gz");
   const keys: string[] = [];
@@ -269,7 +269,7 @@ test("login callback rejects missing state and writes reject cross-origin reques
     `${consoleSite}/auth/callback?slt=fixture-owner&state=wrong`,
   );
   expect(callback.status()).toBe(400);
-  for (const path of ["/api/v1/apps", "/api/v2/apps/tos%3Efixture/releases?channel=dev"]) {
+  for (const path of ["/api/v1/apps", "/api/v2/apps/fixture/releases?channel=dev"]) {
     const write = await request.post(`${consoleSite}${path}`, {
       data: {},
       headers: { Origin: "https://attacker.invalid" },
@@ -374,7 +374,7 @@ test("testing setup shows per-service failures and supports retry", async ({
   await expect(
     dialog.getByRole("heading", { name: "Service progress", exact: true }),
   ).toBeVisible();
-  await expect(dialog).toContainText("tos>iam");
+  await expect(dialog).toContainText("iam");
   await expect(dialog).toContainText(
     "Fixture deliberately leaves shared lifecycle provisioning pending",
   );
@@ -402,7 +402,7 @@ test("concurrent browser requests share one rotating refresh and sign out cleanl
   expect(logout.ok()).toBe(true);
   expect(await (await request.get(`${library}/api/session`)).json()).toEqual({ authenticated: false });
   const catalog = await (await request.get(`${library}/api/v1/apps`)).json();
-  expect(JSON.stringify(catalog)).not.toContain("tos>internal-tools");
+  expect(JSON.stringify(catalog)).not.toContain("internal-tools");
 });
 
 
@@ -417,7 +417,7 @@ test("console import exposes pending integration without disabling the ready env
   const dialog=page.getByRole("dialog");
   {
     await dialog.getByText("Import an application", { exact: true }).click();
-    await dialog.getByLabel("Application ID", { exact: true }).fill("tos>briefcase");
+    await dialog.getByLabel("Application ID", { exact: true }).fill("briefcase");
     await dialog.getByRole("button", { name: "Import application", exact: true }).click();
   }
   await expect(dialog.getByRole("button", { name: "Retry setup", exact: true })).toBeVisible();
@@ -432,7 +432,7 @@ test("secret rotation is explicit and browser retries preserve the same operatio
   await page.getByRole("link", { name: "Continue with IAM" }).click();
   await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
   const name=info.project.name === "desktop" ? "Briefcase" : "Waveform";
-  const appId=`tos>${name.toLowerCase()}`;
+  const appId=`${name.toLowerCase()}`;
   await page.getByRole("heading", { name, exact: true }).click();
   const dialog=page.getByRole("dialog");
   await dialog.getByRole("button", { name: "Access & secrets", exact: true }).click();
@@ -482,7 +482,7 @@ test("provider administrators can discuss and approve their review gate", async 
   await expect(dialog.getByRole("button", { name: "Submit decision", exact: true })).toBeDisabled();
 });
 
-test("console uploads and activates an approved release visible in the anonymous library", async ({ page, request }, info) => {
+test("console shows the automatic publication request and publishes an approved release in the anonymous library", async ({ page, request }, info) => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -491,14 +491,14 @@ test("console uploads and activates an approved release visible in the anonymous
   const { execFileSync } = await import("node:child_process");
   const root = mkdtempSync(join(tmpdir(), "honeycomb-browser-release-"));
   const handle = `release-${info.project.name}-${Date.now()}`;
-  const appId = `tos>${handle}`, name = `Public release ${info.project.name}`;
+  const appId = `${handle}`, name = `Public release ${info.project.name}`;
   try {
     await page.goto(consoleSite);
     await page.getByRole("link", { name: "Continue with IAM" }).click();
     await expect(page.getByRole("heading", { name: "Your applications." })).toBeVisible();
     const create = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
       headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
-      data: { org_id: "tos", local_app_id: handle, name,
+      data: { org_id: "tos", app_id: handle, name,
         description: "This release exercises uploading, review, activation and public discovery in the Silicon ecosystem. ".repeat(7),
         webhook_scope: ["membership"], webhook_url: "https://example.com/webhook/", webhook_secret: "fixture-webhook-secret-00000000000000" },
     });
@@ -521,9 +521,10 @@ test("console uploads and activates an approved release visible in the anonymous
     await dialog.getByLabel("Upload release channel").selectOption("prod");
     await expect(dialog.getByLabel("Upload CLI archive")).toBeEnabled();
     await dialog.getByLabel("Upload CLI archive").setInputFiles(archive);
-    // Public-by-default registration automatically requests review after upload.
     await expect(dialog).toContainText("Awaiting Honeycomb approval");
+    await expect(dialog.getByRole("button", { name: "Request publication", exact: true })).toHaveCount(0);
     const publications = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}/publication`)).json();
+    expect(publications.items).toHaveLength(1);
     // The independent validator uses an explicit test identity; the owner cannot self-approve.
     const login = await request.post("http://127.0.0.1:19180/api/v1/auth/login", {
       headers: { "Idempotency-Key": `${handle}-validator-login` }, data: { slt: "fixture-validator" },
@@ -534,7 +535,9 @@ test("console uploads and activates an approved release visible in the anonymous
     });
     expect(decision.ok()).toBe(true);
     await page.reload();
-    if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
+    await expect(page.getByRole("heading", { name: "Your applications." })).toBeVisible();
+    if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
+      await page.getByRole("button", { name: "Open navigation" }).click();
     await page.getByRole("button", { name: "Sent requests", exact: true }).click();
     const sentRequest = page.locator("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
     await expect(sentRequest).toContainText("Published", { timeout: 30_000 });

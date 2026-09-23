@@ -1,6 +1,15 @@
 use silicon_honeycomb_client::{installer, package};
 use std::{collections::BTreeMap, fs};
 fn fixture(root: &std::path::Path, version: &str) -> std::path::PathBuf {
+    fixture_named(root, version, "honeycomb-test-hello", "honeycomb-test-hi")
+}
+/// Distinct command names keep a test that steers PATH from shadowing another test's package.
+fn fixture_named(
+    root: &std::path::Path,
+    version: &str,
+    first: &str,
+    second: &str,
+) -> std::path::PathBuf {
     let mut targets = serde_json::Map::new();
     for t in package::REQUIRED_TARGETS {
         let dir = root.join(format!("targets/{t}/bin"));
@@ -24,18 +33,18 @@ fn fixture(root: &std::path::Path, version: &str) -> std::path::PathBuf {
             serde_json::json!({"root":format!("targets/{t}"),"executables":{"app":format!("bin/{filename}")}}),
         );
     }
-    let manifest = serde_json::json!({"format_version":1,"app_id":"tos>hello","version":version,"bin":{"honeycomb-test-hello":"app","honeycomb-test-hi":"app"},"targets":targets});
+    let manifest = serde_json::json!({"format_version":1,"app_id":"hello","version":version,"bin":{first:"app",second:"app"},"targets":targets});
     fs::write(root.join("honeycomb.yaml"), manifest.to_string()).unwrap();
     package::pack(root, None).unwrap()
 }
 #[test]
 fn optional_identity_uses_selected_app_and_preserves_ownership() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let archive = fixture(src.path(), "1.0.0");
     assert!(
-        installer::install_archive_for("tos>other", &archive, dest.path(), &BTreeMap::new(), None)
+        installer::install_archive_for("other", &archive, dest.path(), &BTreeMap::new(), None)
             .is_err()
     );
     let path = src.path().join("honeycomb.yaml");
@@ -49,26 +58,21 @@ fn optional_identity_uses_selected_app_and_preserves_ownership() {
         installer::install_archive_for("../unsafe", &archive, dest.path(), &BTreeMap::new(), None)
             .is_err()
     );
-    let installed = installer::install_archive_for(
-        "tos>selected",
-        &archive,
-        dest.path(),
-        &BTreeMap::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(installed.app_id, "tos>selected");
+    let installed =
+        installer::install_archive_for("selected", &archive, dest.path(), &BTreeMap::new(), None)
+            .unwrap();
+    assert_eq!(installed.app_id, "selected");
     assert!(
         installed.directory.starts_with(
             dest.path()
                 .canonicalize()
                 .unwrap()
-                .join("packages/tos/selected")
+                .join("packages/selected")
         )
     );
     assert!(
         installer::install_archive_for(
-            "tos>other",
+            "other",
             &archive,
             dest.path(),
             &BTreeMap::new(),
@@ -80,7 +84,7 @@ fn optional_identity_uses_selected_app_and_preserves_ownership() {
 }
 #[test]
 fn install_update_execute_and_uninstall() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let first = fixture(src.path(), "1.0.0");
@@ -134,7 +138,7 @@ fn install_update_execute_and_uninstall() {
 }
 #[test]
 fn collision_does_not_modify_existing_commands() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let archive = fixture(src.path(), "1.0.0");
@@ -161,7 +165,7 @@ fn collision_does_not_modify_existing_commands() {
 }
 #[test]
 fn uninstall_preserves_a_replaced_command() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let archive = fixture(src.path(), "1.0.0");
@@ -190,8 +194,12 @@ fn contexts_do_not_share_sessions() {
     );
 }
 
-/// PATH is process-wide, so the tests that steer it take turns.
-static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// PATH is process-wide and the installer reads it, so every test that reaches the installer
+/// takes this lock - reading it while another test replaces it is a data race.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 struct PathGuard(Option<std::ffi::OsString>);
 impl Drop for PathGuard {
@@ -238,17 +246,22 @@ fn other_installation(dir: &std::path::Path, name: &str, version: &str) -> std::
 
 #[test]
 fn a_new_enough_command_on_path_resolves_the_dependency() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
-    let archive = fixture(src.path(), "1.0.0");
-    let existing = other_installation(elsewhere.path(), "honeycomb-test-hi", "2.0.0");
+    let archive = fixture_named(
+        src.path(),
+        "1.0.0",
+        "honeycomb-path-hello",
+        "honeycomb-path-hi",
+    );
+    let existing = other_installation(elsewhere.path(), "honeycomb-path-hi", "2.0.0");
     let _path = with_path(elsewhere.path());
     let installed =
         installer::install_archive(&archive, dest.path(), &BTreeMap::new(), None).unwrap();
     assert_eq!(installed.resolved.len(), 1);
-    assert_eq!(installed.resolved[0].command, "honeycomb-test-hi");
+    assert_eq!(installed.resolved[0].command, "honeycomb-path-hi");
     assert_eq!(
         installed.resolved[0].existing_version.as_deref(),
         Some("2.0.0")
@@ -259,7 +272,7 @@ fn a_new_enough_command_on_path_resolves_the_dependency() {
     // The other installation keeps its command.
     assert!(fs::read_to_string(&existing).unwrap().contains("2.0.0"));
     assert!(
-        installed.commands["honeycomb-test-hi"]
+        installed.commands["honeycomb-path-hi"]
             .symlink_metadata()
             .is_ok()
     );
@@ -267,15 +280,20 @@ fn a_new_enough_command_on_path_resolves_the_dependency() {
 
 #[test]
 fn an_older_command_on_path_reports_both_versions_and_installs_nothing() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
-    let archive = fixture(src.path(), "1.0.0");
-    let existing = other_installation(elsewhere.path(), "honeycomb-test-hi", "0.5.0");
+    let archive = fixture_named(
+        src.path(),
+        "1.0.0",
+        "honeycomb-path-hello",
+        "honeycomb-path-hi",
+    );
+    let existing = other_installation(elsewhere.path(), "honeycomb-path-hi", "0.5.0");
     let _path = with_path(elsewhere.path());
     let error = installer::install_archive_resolving(
-        "tos>hello",
+        "hello",
         &archive,
         dest.path(),
         &BTreeMap::new(),
@@ -301,9 +319,9 @@ fn an_older_command_on_path_reports_both_versions_and_installs_nothing() {
         !dest
             .path()
             .join(if cfg!(windows) {
-                "bin/honeycomb-test-hello.cmd"
+                "bin/honeycomb-path-hello.cmd"
             } else {
-                "bin/honeycomb-test-hello"
+                "bin/honeycomb-path-hello"
             })
             .exists()
     );
@@ -311,15 +329,20 @@ fn an_older_command_on_path_reports_both_versions_and_installs_nothing() {
 
 #[test]
 fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
-    let archive = fixture(src.path(), "1.0.0");
-    let existing = other_installation(elsewhere.path(), "honeycomb-test-hi", "0.5.0");
+    let archive = fixture_named(
+        src.path(),
+        "1.0.0",
+        "honeycomb-path-hello",
+        "honeycomb-path-hi",
+    );
+    let existing = other_installation(elsewhere.path(), "honeycomb-path-hi", "0.5.0");
     let _path = with_path(elsewhere.path());
     let installed = installer::install_archive_resolving(
-        "tos>hello",
+        "hello",
         &archive,
         dest.path(),
         &BTreeMap::new(),
@@ -328,15 +351,20 @@ fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
     )
     .unwrap();
     assert_eq!(installed.rewritten.len(), 1);
-    assert_eq!(installed.rewritten["honeycomb-test-hi"].path, existing);
+    assert_eq!(installed.rewritten["honeycomb-path-hi"].path, existing);
     let output = std::process::Command::new(&existing).output().unwrap();
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
         "hello-1.0.0\n"
     );
-    let newer = fixture(src.path(), "2.0.0");
+    let newer = fixture_named(
+        src.path(),
+        "2.0.0",
+        "honeycomb-path-hello",
+        "honeycomb-path-hi",
+    );
     let updated = installer::install_archive_channel_resolving(
-        "tos>hello",
+        "hello",
         silicon_honeycomb_client::ReleaseChannel::Dev,
         &newer,
         dest.path(),
@@ -346,8 +374,8 @@ fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
     )
     .unwrap();
     assert_eq!(
-        updated.rewritten["honeycomb-test-hi"].backup,
-        installed.rewritten["honeycomb-test-hi"].backup
+        updated.rewritten["honeycomb-path-hi"].backup,
+        installed.rewritten["honeycomb-path-hi"].backup
     );
     assert!(
         String::from_utf8_lossy(
@@ -368,7 +396,7 @@ fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
 
 #[test]
 fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
-    let _serial = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = serial();
     let src = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
@@ -376,7 +404,7 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     let existing = other_installation(elsewhere.path(), "honeycomb-test-hi", "0.5.0");
     let _path = with_path(elsewhere.path());
     let installed = installer::install_archive_resolving(
-        "tos>hello",
+        "hello",
         &archive,
         dest.path(),
         &BTreeMap::new(),
@@ -396,7 +424,7 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     let archive =
         package::pack(src.path(), Some(&src.path().join("removed-command.tar.gz"))).unwrap();
     let updated = installer::install_archive_channel_resolving(
-        "tos>hello",
+        "hello",
         silicon_honeycomb_client::ReleaseChannel::Dev,
         &archive,
         dest.path(),
@@ -418,4 +446,105 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     );
     installer::uninstall(&updated, dest.path()).unwrap();
     assert!(existing.exists());
+}
+
+#[test]
+fn historical_archive_requires_its_exact_catalog_alias_and_promotes_canonically() {
+    let _serial = serial();
+    let source = tempfile::tempdir().unwrap();
+    fixture(source.path(), "1.0.0");
+    let path = source.path().join("honeycomb.yaml");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["app_id"] = "tos>hello".into();
+    fs::write(&path, manifest.to_string()).unwrap();
+    let archive = source.path().join("historical.tar.gz");
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        fs::File::create(&archive).unwrap(),
+        flate2::Compression::default(),
+    ));
+    tar.append_path_with_name(&path, "honeycomb.yaml").unwrap();
+    tar.append_dir_all("targets", source.path().join("targets"))
+        .unwrap();
+    tar.into_inner().unwrap().finish().unwrap();
+    let checksum = package::sha256(&archive).unwrap();
+    assert!(
+        !package::validate(&archive).valid,
+        "New uploads reject old IDs"
+    );
+    let destination = tempfile::tempdir().unwrap();
+    for alias in [None, Some("other>hello")] {
+        assert!(
+            installer::install_catalog_archive(
+                "hello",
+                Default::default(),
+                alias,
+                &archive,
+                destination.path(),
+                &BTreeMap::new(),
+                None,
+                false
+            )
+            .is_err()
+        );
+    }
+    let installed = installer::install_catalog_archive(
+        "hello",
+        Default::default(),
+        Some("tos>hello"),
+        &archive,
+        destination.path(),
+        &BTreeMap::new(),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(installed.app_id, "hello");
+    let promoted = source.path().join("promoted.tar.gz");
+    package::repack_catalog_release(
+        &archive,
+        "2.0.0",
+        &promoted,
+        Some(("hello", Some("tos>hello"))),
+    )
+    .unwrap();
+    let validation = package::validate(&promoted);
+    assert!(validation.valid);
+    assert_eq!(
+        validation.manifest.unwrap().app_id.as_deref(),
+        Some("hello")
+    );
+    assert_eq!(package::sha256(&archive).unwrap(), checksum);
+    installer::uninstall(&installed, destination.path()).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn updating_a_locked_windows_payload_still_commits_the_new_installation() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let _serial = serial();
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let first = fixture(src.path(), "1.0.0");
+    let before = installer::install_archive(&first, dest.path(), &BTreeMap::new(), None).unwrap();
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(before.directory.join("bin/hello.cmd"))
+        .unwrap();
+    let second = fixture(src.path(), "2.0.0");
+    let after =
+        installer::install_archive(&second, dest.path(), &BTreeMap::new(), Some(&before)).unwrap();
+    assert_eq!(after.version, "2.0.0");
+    assert!(
+        before.directory.exists(),
+        "The locked old payload must remain recoverable"
+    );
+    let output = std::process::Command::new(&after.commands["honeycomb-test-hello"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("hello-2.0.0"));
+    drop(locked);
+    installer::uninstall(&after, dest.path()).unwrap();
 }

@@ -24,7 +24,7 @@ impl Selection {
             .filter(|base| honeycomb_client::valid_app_id(base))
             .map_or((id, ReleaseChannel::Prod), |id| (id, ReleaseChannel::Dev));
         if !honeycomb_client::valid_app_id(app_id) {
-            bail!("Expected 'org>app', 'org>app>test', or either followed by @x.y.z");
+            bail!("Expected 'app', 'app>test', or either followed by @x.y.z");
         }
         let version = suffix.or(version).map(validate_version).transpose()?;
         Ok(Self {
@@ -78,33 +78,31 @@ mod tests {
     use super::*;
     #[test]
     fn selector_separates_identity_channel_and_exact_version() {
-        let s = Selection::parse("tos>briefcase>test@2.1.0", None).unwrap();
-        assert_eq!(s.app_id, "tos>briefcase");
+        let s = Selection::parse("briefcase>test@2.1.0", None).unwrap();
+        assert_eq!(s.app_id, "briefcase");
         assert_eq!(s.channel, ReleaseChannel::Dev);
         assert_eq!(s.version.as_deref(), Some("2.1.0"));
-        assert_eq!(s.key(), "tos>briefcase>test");
+        assert_eq!(s.key(), "briefcase>test");
         assert_eq!(
-            Selection::parse("tos>briefcase@3.4.2", None)
-                .unwrap()
-                .channel,
+            Selection::parse("briefcase@3.4.2", None).unwrap().channel,
             ReleaseChannel::Prod
         );
-        let named_test = Selection::parse("tos>test@1.0.0", None).unwrap();
-        assert_eq!(named_test.app_id, "tos>test");
+        let named_test = Selection::parse("test@1.0.0", None).unwrap();
+        assert_eq!(named_test.app_id, "test");
         assert_eq!(named_test.channel, ReleaseChannel::Prod);
         assert_eq!(
-            Selection::parse("tos>test>test", None).unwrap().channel,
+            Selection::parse("test>test", None).unwrap().channel,
             ReleaseChannel::Dev
         );
         for value in [
-            "tos>app>prod",
-            "tos>app>test@1.2",
-            "tos>app@1.2.3-dev",
-            "tos>app@01.2.3",
-            "tos>app@1.2.3@4.5.6",
+            "app>prod",
+            "app>test@1.2",
+            "app@1.2.3-dev",
+            "app@01.2.3",
+            "app@1.2.3@4.5.6",
         ] {
             assert!(Selection::parse(value, None).is_err(), "{value}");
         }
-        assert!(Selection::parse("tos>app@1.2.3", Some("2.0.0")).is_err());
+        assert!(Selection::parse("app@1.2.3", Some("2.0.0")).is_err());
     }
 }

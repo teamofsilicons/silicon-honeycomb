@@ -19,12 +19,12 @@ async fn logo_roundtrip(testing: bool) {
         ("briefcase.link_access.update", "/api/v1/obo/link-access"),
     ];
     Mock::given(method("GET"))
-        .and(path("/api/v1/obo-access/applications/tos%3Ebriefcase/endpoints"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"tos>briefcase","org_id":"tos"},"endpoints":endpoints.iter().map(|(id,path)|json!({"endpoint_id":id,"path":path,"metadata":{},"critical":false})).collect::<Vec<_>>()})))
+        .and(path("/api/v1/obo-access/applications/briefcase/endpoints"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"briefcase","org_id":"tos"},"endpoints":endpoints.iter().map(|(id,path)|json!({"endpoint_id":id,"path":path,"metadata":{},"critical":false})).collect::<Vec<_>>()})))
         .expect(3).mount(&iam).await;
     let mut proof = json!({"access_proof":"fixture-obo-proof","proof_id":"11111111-1111-1111-1111-111111111111","expires_in":60,"expires_at":"2030-01-01T00:00:00Z"});
     if testing {
-        proof["testing_context"] = json!({"app_id":"tos>briefcase","app_secret":"fixture-test-secret","iam_test_key":environment});
+        proof["testing_context"] = json!({"app_id":"briefcase","app_secret":"fixture-test-secret","iam_test_key":environment});
     }
     Mock::given(method("POST"))
         .and(path("/api/v1/obo-access/exchanges"))
@@ -50,7 +50,7 @@ async fn logo_roundtrip(testing: bool) {
         .mount(&storage)
         .await;
     let mut share =
-        format!("https://briefcase.example.com/org/acme/apps/tos%3Ehoneycomb/public/logo-{op}.png");
+        format!("https://briefcase.example.com/org/acme/apps/honeycomb/public/logo-{op}.png");
     if testing {
         share.push_str(&format!("?test_environment={test_id}"));
     }
@@ -66,13 +66,13 @@ async fn logo_roundtrip(testing: bool) {
         iam: Client::builder(&iam.uri())
             .unwrap()
             .telemetry(false)
-            .credential(Credential::application("tos>honeycomb", "fixture-secret"))
+            .credential(Credential::application("honeycomb", "fixture-secret"))
             .build()
             .unwrap(),
         http: reqwest::Client::new(),
         base_url: storage.uri(),
-        app_id: "tos>honeycomb".into(),
-        audience: "tos>briefcase".into(),
+        app_id: "honeycomb".into(),
+        audience: "briefcase".into(),
     };
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("logo.png");
@@ -113,7 +113,7 @@ async fn logo_roundtrip(testing: bool) {
     let reserve: Value = requests[0].body_json().unwrap();
     assert_eq!(reserve["content_type"], "image/png");
     assert_eq!(reserve["name"], format!("logo-{op}.png"));
-    assert_eq!(reserve["parent_path"], "apps/tos>honeycomb/public");
+    assert_eq!(reserve["parent_path"], "apps/honeycomb/public");
     assert_eq!(reserve["operation_id"], op);
     assert_eq!(requests[1].headers["x-org-id"], "acme");
     assert_eq!(requests[1].body, bytes);
@@ -172,12 +172,12 @@ async fn archive_read_and_publish(testing: bool) {
         ("briefcase.link_access.update", "/api/v1/obo/link-access"),
     ];
     Mock::given(method("GET"))
-        .and(path("/api/v1/obo-access/applications/tos%3Ebriefcase/endpoints"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"tos>briefcase","org_id":"tos"},"endpoints":endpoints.iter().map(|(id,path)|json!({"endpoint_id":id,"path":path,"metadata":{},"critical":false})).collect::<Vec<_>>()})))
+        .and(path("/api/v1/obo-access/applications/briefcase/endpoints"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"briefcase","org_id":"tos"},"endpoints":endpoints.iter().map(|(id,path)|json!({"endpoint_id":id,"path":path,"metadata":{},"critical":false})).collect::<Vec<_>>()})))
         .expect(2).mount(&iam).await;
     let mut proof = json!({"access_proof":"fixture-obo-proof","proof_id":"11111111-1111-1111-1111-111111111111","expires_in":60,"expires_at":"2030-01-01T00:00:00Z"});
     if testing {
-        proof["testing_context"] = json!({"app_id":"tos>briefcase","app_secret":"fixture-test-secret","iam_test_key":environment});
+        proof["testing_context"] = json!({"app_id":"briefcase","app_secret":"fixture-test-secret","iam_test_key":environment});
     }
     // A multi-organization subject needs the resource organization, not the
     // provider/caller application's owning organization or an omitted choice.
@@ -200,7 +200,7 @@ async fn archive_read_and_publish(testing: bool) {
         .mount(&storage)
         .await;
     let mut share =
-        "https://briefcase.example/org/acme/apps/tos%3Ehoneycomb/public/app.tar.gz".to_string();
+        "https://briefcase.example/org/acme/apps/honeycomb/public/app.tar.gz".to_string();
     if testing {
         share.push_str(&format!("?test_environment={test_id}"));
     }
@@ -216,9 +216,7 @@ async fn archive_read_and_publish(testing: bool) {
         .mount(&storage)
         .await;
     Mock::given(method("GET"))
-        .and(path(
-            "/api/v1/public/acme/apps/tos%3Ehoneycomb/public/app.tar.gz",
-        ))
+        .and(path("/api/v1/public/acme/apps/honeycomb/public/app.tar.gz"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"archive bytes"))
         .expect(1)
         .mount(&storage)
@@ -227,13 +225,13 @@ async fn archive_read_and_publish(testing: bool) {
         iam: Client::builder(&iam.uri())
             .unwrap()
             .telemetry(false)
-            .credential(Credential::application("tos>honeycomb", "fixture-secret"))
+            .credential(Credential::application("honeycomb", "fixture-secret"))
             .build()
             .unwrap(),
         http: reqwest::Client::new(),
         base_url: storage.uri(),
-        app_id: "tos>honeycomb".into(),
-        audience: "tos>briefcase".into(),
+        app_id: "honeycomb".into(),
+        audience: "briefcase".into(),
     };
     // Existing private releases store only the entry ID; they must also work.
     assert_eq!(
@@ -323,8 +321,8 @@ async fn exchange_failure(
     let iam = MockServer::start().await;
     let storage = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/api/v1/obo-access/applications/vendor%3Estorage/endpoints"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"vendor>storage","org_id":"vendor"},"endpoints":[{"endpoint_id":"briefcase.files.read","path":"/api/v1/obo/files/read","metadata":{},"critical":false}]})))
+        .and(path("/api/v1/obo-access/applications/storage/endpoints"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"storage","org_id":"vendor"},"endpoints":[{"endpoint_id":"briefcase.files.read","path":"/api/v1/obo/files/read","metadata":{},"critical":false}]})))
         .mount(&iam).await;
     Mock::given(method("POST"))
         .and(path("/api/v1/obo-access/exchanges"))
@@ -334,16 +332,13 @@ async fn exchange_failure(
         iam: Client::builder(&iam.uri())
             .unwrap()
             .telemetry(false)
-            .credential(Credential::application(
-                "vendor>catalog",
-                "SECRET_APP_CREDENTIAL",
-            ))
+            .credential(Credential::application("catalog", "SECRET_APP_CREDENTIAL"))
             .build()
             .unwrap(),
         http: reqwest::Client::new(),
         base_url: storage.uri(),
-        app_id: "vendor>catalog".into(),
-        audience: "vendor>storage".into(),
+        app_id: "catalog".into(),
+        audience: "storage".into(),
     };
     let error = adapter
         .read("entry", "vendor", Some("SECRET_SUBJECT_TOKEN"), None)

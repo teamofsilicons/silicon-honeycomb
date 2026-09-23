@@ -22,6 +22,7 @@ struct UnusedStorage;
 impl ArchiveStorage for UnusedStorage {
     async fn put(
         &self,
+        _org: &str,
         _: &str,
         _: &str,
         _: &std::path::Path,
@@ -44,11 +45,11 @@ async fn setup() -> State {
         db: silicon_honeycomb_server::database("sqlite::memory:")
             .await
             .unwrap(),
-        identity: Arc::new(Iam::new("http://127.0.0.1:1", "tos>honeycomb", "unused").unwrap()),
+        identity: Arc::new(Iam::new("http://127.0.0.1:1", "honeycomb", "unused").unwrap()),
         management: Arc::new(AwaitingIamIntegration),
         storage: Arc::new(UnusedStorage),
-        app_id: "tos>honeycomb".into(),
-        iam_app_id: "tos>iam".into(),
+        app_id: "honeycomb".into(),
+        iam_app_id: "iam".into(),
         iam_login_url: "https://iam.invalid".into(),
         encryption_key: [1; 32],
         webhook_secret: "unused".into(),
@@ -222,7 +223,7 @@ async fn migration_preserves_existing_v1_policy_and_lifecycle() {
         .await
         .unwrap();
     sqlx::query("UPDATE api_contracts SET state='deprecated',minimum_client='0.2.0',deprecated_at=10,last_request_at=20").execute(&db).await.unwrap();
-    sqlx::raw_sql(include_str!("../migrations/0024_release_contract.sql"))
+    sqlx::raw_sql(include_str!("../migrations/0025_release_contract.sql"))
         .execute(&db)
         .await
         .unwrap();

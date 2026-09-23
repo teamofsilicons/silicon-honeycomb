@@ -10,12 +10,12 @@ review, not successful live delegated upload acceptance.
 Briefcase implements the exact reserve, capability transfer, commit, delegated
 file-read and critical link-access routes used by Honeycomb's storage adapter.
 Request bodies, reservation states, entry IDs and public-link response fields
-match. App-folder initialization covers `apps/tos>honeycomb/public`. It also
+match. App-folder initialization covers `apps/honeycomb/public`. It also
 supports isolated requests selected by the IAM test application secret.
 
 ## Required for publishing and installing Briefcase
 
-1. Add a release `honeycomb.yaml` for `tos>briefcase`, mapping the `briefcase`
+1. Add a release `honeycomb.yaml` for `briefcase`, mapping the `briefcase`
    command to real binaries for Linux, Windows and macOS on x86_64 and aarch64.
    The repository has no such manifest or six-platform release workflow; its
    current workflow only runs Linux Rust checks plus web/docs builds. Package
@@ -24,7 +24,7 @@ supports isolated requests selected by the IAM test application secret.
    updater derives a Cargo root from the running `bin` directory and uses
    `cargo install --force`. Managed installs must defer version selection and
    file replacement to Honeycomb; direct Cargo installs can retain their updater.
-3. Adopt/link the existing `tos>briefcase` IAM identity into Honeycomb, preserving
+3. Adopt/link the existing `briefcase` IAM identity into Honeycomb, preserving
    its ID and secret. Do not attempt ordinary new-app creation over that identity.
    Honeycomb's legacy adoption flow remains a separate integration gap.
 
@@ -33,7 +33,7 @@ supports isolated requests selected by the IAM test application secret.
 - Honeycomb needs consented/effective `self.identity.read`,
   `self.membership.read`, **`self.tags.read`**, and the four external scopes:
   `briefcase.uploads.reserve`, `briefcase.uploads.commit`, `briefcase.files.read`,
-  `briefcase.link_access.update` on `tos>briefcase`.
+  `briefcase.link_access.update` on `briefcase`.
 - Briefcase must also have approved identity, membership and tag disclosure,
   with the corresponding OBO endpoints registered. Link access is critical and
   requires provider approval for public Honeycomb plus user consent.

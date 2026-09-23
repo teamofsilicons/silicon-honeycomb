@@ -6,7 +6,7 @@ from testing_credentials import REGISTRY, TOKEN, desired_credentials
 
 def briefcase(**extra):
     return {
-        "BRIEFCASE_IAM_APP_ID": "vendor>storage",
+        "BRIEFCASE_IAM_APP_ID": "storage",
         "BRIEFCASE_PUBLIC_BASE_URL": "https://storage.example/api/v1/",
         "BRIEFCASE_HONEYCOMB_BASE_URL": "https://packages.example/",
         **extra,
@@ -25,10 +25,10 @@ class TestingCredentials(unittest.TestCase):
         self.assertEqual(b["BRIEFCASE_IAM_APP_SECRET"], "keep")
         self.assertNotIn(TOKEN, bc)
         self.assertNotIn(TOKEN, hc["backend"])
-        self.assertEqual(h["backend"]["BRIEFCASE_APP_ID"], "vendor>storage")
+        self.assertEqual(h["backend"]["BRIEFCASE_APP_ID"], "storage")
         self.assertEqual(h["backend"]["BRIEFCASE_BASE_URL"], "https://storage.example")
         self.assertEqual(json.loads(h["backend"][REGISTRY]), [{
-            "app_id": "vendor>storage", "base_url": "https://storage.example", "token_env": TOKEN,
+            "app_id": "storage", "base_url": "https://storage.example", "token_env": TOKEN,
         }])
 
     def test_recovers_partial_setup_without_rotation(self):
@@ -55,7 +55,7 @@ class TestingCredentials(unittest.TestCase):
         self.assertEqual(b["BRIEFCASE_HONEYCOMB_BASE_URL"], "https://honeycomb.example")
 
     def test_preserves_other_participants_and_resumes_without_registry_changes(self):
-        other = {"app_id": "other>worker", "base_url": "https://worker.example", "token_env": "WORKER_TOKEN"}
+        other = {"app_id": "worker", "base_url": "https://worker.example", "token_env": "WORKER_TOKEN"}
         hc = {"backend": {REGISTRY: json.dumps([other]), "WORKER_TOKEN": "keep"}}
         updated, bc = desired_credentials(hc, briefcase())
         self.assertEqual(json.loads(updated["backend"][REGISTRY])[0], other)
@@ -67,8 +67,8 @@ class TestingCredentials(unittest.TestCase):
         for backend in [
             {"BRIEFCASE_APP_ID": "old>storage"},
             {"BRIEFCASE_BASE_URL": "https://old.example"},
-            {REGISTRY: json.dumps([{"app_id": "vendor>storage", "base_url": "https://old.example", "token_env": TOKEN}])},
-            {REGISTRY: json.dumps([{"app_id": "vendor>storage", "base_url": "https://storage.example", "token_env": "OLD_TOKEN"}])},
+            {REGISTRY: json.dumps([{"app_id": "storage", "base_url": "https://old.example", "token_env": TOKEN}])},
+            {REGISTRY: json.dumps([{"app_id": "storage", "base_url": "https://storage.example", "token_env": "OLD_TOKEN"}])},
             {REGISTRY: json.dumps([{"app_id": "old>storage", "base_url": "https://storage.example", "token_env": TOKEN}])},
         ]:
             hc = {"backend": backend}
@@ -97,7 +97,7 @@ class TestingCredentials(unittest.TestCase):
             desired_credentials({"backend": {}}, briefcase(), "https://other.example/api/v1/")
 
     def test_invalid_or_duplicate_registry_is_not_overwritten(self):
-        item = {"app_id": "vendor>storage", "base_url": "https://storage.example", "token_env": TOKEN}
+        item = {"app_id": "storage", "base_url": "https://storage.example", "token_env": TOKEN}
         for registry in ["invalid", "{}", json.dumps([item, item]), json.dumps([{"app_id": "unknown"}])]:
             with self.subTest(registry=registry), self.assertRaises(ValueError):
                 desired_credentials({"backend": {REGISTRY: registry}}, briefcase())

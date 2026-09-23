@@ -66,6 +66,14 @@ async fn main() -> anyhow::Result<()> {
         encryption_key,
         webhook_secret: required("HONEYCOMB_WEBHOOK_SECRET")?,
     };
+    let legacy_ids: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM applications WHERE instr(app_id, '>') > 0")
+            .fetch_one(&state.db)
+            .await?;
+    anyhow::ensure!(
+        legacy_ids == 0,
+        "Legacy application IDs remain; stop Honeycomb and run scripts/migrate_identifier_schema.py using the approved IAM mapping before starting workers"
+    );
     if let Some(credential) = std::env::var("IAM_HONEYCOMB_SERVICE_CREDENTIAL")
         .ok()
         .filter(|v| !v.is_empty())

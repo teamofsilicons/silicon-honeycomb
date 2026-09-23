@@ -293,8 +293,12 @@ async fn coordinate_inner(
                 ));
             }
             sqlx::query("INSERT INTO environment_app_activity(environment_id,app_id,last_activity) VALUES(?,?,?) ON CONFLICT(environment_id,app_id) DO UPDATE SET last_activity=excluded.last_activity").bind(id).bind(app).bind(now()).execute(&mut *tx).await?;
+            let mut accepted_import = source.clone();
+            if let Some(revision) = receipt.get("iam_configuration_revision") {
+                accepted_import["iam_configuration_revision"] = revision.clone();
+            }
             sqlx::query("INSERT INTO environment_imports(environment_id,app_id,source_revision,snapshot,last_activity) VALUES(?,?,?,?,?) ON CONFLICT(environment_id,app_id) DO UPDATE SET source_revision=excluded.source_revision,snapshot=excluded.snapshot,last_activity=excluded.last_activity")
-                .bind(id).bind(app).bind(source["source_revision"].as_i64().unwrap()).bind(source.to_string()).bind(now()).execute(&mut *tx).await?;
+                .bind(id).bind(app).bind(source["source_revision"].as_i64().unwrap()).bind(accepted_import.to_string()).bind(now()).execute(&mut *tx).await?;
         }
     }
     if action == "retire" {

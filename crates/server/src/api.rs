@@ -741,6 +741,9 @@ async fn save_app(
         None
     };
     if let Some(a) = &current {
+        if a.org_id != input.org_id {
+            return Err(Error::conflict("Application ownership cannot change"));
+        }
         if Some(a.revision) != expected {
             return Err(Error::conflict("Application revision has changed"));
         }
@@ -806,6 +809,16 @@ async fn save_app(
             return Err(Error::conflict("Application revision has changed"));
         }
     } else {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM applications WHERE plane=? AND app_id=?)",
+        )
+        .bind(&c.plane)
+        .bind(&app_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            return Err(Error::conflict("Application ID is already registered"));
+        }
         if c.plane != "production" {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM applications WHERE plane='production' AND app_id=?)",
@@ -839,6 +852,21 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
             "A newer configuration supersedes this operation",
         ));
     }
+    // Notifications hide the catalog entry until an authoritative read completes.
+    // Never interpret that temporary privacy fence as an IAM visibility change.
+    let reconciling: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM application_reconciliation WHERE plane=? AND app_id=? AND state='pending')")
+        .bind(&c.plane).bind(&app_id).fetch_one(&s.db).await?;
+    if reconciling {
+        let message = "Wait for IAM reconciliation, then retry this configuration operation";
+        sqlx::query("UPDATE operations SET error=? WHERE id=?")
+            .bind(message)
+            .bind(id)
+            .execute(&s.db)
+            .await?;
+        return Ok(
+            json!({"id":id,"state":"pending","resource":app_id,"revision":app.revision,"error":message}),
+        );
+    }
     let encrypted: String =
         sqlx::query_scalar("SELECT webhook_secret FROM applications WHERE plane=? AND app_id=?")
             .bind(&c.plane)
@@ -868,7 +896,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
                 .filter(|value| value.is_object())
                 .ok_or_else(|| Error::unavailable("IAM omitted its accepted configuration"))?;
             if effective["org_id"] != app.config["org_id"]
-                || effective["local_app_id"] != app.config["local_app_id"]
+                || effective["app_id"] != app.config["app_id"]
             {
                 return Err(Error::unavailable(
                     "IAM returned a configuration for another application",
@@ -1134,6 +1162,7 @@ async fn store_release(
     let mut reference = s
         .storage
         .put(
+            &app.org_id,
             &id,
             &if legacy {
                 version.clone()
@@ -1224,7 +1253,7 @@ async fn promote_release(
         return Err(Error::conflict("Application revision changed"));
     }
     key(&h)?;
-    let row = sqlx::query("SELECT storage_ref,sha256 FROM releases WHERE plane=? AND app_id=? AND channel='dev' AND version=?")
+    let row = sqlx::query("SELECT r.storage_ref,r.sha256,m.legacy_app_id FROM releases r LEFT JOIN migrated_release_identities m ON m.plane=r.plane AND m.app_id=r.app_id AND m.channel=r.channel AND m.version=r.version WHERE r.plane=? AND r.app_id=? AND r.channel='dev' AND r.version=?")
         .bind(&c.plane).bind(&id).bind(&source_version).fetch_optional(&s.db).await?.ok_or_else(Error::missing)?;
     let bytes = s
         .storage
@@ -1240,12 +1269,19 @@ async fn promote_release(
             "Source dev release checksum does not match",
         ));
     }
+    let legacy: Option<String> = row.get("legacy_app_id");
+    let canonical = id.clone();
     let promoted = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("source.tar.gz");
         let output = directory.path().join("promoted.tar.gz");
         std::fs::write(&source, bytes)?;
-        honeycomb_core::package::repack_version(&source, &input.version, &output)?;
+        honeycomb_core::package::repack_catalog_release(
+            &source,
+            &input.version,
+            &output,
+            Some((&canonical, legacy.as_deref())),
+        )?;
         Ok(std::fs::read(output)?)
     })
     .await
@@ -1263,6 +1299,7 @@ async fn promote_release(
 }
 fn release_from(r: &SqliteRow) -> Release {
     Release {
+        legacy_manifest_app_id: r.try_get("legacy_manifest_app_id").ok().flatten(),
         app_id: r.get("app_id"),
         channel: r
             .get::<String, _>("channel")
@@ -1298,7 +1335,7 @@ async fn releases(
     let c = context(&s, &h).await?;
     find_app(&s, &c, &id, false).await?;
     let mut items: Vec<Release> =
-        sqlx::query("SELECT * FROM releases WHERE plane=? AND app_id=? AND channel=?")
+        sqlx::query("SELECT r.*,m.legacy_app_id AS legacy_manifest_app_id FROM releases r LEFT JOIN migrated_release_identities m ON m.plane=r.plane AND m.app_id=r.app_id AND m.channel=r.channel AND m.version=r.version WHERE r.plane=? AND r.app_id=? AND r.channel=?")
             .bind(&c.plane)
             .bind(id)
             .bind(q.channel.unwrap_or_default().as_str())
@@ -1373,7 +1410,7 @@ async fn download(
             .ok_or_else(Error::missing)?
     };
     let row = sqlx::query(
-        "SELECT * FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?",
+        "SELECT r.*,m.legacy_app_id AS legacy_manifest_app_id FROM releases r LEFT JOIN migrated_release_identities m ON m.plane=r.plane AND m.app_id=r.app_id AND m.channel=r.channel AND m.version=r.version WHERE r.plane=? AND r.app_id=? AND r.channel=? AND r.version=?",
     )
     .bind(&c.plane)
     .bind(&id)

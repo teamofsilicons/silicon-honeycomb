@@ -14,17 +14,17 @@ IAM grants only the organizations you explicitly share. An app does not automati
 If **Create application** is unavailable, inspect the console's explanation, verify your organization role in IAM, and sign in again after permission changes. An old token does not gain a newly approved scope retroactively.
 
 ## Honeycomb's own scopes
-These are the integration requirements of `tos>honeycomb`, not permissions every application must blindly request.
+These are the integration requirements of `honeycomb`, not permissions every application must blindly request.
 | Scope | Purpose |
 | --- | --- |
 | `self.identity.read` | Identify the signed-in Carbon or Silicon. |
 | `self.profile.read` | Display profile information. |
 | `self.membership.read` | Disclose shared organization membership and role for access checks. |
 | `self.tags.read` | Disclose assigned tags needed by Briefcase's delegated authorization checks. |
-| `obo:tos>briefcase:briefcase.uploads.reserve` | Reserve package/logo uploads. |
-| `obo:tos>briefcase:briefcase.uploads.commit` | Commit uploaded bytes. |
-| `obo:tos>briefcase:briefcase.files.read` | Read private package data. |
-| `obo:tos>briefcase:briefcase.link_access.update` | Reconcile archive link access during publication and create public logo links. |
+| `obo:briefcase:briefcase.uploads.reserve` | Reserve package/logo uploads. |
+| `obo:briefcase:briefcase.uploads.commit` | Commit uploaded bytes. |
+| `obo:briefcase:briefcase.files.read` | Read private package data. |
+| `obo:briefcase:briefcase.link_access.update` | Reconcile archive link access during publication and create public logo links. |
 
 Provider approval, effective application scopes, token scopes, selected organization membership, and current user consent must agree. Merely listing a scope in requested configuration does not make it effective. [Scopes and OBO](/scopes-and-obo/) explains how your own application declares access.
 

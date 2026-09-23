@@ -59,6 +59,12 @@ pub async fn rotate(
             tx.commit().await?;
             return Ok((StatusCode::OK, Json(recover_result(&s, &c, &row).await?)));
         }
+        if row.get::<String, _>("state") == "rejected" {
+            return Ok((
+                StatusCode::OK,
+                Json(rejected_rotation(&row.get::<String, _>("id"), &app_id)),
+            ));
+        }
         let request: Value = serde_json::from_str(&row.get::<String, _>("request_json"))
             .map_err(|e| anyhow::anyhow!(e))?;
         (row.get::<String, _>("id"), request)
@@ -144,6 +150,15 @@ pub async fn rotate(
             ))
         }
         result => {
+            if let Err(error) = &result
+                && c.plane != "production"
+                && error.1.code == "testing_configuration_revision_conflict"
+            {
+                return Ok((
+                    StatusCode::OK,
+                    Json(reject_rotation(&s, &c, &id, &app_id).await?),
+                ));
+            }
             let code = match result {
                 Err(e) => e.1.code,
                 _ => "awaiting_iam_acceptance".into(),
@@ -186,6 +201,11 @@ pub async fn recover(S(s): S<State>, h: HeaderMap, Path(id): Path<String>) -> Re
 async fn recover_result(s: &State, c: &Context, row: &SqliteRow) -> Result<Value> {
     let id: String = row.get("id");
     let app: String = row.get("resource");
+    if row.get::<String, _>("state") == "rejected"
+        && row.get::<String, _>("kind") == "secret.rotate"
+    {
+        return Ok(rejected_rotation(&id, &app));
+    }
     let response = s
         .management
         .operation_result(
@@ -193,7 +213,18 @@ async fn recover_result(s: &State, c: &Context, row: &SqliteRow) -> Result<Value
             c.token.as_deref().ok_or_else(Error::unauthorized)?,
             c.environment.as_deref(),
         )
-        .await?;
+        .await;
+    let response = match response {
+        Err(error)
+            if c.plane != "production"
+                && row.get::<String, _>("kind") == "secret.rotate"
+                && row.get::<String, _>("state") == "pending"
+                && error.1.code == "testing_configuration_revision_conflict" =>
+        {
+            return reject_rotation(s, c, &id, &app).await;
+        }
+        result => result?,
+    };
     if response["operation_id"] != id
         || response["app_id"] != app
         || response["configuration_revision"] != row.get::<i64, _>("revision")
@@ -249,4 +280,33 @@ async fn recover_result(s: &State, c: &Context, row: &SqliteRow) -> Result<Value
         }
     }
     Ok(result)
+}
+
+fn rejected_rotation(id: &str, app: &str) -> Value {
+    json!({"id":id,"resource":app,"state":"rejected","error_code":"testing_configuration_revision_conflict","message":"IAM rejected this immutable test rotation before changing the credential. Reconcile the application, then start a new rotation with a new idempotency key and the current Honeycomb revision."})
+}
+
+/// Only the adapter's exact IAM precondition rejection may retire a pending
+/// rotation. A timeout, lifecycle conflict or stale authority can conceal a
+/// committed target transaction and therefore must never enter this path.
+async fn reject_rotation(s: &State, c: &Context, id: &str, app: &str) -> Result<Value> {
+    let mut tx = s.db.begin().await?;
+    let updated = sqlx::query("UPDATE operations SET state='rejected',error='testing_configuration_revision_conflict' WHERE id=? AND plane=? AND actor=? AND kind='secret.rotate' AND state='pending'")
+        .bind(id).bind(&c.plane).bind(&c.identity()?.principal_id).execute(&mut *tx).await?;
+    if updated.rows_affected() == 1 {
+        sqlx::query("INSERT INTO audit(id,plane,actor,action,resource,created_at) VALUES(?,?,?,'application.secret.reject',?,?)")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&c.plane).bind(&c.identity()?.principal_id).bind(app).bind(now()).execute(&mut *tx).await?;
+    } else {
+        let state: String = sqlx::query_scalar("SELECT state FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if state != "rejected" {
+            return Err(Error::conflict(
+                "Rotation state changed during recovery; read its current result",
+            ));
+        }
+    }
+    tx.commit().await?;
+    Ok(rejected_rotation(id, app))
 }

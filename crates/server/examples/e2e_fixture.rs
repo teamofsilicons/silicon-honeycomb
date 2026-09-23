@@ -175,9 +175,10 @@ impl Management for FixtureManagement {
         Ok(match provider {
             "honeycomb" => identity.validator,
             "iam" => false,
-            app => app
-                .split_once('>')
-                .is_some_and(|(org, _)| identity.admin(org)),
+            app => plans
+                .get(app)
+                .and_then(|v| v["effective_configuration"]["org_id"].as_str())
+                .is_some_and(|org| identity.admin(org)),
         })
     }
     async fn activate_publication(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
@@ -228,6 +229,7 @@ impl ArchiveStorage for FixtureStorage {
     }
     async fn put(
         &self,
+        _org: &str,
         app: &str,
         version: &str,
         path: &std::path::Path,
@@ -305,16 +307,22 @@ async fn main() -> anyhow::Result<()> {
             "private",
         ),
     ] {
-        let app_id = format!("tos>{id}");
-        let config = json!({"org_id":"tos","local_app_id":id,"name":name,"description":description,"website_url":"https://teamofsilicons.com","docs_url":format!("https://docs.{id}.teamofsilicons.com"),"base_url":format!("https://backend.{id}.teamofsilicons.com"),"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[]});
+        let app_id = id.to_string();
+        let config = json!({"org_id":"tos","app_id":id,"name":name,"description":description,"website_url":"https://teamofsilicons.com","docs_url":format!("https://docs.{id}.teamofsilicons.com"),"base_url":format!("https://backend.{id}.teamofsilicons.com"),"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[]});
         sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production',?,'tos',?,?,?,'active',1,1,?,?,?,1,1)").bind(app_id).bind(name).bind(description).bind(visibility).bind(config.to_string()).bind(config.to_string()).bind("fixture-no-secret").execute(&db).await?;
     }
     let identity = Arc::new(FixtureIam::default());
     let management = FixtureManagement(
-        Mutex::new(BTreeMap::from([(
-            "plan:fixture-plan".into(),
-            json!({"gates":[{"provider":"tos>briefcase","scopes":["obo:tos>briefcase:files.read"]},{"provider":"honeycomb","scopes":[]}]}),
-        )])),
+        Mutex::new(BTreeMap::from([
+            (
+                "plan:fixture-plan".into(),
+                json!({"gates":[{"provider":"briefcase","scopes":["obo:briefcase:files.read"]},{"provider":"honeycomb","scopes":[]}]}),
+            ),
+            (
+                "briefcase".into(),
+                json!({"effective_configuration":{"org_id":"tos"}}),
+            ),
+        ])),
         identity.clone(),
     );
     let state = State {
@@ -323,8 +331,8 @@ async fn main() -> anyhow::Result<()> {
         identity,
         management: Arc::new(management),
         storage: Arc::new(FixtureStorage::default()),
-        app_id: "tos>honeycomb".into(),
-        iam_app_id: "tos>iam".into(),
+        app_id: "honeycomb".into(),
+        iam_app_id: "iam".into(),
         iam_login_url: format!("http://127.0.0.1:{port}"),
         encryption_key: [7; 32],
         webhook_secret: "fixture-webhook-secret-0000000000000".into(),
@@ -338,15 +346,15 @@ async fn main() -> anyhow::Result<()> {
         .execute(&state.db)
         .await?;
     for project in ["desktop", "mobile"] {
-        let app_id = format!("fixture>review-{project}");
+        let app_id = format!("review-{project}");
         let request_id = format!("fixture-review-{project}");
-        let config = json!({"org_id":"fixture","local_app_id":format!("review-{project}"),"name":format!("Review candidate {project}"),"description":"An isolated application requesting access to Briefcase files.","app_scope":{"iam":[],"external":[{"app_id":"tos>briefcase","endpoint_id":"files.read"}]}});
+        let config = json!({"org_id":"fixture","app_id":format!("review-{project}"),"name":format!("Review candidate {project}"),"description":"An isolated application requesting access to Briefcase files.","app_scope":{"iam":[],"external":[{"app_id":"briefcase","endpoint_id":"files.read"}]}});
         sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production',?,'fixture',?,'Isolated review candidate','active',1,1,1,?,?,'',1,1)")
             .bind(&app_id).bind(format!("Review candidate {project}")).bind(config.to_string()).bind(config.to_string()).execute(&state.db).await?;
         sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot,plan_id) VALUES(?,'production',?,1,'awaiting_scope_review','fixture-requester',1,?,'fixture-plan')")
             .bind(&request_id).bind(&app_id).bind(config.to_string()).execute(&state.db).await?;
         for (provider, scopes) in [
-            ("tos>briefcase", json!(["obo:tos>briefcase:files.read"])),
+            ("briefcase", json!(["obo:briefcase:files.read"])),
             ("honeycomb", json!([])),
         ] {
             sqlx::query("INSERT INTO review_gates(request_id,provider,scopes) VALUES(?,?,?)")
@@ -360,7 +368,7 @@ async fn main() -> anyhow::Result<()> {
         let cleanup_id = format!("fixture-cleanup-{project}");
         sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated automatic cleanup',?,?,'ready',1,?)")
             .bind(&cleanup_id).bind(format!("Cleanup sandbox {project}")).bind(state.encrypt("CleanupFixtureKey0000000000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("unused-cleanup-{project}")).bind(silicon_honeycomb_server::now()).execute(&state.db).await?;
-        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) SELECT ?,app_id,org_id,name,description,'private',state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,1,updated_at FROM applications WHERE plane='production' AND app_id='tos>briefcase'").bind(&cleanup_id).execute(&state.db).await?;
+        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) SELECT ?,app_id,org_id,name,description,'private',state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,1,updated_at FROM applications WHERE plane='production' AND app_id='briefcase'").bind(&cleanup_id).execute(&state.db).await?;
         if let Some(operation) = silicon_honeycomb_server::retention_worker::schedule(
             &state,
             &cleanup_id,
@@ -376,7 +384,7 @@ async fn main() -> anyhow::Result<()> {
         let retention_id = format!("fixture-retention-{project}");
         sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated retention journey',? ,?,'ready',?,?)")
             .bind(&retention_id).bind(format!("Retention sandbox {project}")).bind(state.encrypt("RetentionFixtureKey00000000000000").map_err(|e|anyhow::anyhow!(e.1.message))?).bind(format!("fixture-retention-unused-hash-{project}")).bind(silicon_honeycomb_server::now()).bind(silicon_honeycomb_server::now()).execute(&state.db).await?;
-        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) SELECT ?,app_id,org_id,name,description,'private',state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,?,updated_at FROM applications WHERE plane='production' AND app_id='tos>briefcase'")
+        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,visibility,state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) SELECT ?,app_id,org_id,name,description,'private',state,revision,iam_revision,effective_revision,config,effective_config,webhook_secret,?,updated_at FROM applications WHERE plane='production' AND app_id='briefcase'")
             .bind(&retention_id).bind(silicon_honeycomb_server::now()).execute(&state.db).await?;
         sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES(?,'tos','fixture-org_owner',?,'Isolated import journey',?,?,'ready',1,1)")
             .bind(format!("fixture-import-{project}")).bind(format!("Import sandbox {project}"))

@@ -41,9 +41,9 @@ not a general application deletion endpoint or a recurring reset procedure.
 ## Applied result
 
 SSM execution `6f0ef7ba-2c83-40bc-9342-62736333ef21` committed successfully.
-Production inventory now contains only `tos>honeycomb`; its UUID, IAM revision 4,
+Production inventory now contains only `honeycomb`; its UUID, IAM revision 4,
 credential version 1, verified status, credentials, grants, and management service
-connection were preserved. `tos>briefcase` now returns 404 from IAM management.
+connection were preserved. `briefcase` now returns 404 from IAM management.
 The existing Honeycomb CLI session still authenticates as the `tos` owner.
 
 Ten application records and their principals/dependencies were removed. Audit and

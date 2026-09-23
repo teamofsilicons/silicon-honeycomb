@@ -13,7 +13,7 @@ Repository: https://github.com/teamofsilicons/silicon-honeycomb
 Library: https://honeycomb.teamofsilicons.com
 Rust client: https://crates.io/crates/silicon-honeycomb-client
 
-Every command supports --help. Quote app identifiers: 'tos>briefcase'.
+Every command supports --help. Quote app identifiers: 'briefcase'.
 
 Usage: honeycomb [OPTIONS] <COMMAND>
 
@@ -412,7 +412,7 @@ Commands:
   rotate-secret  Replace an application's secret through IAM. Save the one-time result securely
   list
   get
-  create         Submit application.json containing org_id, local_app_id, details, webhook and scopes
+  create         Submit application.json containing org_id, app_id, details, webhook and scopes
   update         Update using a complete application.json and the current revision from apps get
   help           Print this message or the help of the given subcommand(s)
 
@@ -707,7 +707,7 @@ Options:
 ## honeycomb apps create
 
 ```text
-Submit application.json containing org_id, local_app_id, details, webhook and scopes
+Submit application.json containing org_id, app_id, details, webhook and scopes
 
 Usage: honeycomb apps create [OPTIONS] <FILE>
 

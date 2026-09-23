@@ -84,6 +84,7 @@ struct Store;
 impl ArchiveStorage for Store {
     async fn put(
         &self,
+        _org: &str,
         _: &str,
         _: &str,
         _: &std::path::Path,
@@ -119,8 +120,8 @@ async fn setup(accept: bool) -> (State, Arc<AtomicBool>) {
         }),
         management: Arc::new(Manager { accept }),
         storage: Arc::new(Store),
-        app_id: "tos>honeycomb".into(),
-        iam_app_id: "tos>iam".into(),
+        app_id: "honeycomb".into(),
+        iam_app_id: "iam".into(),
         iam_login_url: "https://iam.example.com".into(),
         encryption_key: [7; 32],
         webhook_secret: "test-secret".into(),
@@ -256,7 +257,7 @@ async fn rust_client_consumes_v1_discovery_catalog_and_auth_contracts() {
     assert_eq!(contract["selected_version"], "v1");
     assert_eq!(contract["minimum_client"], "0.1.0");
     let iam = client.iam().await.unwrap();
-    assert_eq!(iam["app_id"], "tos>honeycomb");
+    assert_eq!(iam["app_id"], "honeycomb");
     let catalog = client.search("", 1, false).await.unwrap();
     assert_eq!(catalog.total, 0);
     let status = client.with_token("member").login_status().await.unwrap();
@@ -264,7 +265,7 @@ async fn rust_client_consumes_v1_discovery_catalog_and_auth_contracts() {
     server.abort();
 }
 fn input(id: &str) -> Value {
-    json!({"org_id":"tos","local_app_id":id,"name":"Honeycomb Test","description":"A useful application for the Silicon ecosystem. ".repeat(8),"webhook_url":"https://example.com/webhook/","webhook_secret":"secret-never-returned-in-catalog-123456","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read"],"external":[]}})
+    json!({"org_id":"tos","app_id":id,"name":"Honeycomb Test","description":"A useful application for the Silicon ecosystem. ".repeat(8),"webhook_url":"https://example.com/webhook/","webhook_secret":"secret-never-returned-in-catalog-123456","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read"],"external":[]}})
 }
 async fn call(
     s: &State,
@@ -321,7 +322,7 @@ async fn invalid_webhook_subscriptions_are_rejected_before_creating_an_operation
         assert!(response.to_string().contains("webhook_scope"));
     }
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM operations WHERE resource='tos>invalid-webhook'")
+        sqlx::query_scalar("SELECT count(*) FROM operations WHERE resource='invalid-webhook'")
             .fetch_one(&s.db)
             .await
             .unwrap();
@@ -357,7 +358,7 @@ async fn private_visibility_and_current_membership() {
         let (status, _) = call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Eprivate",
+            "/api/v1/apps/private",
             token,
             Value::Null,
             "unused-unused-0000",
@@ -380,7 +381,7 @@ async fn private_visibility_and_current_membership() {
     let (status, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Eprivate",
+        "/api/v1/apps/private",
         Some("member"),
         Value::Null,
         "unused-unused-0000",
@@ -395,7 +396,7 @@ async fn private_visibility_and_current_membership() {
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Eprivate",
+            "/api/v1/apps/private",
             Some("admin"),
             Value::Null,
             "unused-unused-0000",
@@ -482,7 +483,7 @@ async fn pending_iam_does_not_activate_or_publish() {
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Epending",
+        "/api/v1/apps/pending",
         Some("admin"),
         Value::Null,
         "unused-unused-0000",
@@ -495,7 +496,7 @@ async fn pending_iam_does_not_activate_or_publish() {
         call(
             &s,
             "POST",
-            "/api/v1/apps/tos%3Epending/publication",
+            "/api/v1/apps/pending/publication",
             Some("admin"),
             json!({"message":"Publish this"}),
             "publish-pending-0001",
@@ -509,7 +510,7 @@ async fn pending_iam_does_not_activate_or_publish() {
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Epending",
+            "/api/v1/apps/pending",
             Some("member"),
             Value::Null,
             "unused-unused-0000",
@@ -536,7 +537,7 @@ async fn stale_revision_cannot_replace_configuration() {
     let (status, _) = call(
         &s,
         "PUT",
-        "/api/v1/apps/tos%3Ea",
+        "/api/v1/apps/a",
         Some("admin"),
         input("a"),
         "update-revision-0001",
@@ -547,7 +548,7 @@ async fn stale_revision_cannot_replace_configuration() {
     let (status, _) = call(
         &s,
         "PUT",
-        "/api/v1/apps/tos%3Ea",
+        "/api/v1/apps/a",
         Some("admin"),
         input("a"),
         "update-revision-0002",
@@ -588,7 +589,7 @@ async fn reviews_are_per_actor_and_stars_are_idempotent() {
             call(
                 &s,
                 "PUT",
-                "/api/v1/apps/tos%3Ea/reviews",
+                "/api/v1/apps/a/reviews",
                 Some("member"),
                 json!({"rating":rating,"review":"Useful package"}),
                 "review-metrics-0001",
@@ -603,7 +604,7 @@ async fn reviews_are_per_actor_and_stars_are_idempotent() {
         call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Ea/star",
+            "/api/v1/apps/a/star",
             Some("member"),
             Value::Null,
             "stars-metrics-0001",
@@ -614,7 +615,7 @@ async fn reviews_are_per_actor_and_stars_are_idempotent() {
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ea",
+        "/api/v1/apps/a",
         Some("member"),
         Value::Null,
         "unused-unused-0000",
@@ -798,7 +799,7 @@ async fn catalog_uses_iam_accepted_fields_and_excludes_returned_secrets() {
     let (_, visible) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Eaccepted-fields",
+        "/api/v1/apps/accepted-fields",
         Some("member"),
         Value::Null,
         "unused-unused-0001",
@@ -814,7 +815,7 @@ async fn catalog_uses_iam_accepted_fields_and_excludes_returned_secrets() {
     let (_, desired) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Eaccepted-fields",
+        "/api/v1/apps/accepted-fields",
         Some("admin"),
         Value::Null,
         "unused-unused-0001",
@@ -899,7 +900,7 @@ async fn weighted_search_prioritizes_names_over_description_and_tolerates_query_
     call(
         &s,
         "PUT",
-        "/api/v1/apps/tos%3Edescription-hit/reviews",
+        "/api/v1/apps/description-hit/reviews",
         Some("member"),
         json!({"rating":5.0,"review":"Excellent"}),
         "search-rating-0001",
@@ -918,7 +919,7 @@ async fn weighted_search_prioritizes_names_over_description_and_tolerates_query_
     .await;
     assert_eq!(status, 200);
     assert_eq!(result["total"], 2);
-    assert_eq!(result["items"][0]["app_id"], "tos>name-hit");
+    assert_eq!(result["items"][0]["app_id"], "name-hit");
     let (_, typo) = call(
         &s,
         "GET",
@@ -929,7 +930,7 @@ async fn weighted_search_prioritizes_names_over_description_and_tolerates_query_
         None,
     )
     .await;
-    assert_eq!(typo["items"][0]["app_id"], "tos>name-hit");
+    assert_eq!(typo["items"][0]["app_id"], "name-hit");
     assert_eq!(
         call(
             &s,
@@ -1061,13 +1062,13 @@ impl Management for Services {
         Manager { accept: true }.configure(o, t, e).await
     }
     async fn lifecycle(&self, o: &Value, t: &str) -> Result<Value> {
-        self.service_lifecycle("tos>iam", o, t).await
+        self.service_lifecycle("iam", o, t).await
     }
     async fn service_lifecycle(&self, app: &str, o: &Value, _: &str) -> Result<Value> {
-        if app == "tos>iam" {
+        if app == "iam" {
             self.iam_calls.fetch_add(1, Ordering::SeqCst);
         }
-        if app == "tos>dependency" && self.fail_dependency.load(Ordering::SeqCst) {
+        if app == "dependency" && self.fail_dependency.load(Ordering::SeqCst) {
             return Err(Error::unavailable("Dependency is temporarily offline"));
         }
         Ok(
@@ -1106,7 +1107,7 @@ async fn lifecycle_requires_all_services_and_retries_only_incomplete_steps() {
         .execute(&s.db)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,'tos>dependency',1,'{}','pending',?,1)").bind(id).bind(op).execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,'dependency',1,'{}','pending',?,1)").bind(id).bind(op).execute(&s.db).await.unwrap();
     let pending = silicon_honeycomb_server::lifecycle::coordinate(&s, id, op, "member")
         .await
         .unwrap();
@@ -1286,11 +1287,11 @@ impl Management for ImportServices {
         Manager { accept: true }.configure(o, t, e).await
     }
     async fn lifecycle(&self, o: &Value, t: &str) -> Result<Value> {
-        self.service_lifecycle("tos>iam", o, t).await
+        self.service_lifecycle("iam", o, t).await
     }
     async fn service_lifecycle(&self, app: &str, o: &Value, _: &str) -> Result<Value> {
         self.calls.lock().unwrap().push(app.into());
-        if app == "other>dependency" && self.offline.load(Ordering::SeqCst) {
+        if app == "dependency" && self.offline.load(Ordering::SeqCst) {
             return Err(Error::unavailable("Service offline"));
         }
         let imports:Vec<Value>=o["snapshot"]["imports"].as_array().into_iter().flatten().map(|source|json!({"app_id":source["app_id"],"source_revision":source["source_revision"],"configuration_revision":source["configuration_revision"],"iam_revision":source["configuration_revision"],"effective_configuration":source["configuration"],"visibility":"private","app_secret":"never-persist-this-test-secret"})).collect();
@@ -1300,7 +1301,12 @@ impl Management for ImportServices {
     }
 }
 async fn import_source(s: &State, id: &str, deps: &[&str], public: bool) {
-    let (org, local) = id.split_once('>').unwrap();
+    let org = if ["dependency", "private-provider"].contains(&id) {
+        "other"
+    } else {
+        "tos"
+    };
+    let local = id;
     let mut config = input(local);
     config["org_id"] = json!(org);
     config["app_scope"]["external"] = json!(
@@ -1334,10 +1340,10 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
     let (mut s, _) = setup(true).await;
     let services = Arc::new(ImportServices::default());
     s.management = services.clone();
-    import_source(&s, "tos>root", &["other>dependency", "tos>leaf"], false).await;
-    import_source(&s, "other>dependency", &["tos>leaf"], true).await;
-    import_source(&s, "tos>leaf", &["tos>root"], false).await;
-    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','tos>root','prod','1.0.0','prod-checksum',1,'prod-reference',1),('production','tos>root','dev','9.0.0','dev-checksum',1,'dev-reference',1)").execute(&s.db).await.unwrap();
+    import_source(&s, "root", &["dependency", "leaf"], false).await;
+    import_source(&s, "dependency", &["leaf"], true).await;
+    import_source(&s, "leaf", &["root"], false).await;
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','root','prod','1.0.0','prod-checksum',1,'prod-reference',1),('production','root','dev','9.0.0','dev-checksum',1,'dev-reference',1)").execute(&s.db).await.unwrap();
     let (_, env) = call(
         &s,
         "POST",
@@ -1356,7 +1362,7 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>root"}),
+        json!({"app_id":"root"}),
         "imports-root-0001",
         Some(1),
     )
@@ -1371,7 +1377,7 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
             .unwrap();
     assert_eq!(count, 3);
     let snapshot: String = sqlx::query_scalar(
-        "SELECT snapshot FROM environment_imports WHERE environment_id=? AND app_id='tos>root'",
+        "SELECT snapshot FROM environment_imports WHERE environment_id=? AND app_id='root'",
     )
     .bind(id)
     .fetch_one(&s.db)
@@ -1392,18 +1398,17 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
         0
     );
     let calls = services.calls.lock().unwrap().clone();
-    assert_eq!(calls[0], "tos>iam");
-    assert_eq!(calls.iter().filter(|s| *s == "tos>leaf").count(), 1);
-    let org: String = sqlx::query_scalar(
-        "SELECT org_id FROM applications WHERE plane=? AND app_id='other>dependency'",
-    )
-    .bind(id)
-    .fetch_one(&s.db)
-    .await
-    .unwrap();
+    assert_eq!(calls[0], "iam");
+    assert_eq!(calls.iter().filter(|s| *s == "leaf").count(), 1);
+    let org: String =
+        sqlx::query_scalar("SELECT org_id FROM applications WHERE plane=? AND app_id='dependency'")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
     assert_eq!(org, "other");
     let key: String = sqlx::query_scalar(
-        "SELECT webhook_secret FROM applications WHERE plane=? AND app_id='tos>root'",
+        "SELECT webhook_secret FROM applications WHERE plane=? AND app_id='root'",
     )
     .bind(id)
     .fetch_one(&s.db)
@@ -1411,7 +1416,7 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
     .unwrap();
     assert!(key.is_empty());
     let receipt: String = sqlx::query_scalar(
-        "SELECT receipt FROM environment_services WHERE environment_id=? AND app_id='tos>iam'",
+        "SELECT receipt FROM environment_services WHERE environment_id=? AND app_id='iam'",
     )
     .bind(id)
     .fetch_one(&s.db)
@@ -1419,13 +1424,13 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
     .unwrap();
     assert!(!receipt.contains("never-persist"));
     // A requested production revision must not silently change an accepted import.
-    sqlx::query("UPDATE applications SET revision=revision+1,config=json_set(config,'$.name','Unaccepted title') WHERE plane='production' AND app_id='tos>root'").execute(&s.db).await.unwrap();
+    sqlx::query("UPDATE applications SET revision=revision+1,config=json_set(config,'$.name','Unaccepted title') WHERE plane='production' AND app_id='root'").execute(&s.db).await.unwrap();
     let (_, unchanged) = call(
         &s,
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>root"}),
+        json!({"app_id":"root"}),
         "imports-root-0002",
         Some(2),
     )
@@ -1436,16 +1441,22 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>root","refresh":true}),
+        json!({"app_id":"root","refresh":true}),
         "imports-refresh-0001",
         Some(2),
     )
     .await;
     assert_eq!(refreshed["operation_state"], "accepted", "{refreshed}");
-    let source:i64=sqlx::query_scalar("SELECT source_revision FROM environment_imports WHERE environment_id=? AND app_id='tos>root'").bind(id).fetch_one(&s.db).await.unwrap();
+    let source: i64 = sqlx::query_scalar(
+        "SELECT source_revision FROM environment_imports WHERE environment_id=? AND app_id='root'",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
     assert_eq!(source, 1);
     let name: String =
-        sqlx::query_scalar("SELECT name FROM applications WHERE plane=? AND app_id='tos>root'")
+        sqlx::query_scalar("SELECT name FROM applications WHERE plane=? AND app_id='root'")
             .bind(id)
             .fetch_one(&s.db)
             .await
@@ -1456,7 +1467,7 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>root","refresh":true}),
+        json!({"app_id":"root","refresh":true}),
         "imports-refresh-0001",
         Some(2),
     )
@@ -1467,7 +1478,7 @@ async fn imports_pin_accepted_configs_follow_cycles_and_preserve_organizations()
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>leaf","refresh":true}),
+        json!({"app_id":"leaf","refresh":true}),
         "imports-refresh-0001",
         Some(2),
     )
@@ -1479,8 +1490,8 @@ async fn imports_reject_private_dependencies_and_gate_new_records_on_exact_recei
     let (mut s, _) = setup(true).await;
     let services = Arc::new(ImportServices::default());
     s.management = services.clone();
-    import_source(&s, "tos>root", &["other>dependency"], true).await;
-    import_source(&s, "other>dependency", &[], false).await;
+    import_source(&s, "root", &["dependency"], true).await;
+    import_source(&s, "dependency", &[], false).await;
     let (_, env) = call(
         &s,
         "POST",
@@ -1498,7 +1509,7 @@ async fn imports_reject_private_dependencies_and_gate_new_records_on_exact_recei
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>root"}),
+        json!({"app_id":"root"}),
         "imports-private-0001",
         Some(1),
     )
@@ -1511,7 +1522,7 @@ async fn imports_reject_private_dependencies_and_gate_new_records_on_exact_recei
             .await
             .unwrap();
     assert_eq!(count, 0);
-    sqlx::query("UPDATE applications SET visibility='public' WHERE plane='production' AND app_id='other>dependency'").execute(&s.db).await.unwrap();
+    sqlx::query("UPDATE applications SET visibility='public' WHERE plane='production' AND app_id='dependency'").execute(&s.db).await.unwrap();
     services.malformed.store(true, Ordering::SeqCst);
     services.calls.lock().unwrap().clear();
     let (_, pending) = call(
@@ -1519,14 +1530,14 @@ async fn imports_reject_private_dependencies_and_gate_new_records_on_exact_recei
         "POST",
         &path,
         Some("member"),
-        json!({"app_id":"tos>root"}),
+        json!({"app_id":"root"}),
         "imports-private-0002",
         Some(1),
     )
     .await;
     assert_eq!(pending["operation_state"], "pending");
     assert_eq!(pending["state"], "ready");
-    assert_eq!(*services.calls.lock().unwrap(), vec!["tos>iam"]);
+    assert_eq!(*services.calls.lock().unwrap(), vec!["iam"]);
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM applications WHERE plane=?")
         .bind(id)
         .fetch_one(&s.db)
@@ -1570,7 +1581,7 @@ async fn imports_reject_private_dependencies_and_gate_new_records_on_exact_recei
     )
     .await;
     assert_eq!(ready["operation_state"], "accepted", "{ready}");
-    assert_eq!(*services.calls.lock().unwrap(), vec!["other>dependency"]);
+    assert_eq!(*services.calls.lock().unwrap(), vec!["dependency"]);
 }
 
 #[tokio::test]
@@ -1578,11 +1589,11 @@ async fn import_graph_has_no_fixed_depth_limit_and_root_key_grants_no_production
     let (mut s, _) = setup(true).await;
     s.management = Arc::new(ImportServices::default());
     for n in 0..40 {
-        let id = format!("tos>node-{n}");
-        let dependency = format!("tos>node-{}", (n + 1) % 40);
+        let id = format!("node-{n}");
+        let dependency = format!("node-{}", (n + 1) % 40);
         import_source(&s, &id, &[&dependency], true).await;
     }
-    import_source(&s, "tos>hidden", &[], false).await;
+    import_source(&s, "hidden", &[], false).await;
     let (_, env) = call(
         &s,
         "POST",
@@ -1601,8 +1612,8 @@ async fn import_graph_has_no_fixed_depth_limit_and_root_key_grants_no_production
         .unwrap();
     let root = s.decrypt(&encrypted).unwrap();
     for (app, status) in [
-        ("tos>hidden", StatusCode::NOT_FOUND),
-        ("tos>node-0", StatusCode::ACCEPTED),
+        ("hidden", StatusCode::NOT_FOUND),
+        ("node-0", StatusCode::ACCEPTED),
     ] {
         let response = silicon_honeycomb_server::api::router(s.clone())
             .oneshot(
@@ -1707,7 +1718,7 @@ async fn secret_rotation_requires_current_admin_step_up_and_replays_without_stor
     )
     .await;
     assert_eq!(again["app_secret"], created["app_secret"]);
-    let path = "/api/v1/apps/tos%3Esecrets/secret-rotations";
+    let path = "/api/v1/apps/secrets/secret-rotations";
     assert_eq!(
         call(
             &s,
@@ -1752,7 +1763,7 @@ async fn secret_rotation_requires_current_admin_step_up_and_replays_without_stor
         call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Esecrets",
+            "/api/v1/apps/secrets",
             Some("admin"),
             input("secrets"),
             "secret-update-blocked-0001",
@@ -1795,7 +1806,7 @@ async fn secret_rotation_requires_current_admin_step_up_and_replays_without_stor
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Esecrets",
+        "/api/v1/apps/secrets",
         Some("admin"),
         Value::Null,
         "",
@@ -1860,7 +1871,7 @@ async fn lost_rotation_response_recovers_original_result_and_unblocks_configurat
     let (_, pending) = call(
         &s,
         "POST",
-        "/api/v1/apps/tos%3Elost-secret/secret-rotations",
+        "/api/v1/apps/lost-secret/secret-rotations",
         Some("admin"),
         json!({"step_up_assertion":"fresh-step-up-never-persist"}),
         "secret-lost-rotate-0001",
@@ -1896,7 +1907,7 @@ async fn lost_rotation_response_recovers_original_result_and_unblocks_configurat
         call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Elost-secret",
+            "/api/v1/apps/lost-secret",
             Some("admin"),
             input("lost-secret"),
             "secret-lost-update-0001",
@@ -1905,6 +1916,195 @@ async fn lost_rotation_response_recovers_original_result_and_unblocks_configurat
         .await
         .0,
         StatusCode::ACCEPTED
+    );
+}
+
+struct TestRotationIdentity;
+#[async_trait]
+impl IdentityProvider for TestRotationIdentity {
+    async fn login(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unauthorized())
+    }
+    async fn refresh(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unauthorized())
+    }
+    async fn revoke(&self, _: &str, _: &str, _: Option<&str>) -> Result<()> {
+        Err(Error::unauthorized())
+    }
+    async fn authenticate(&self, token: &str, environment: Option<&str>) -> Result<Identity> {
+        let mut identity = Idp {
+            revoked: Arc::new(AtomicBool::new(false)),
+        }
+        .authenticate(token, environment)
+        .await?;
+        if environment.is_some() {
+            identity.testing_environment_id = Some("rotation-test".into());
+        }
+        Ok(identity)
+    }
+}
+struct TestRotationManager {
+    error: std::sync::Mutex<Option<&'static str>>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+#[async_trait]
+impl Management for TestRotationManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("unused"))
+    }
+    async fn rotate_secret(
+        &self,
+        o: &Value,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(code) = *self.error.lock().unwrap() {
+            return Err(Error::new(StatusCode::CONFLICT, code, "fixture"));
+        }
+        Ok(
+            json!({"operation_id":o["operation_id"],"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"state":"accepted","iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"credential_version":2,"app_secret":"fixture-replacement"}),
+        )
+    }
+    async fn operation_result(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(Error::new(
+            StatusCode::CONFLICT,
+            self.error.lock().unwrap().unwrap(),
+            "fixture",
+        ))
+    }
+}
+async fn test_rotation_call(s: &State, path: &str, actor: &str, key: &str) -> (StatusCode, Value) {
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {actor}"))
+                .header("x-testing-environment-key", "rotation-test-key")
+                .header("if-match", "1")
+                .header("idempotency-key", key)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn definitive_test_rotation_rejection_preserves_original_request_and_unblocks_new_rotation() {
+    use sha2::{Digest, Sha256};
+    let (mut s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("test-secrets"),
+        "test-secrets-create-0001",
+        None,
+    )
+    .await;
+    sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES('rotation-test','tos','admin','Testing','','fixture',?,'ready',1,1)")
+        .bind(hex::encode(Sha256::digest("rotation-test-key"))).execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,state,created_at,updated_at) SELECT 'rotation-test',app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,state,created_at,updated_at FROM applications WHERE app_id='test-secrets'")
+        .execute(&s.db).await.unwrap();
+    s.identity = Arc::new(TestRotationIdentity);
+    let manager = Arc::new(TestRotationManager {
+        error: std::sync::Mutex::new(Some("integration_unavailable")),
+        calls: Default::default(),
+    });
+    s.management = manager.clone();
+    let path = "/api/v1/apps/test-secrets/secret-rotations";
+    let (_, pending) = test_rotation_call(&s, path, "admin", "test-rotation-original-0001").await;
+    assert_eq!(pending["state"], "pending");
+    let id = pending["id"].as_str().unwrap();
+    let original: (String, String) =
+        sqlx::query_as("SELECT request_json,request_hash FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    let recovery = format!("/api/v1/operations/{id}/result");
+    assert_eq!(
+        test_rotation_call(&s, &recovery, "outsider", "test-recovery-other-0001")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // A generic revision conflict may conceal committed work and stays pending.
+    *manager.error.lock().unwrap() = Some("revision_conflict");
+    assert_eq!(
+        test_rotation_call(&s, &recovery, "admin", "test-recovery-pending-0001")
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        "pending"
+    );
+    *manager.error.lock().unwrap() = Some("testing_configuration_revision_conflict");
+    let (_, rejected) =
+        test_rotation_call(&s, &recovery, "admin", "test-recovery-reject-0001").await;
+    assert_eq!(rejected["state"], "rejected");
+    assert_eq!(rejected["id"], id);
+    assert!(rejected.get("app_secret").is_none());
+    let unchanged: (String, String) =
+        sqlx::query_as("SELECT request_json,request_hash FROM operations WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(original, unchanged);
+    let calls = manager.calls.load(Ordering::SeqCst);
+    assert_eq!(
+        test_rotation_call(&s, path, "admin", "test-rotation-original-0001")
+            .await
+            .1["state"],
+        "rejected"
+    );
+    assert_eq!(
+        test_rotation_call(&s, &recovery, "admin", "test-recovery-repeat-0001")
+            .await
+            .1["state"],
+        "rejected"
+    );
+    assert_eq!(manager.calls.load(Ordering::SeqCst), calls);
+    *manager.error.lock().unwrap() = None;
+    let (_, accepted) = test_rotation_call(&s, path, "admin", "test-rotation-fresh-0001").await;
+    assert_eq!(accepted["state"], "accepted");
+    assert_ne!(accepted["id"], id);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM operations WHERE plane='rotation-test' AND state='pending'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit WHERE action='application.secret.reject'"
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+        1
     );
 }
 
@@ -1951,7 +2151,7 @@ impl Management for ReviewManager {
     }
     async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
         Ok(
-            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"iam","scopes":["directory.carbons.read"]},{"provider":"other>provider","scopes":["obo:other>provider:files.read"]},{"provider":"honeycomb","scopes":[]}]}),
+            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"iam","scopes":["directory.carbons.read"]},{"provider":"provider","scopes":["obo:provider:files.read"]},{"provider":"honeycomb","scopes":[]}]}),
         )
     }
     async fn review_eligibility(
@@ -1964,7 +2164,7 @@ impl Management for ReviewManager {
         assert!(plan.starts_with("plan-"));
         Ok(matches!(
             (provider, token),
-            ("iam", "iam-reviewer") | ("honeycomb", "validator") | ("other>provider", "outsider")
+            ("iam", "iam-reviewer") | ("honeycomb", "validator") | ("provider", "outsider")
         ))
     }
     async fn notification_recipients(&self, org: &str) -> Result<Vec<String>> {
@@ -1982,7 +2182,7 @@ impl Management for ReviewManager {
         assert!(plan.starts_with("plan-"));
         let email = match provider {
             "owners" => "requester@example.com",
-            "other>provider" => "provider@example.com",
+            "provider" => "provider@example.com",
             "iam" => "iam-reviewer@example.com",
             "honeycomb" => "validator@example.com",
             _ => panic!("Notification sent to an unrelated provider"),
@@ -1999,9 +2199,9 @@ impl Management for ReviewManager {
     }
 }
 async fn review_application(s: &State) -> String {
-    import_source(s, "other>provider", &[], true).await;
+    import_source(s, "provider", &[], true).await;
     let mut config = input("review-app");
-    config["app_scope"] = json!({"iam":["self.identity.read","directory.carbons.read"],"external":[{"app_id":"other>provider","endpoint_id":"files.read"}]});
+    config["app_scope"] = json!({"iam":["self.identity.read","directory.carbons.read"],"external":[{"app_id":"provider","endpoint_id":"files.read"}]});
     call(
         s,
         "POST",
@@ -2012,11 +2212,11 @@ async fn review_application(s: &State) -> String {
         None,
     )
     .await;
-    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','1.0.0','fixture-only',1,'fixture-release',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','review-app','1.0.0','fixture-only',1,'fixture-release',1)").execute(&s.db).await.unwrap();
     let (status, result) = call(
         s,
         "POST",
-        "/api/v1/apps/tos%3Ereview-app/publication",
+        "/api/v1/apps/review-app/publication",
         Some("admin"),
         json!({"message":"Please review these requested public scopes."}),
         "review-request-0001",
@@ -2037,11 +2237,11 @@ async fn console_discussions_validate_gates_and_notify_participants_once() {
         .execute(&s.db)
         .await
         .unwrap();
-    let path = "/api/v1/apps/tos%3Ereview-app/publication/messages";
+    let path = "/api/v1/apps/review-app/publication/messages";
     for (actor, provider, expected) in [
         ("admin", "unrelated>provider", StatusCode::NOT_FOUND),
-        ("member", "other>provider", StatusCode::FORBIDDEN),
-        ("outsider", "other>provider", StatusCode::FORBIDDEN),
+        ("member", "provider", StatusCode::FORBIDDEN),
+        ("outsider", "provider", StatusCode::FORBIDDEN),
     ] {
         let (status, _) = call(
             &s,
@@ -2067,7 +2267,7 @@ async fn console_discussions_validate_gates_and_notify_participants_once() {
         .unwrap();
     assert_eq!(count, 0);
 
-    let body = json!({"provider":"other>provider","message":"Private details stay in the authenticated discussion."});
+    let body = json!({"provider":"provider","message":"Private details stay in the authenticated discussion."});
     let (status, first) = call(
         &s,
         "POST",
@@ -2122,7 +2322,7 @@ async fn console_discussions_validate_gates_and_notify_participants_once() {
         );
         assert!(!emails[0].text.contains("Private details"));
     }
-    let provider_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/messages");
+    let provider_path = format!("/api/v1/review-requests/{id}/provider/messages");
     let provider_body = json!({"message":"Private provider response"});
     let (status, reply) = call(
         &s,
@@ -2198,7 +2398,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
         .execute(&s.db)
         .await
         .unwrap();
-    let provider_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions");
+    let provider_path = format!("/api/v1/review-requests/{id}/provider/decisions");
     let validator_path = format!("/api/v1/review-requests/{id}/honeycomb/decisions");
     let (_, inbox) = call(
         &s,
@@ -2210,7 +2410,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
         None,
     )
     .await;
-    assert_eq!(inbox["items"][0]["app_id"], "tos>review-app");
+    assert_eq!(inbox["items"][0]["app_id"], "review-app");
     let (_, inbox) = call(
         &s,
         "GET",
@@ -2250,7 +2450,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
         .0,
         StatusCode::CONFLICT
     );
-    let message_path = format!("/api/v1/review-requests/{id}/other%3Eprovider/messages");
+    let message_path = format!("/api/v1/review-requests/{id}/provider/messages");
     let (_, reply) = call(
         &s,
         "POST",
@@ -2275,7 +2475,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
     let (_, detail) = call(
         &s,
         "GET",
-        &format!("/api/v1/review-requests/{id}/other%3Eprovider"),
+        &format!("/api/v1/review-requests/{id}/provider"),
         Some("admin"),
         Value::Null,
         "",
@@ -2356,7 +2556,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app",
+        "/api/v1/apps/review-app",
         Some("admin"),
         Value::Null,
         "",
@@ -2367,7 +2567,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
     let (_, replay) = call(
         &s,
         "POST",
-        "/api/v1/apps/tos%3Ereview-app/publication",
+        "/api/v1/apps/review-app/publication",
         Some("admin"),
         json!({"message":"Please review these requested public scopes."}),
         "review-request-0001",
@@ -2380,7 +2580,7 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
         call(
             &s,
             "POST",
-            "/api/v1/apps/tos%3Ereview-app/publication",
+            "/api/v1/apps/review-app/publication",
             Some("admin"),
             json!({"message":"Different request"}),
             "review-request-0001",
@@ -2402,7 +2602,7 @@ async fn review_denials_preserve_private_visibility_and_stale_decisions_cannot_a
     let (_, denied) = call(
         &s,
         "POST",
-        &format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions"),
+        &format!("/api/v1/review-requests/{id}/provider/decisions"),
         Some("outsider"),
         json!({"decision":"deny","reason":"Narrow the requested file access."}),
         "review-provider-deny-0001",
@@ -2411,7 +2611,7 @@ async fn review_denials_preserve_private_visibility_and_stale_decisions_cannot_a
     .await;
     assert_eq!(denied["publication_state"], "denied");
     sqlx::query(
-        "UPDATE applications SET revision=2 WHERE plane='production' AND app_id='tos>review-app'",
+        "UPDATE applications SET revision=2 WHERE plane='production' AND app_id='review-app'",
     )
     .execute(&s.db)
     .await
@@ -2433,7 +2633,7 @@ async fn review_denials_preserve_private_visibility_and_stale_decisions_cannot_a
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app",
+        "/api/v1/apps/review-app",
         Some("admin"),
         Value::Null,
         "",
@@ -2450,11 +2650,11 @@ async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effec
     s.storage = Arc::new(PublicationStorage::default());
     s.identity = Arc::new(ReviewIdentity);
     review_application(&s).await;
-    sqlx::query("UPDATE applications SET visibility='public',revision=2 WHERE plane='production' AND app_id='tos>review-app'").execute(&s.db).await.unwrap();
+    sqlx::query("UPDATE applications SET visibility='public',revision=2 WHERE plane='production' AND app_id='review-app'").execute(&s.db).await.unwrap();
     let (status, result) = call(
         &s,
         "POST",
-        "/api/v1/apps/tos%3Ereview-app/publication",
+        "/api/v1/apps/review-app/publication",
         Some("admin"),
         json!({"message":"Review this public app's additional requested scopes."}),
         "review-public-addition-0001",
@@ -2467,7 +2667,7 @@ async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effec
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app",
+        "/api/v1/apps/review-app",
         Some("admin"),
         Value::Null,
         "",
@@ -2476,10 +2676,10 @@ async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effec
     .await;
     assert_eq!(app["effective_revision"], 1);
     assert_eq!(app["revision"], 2);
-    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES('pending-public-config','production','admin','pending-public-config-key','configure','tos>review-app','test-hash',2,1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES('pending-public-config','production','admin','pending-public-config-key','configure','review-app','test-hash',2,1)").execute(&s.db).await.unwrap();
     let id = result["id"].as_str().unwrap();
     for (provider, actor) in [
-        ("other%3Eprovider", "outsider"),
+        ("provider", "outsider"),
         ("iam", "iam-reviewer"),
         ("honeycomb", "validator"),
     ] {
@@ -2513,7 +2713,7 @@ async fn public_apps_can_review_requested_scopes_while_older_scopes_remain_effec
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app",
+        "/api/v1/apps/review-app",
         None,
         Value::Null,
         "",
@@ -2583,6 +2783,7 @@ struct PublicationStorage {
 impl ArchiveStorage for PublicationStorage {
     async fn put(
         &self,
+        _org: &str,
         _: &str,
         _: &str,
         _: &std::path::Path,
@@ -2619,7 +2820,7 @@ impl ArchiveStorage for PublicationStorage {
 }
 async fn approve_publication(s: &State, id: &str) {
     for (provider, actor) in [
-        ("other%3Eprovider", "outsider"),
+        ("provider", "outsider"),
         ("iam", "iam-reviewer"),
         ("honeycomb", "validator"),
     ] {
@@ -2668,7 +2869,7 @@ async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete
         StatusCode::CONFLICT
     );
     approve_publication(&s, &id).await;
-    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','2.0.0','fixture-only',1,'release-two',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','review-app','2.0.0','fixture-only',1,'release-two',1)").execute(&s.db).await.unwrap();
     assert_eq!(
         call(
             &s,
@@ -2699,7 +2900,7 @@ async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             None,
             Value::Null,
             "",
@@ -2713,7 +2914,7 @@ async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete
         call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             Some("admin"),
             input("review-app"),
             "activation-edit-block-0001",
@@ -2727,7 +2928,7 @@ async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete
         call(
             &s,
             "POST",
-            "/api/v1/apps/tos%3Ereview-app/secret-rotations",
+            "/api/v1/apps/review-app/secret-rotations",
             Some("admin"),
             json!({}),
             "activation-rotate-block-0001",
@@ -2754,7 +2955,7 @@ async fn publication_waits_for_iam_and_all_archives_then_retries_only_incomplete
     let (status, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app",
+        "/api/v1/apps/review-app",
         None,
         Value::Null,
         "",
@@ -2830,7 +3031,7 @@ async fn publication_rejects_wrong_receipts_and_rechecks_current_iam_visibility(
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             None,
             Value::Null,
             "",
@@ -2908,7 +3109,7 @@ async fn signed_event(s: &State, event: &Value, valid: bool) -> (StatusCode, Val
     )
 }
 fn management_event(revision: i64) -> Value {
-    json!({"spec_version":"1.0","event_id":uuid::Uuid::new_v4(),"event_type":"honeycomb.application.changed.v1","occurred_at":"2026-09-16T00:00:00Z","organization_id":null,"aggregate":{"type":"application","id":"00000000-0000-0000-0000-000000000001","version":revision},"data":{"app_id":"tos>reconcile"}})
+    json!({"spec_version":"1.0","event_id":uuid::Uuid::new_v4(),"event_type":"honeycomb.application.changed.v1","occurred_at":"2026-09-16T00:00:00Z","organization_id":null,"aggregate":{"type":"application","id":"00000000-0000-0000-0000-000000000001","version":revision},"data":{"app_id":"reconcile"}})
 }
 #[tokio::test]
 async fn periodic_reconciliation_recovers_missed_notifications_and_preserves_newer_targets() {
@@ -2930,7 +3131,7 @@ async fn periodic_reconciliation_recovers_missed_notifications_and_preserves_new
     );
     let config: Value = serde_json::from_str(
         &sqlx::query_scalar::<_, String>(
-            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+            "SELECT effective_config FROM applications WHERE app_id='reconcile'",
         )
         .fetch_one(&s.db)
         .await
@@ -2938,16 +3139,16 @@ async fn periodic_reconciliation_recovers_missed_notifications_and_preserves_new
     )
     .unwrap();
     let manager = Arc::new(SnapshotManager(std::sync::Mutex::new(
-        json!({"app_id":"tos>reconcile","iam_revision":3,"configuration_revision":1,"visibility":"private","availability":"disabled","effective_configuration":config}),
+        json!({"app_id":"reconcile","iam_revision":3,"configuration_revision":1,"visibility":"private","availability":"disabled","effective_configuration":config}),
     )));
     s.management = manager.clone();
-    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='tos>reconcile'")
+    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='reconcile'")
         .execute(&s.db)
         .await
         .unwrap();
     reconciliation::tick(&s).await.unwrap();
     let state: (i64, String, String) = sqlx::query_as(
-        "SELECT iam_revision,visibility,state FROM applications WHERE app_id='tos>reconcile'",
+        "SELECT iam_revision,visibility,state FROM applications WHERE app_id='reconcile'",
     )
     .fetch_one(&s.db)
     .await
@@ -2966,7 +3167,7 @@ async fn periodic_reconciliation_recovers_missed_notifications_and_preserves_new
     reconciliation::tick(&s).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT iam_revision FROM applications WHERE app_id='tos>reconcile'"
+            "SELECT iam_revision FROM applications WHERE app_id='reconcile'"
         )
         .fetch_one(&s.db)
         .await
@@ -3011,20 +3212,20 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
         None,
     )
     .await;
-    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='tos>reconcile'")
+    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='reconcile'")
         .execute(&s.db)
         .await
         .unwrap();
     let config: Value = serde_json::from_str(
         &sqlx::query_scalar::<_, String>(
-            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+            "SELECT effective_config FROM applications WHERE app_id='reconcile'",
         )
         .fetch_one(&s.db)
         .await
         .unwrap(),
     )
     .unwrap();
-    let snapshot = json!({"app_id":"tos>reconcile","iam_revision":3,"configuration_revision":1,"visibility":"private","availability":"disabled","effective_configuration":config});
+    let snapshot = json!({"app_id":"reconcile","iam_revision":3,"configuration_revision":1,"visibility":"private","availability":"disabled","effective_configuration":config});
     let manager = Arc::new(SnapshotManager(std::sync::Mutex::new(snapshot)));
     s.management = manager.clone();
     let event = management_event(3);
@@ -3036,7 +3237,7 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereconcile",
+            "/api/v1/apps/reconcile",
             None,
             Value::Null,
             "",
@@ -3053,7 +3254,7 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereconcile",
+            "/api/v1/apps/reconcile",
             None,
             Value::Null,
             "",
@@ -3063,14 +3264,14 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
         .0,
         StatusCode::NOT_FOUND
     );
-    reconciliation::reconcile(&s, "production", "tos>reconcile")
+    reconciliation::reconcile(&s, "production", "reconcile")
         .await
         .unwrap();
     assert_eq!(
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereconcile",
+            "/api/v1/apps/reconcile",
             Some("member"),
             Value::Null,
             "",
@@ -3083,7 +3284,7 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereconcile",
+        "/api/v1/apps/reconcile",
         Some("admin"),
         Value::Null,
         "",
@@ -3100,7 +3301,7 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
     assert_eq!(queued, "accepted");
     signed_event(&s, &management_event(5), true).await;
     assert!(
-        reconciliation::reconcile(&s, "production", "tos>reconcile")
+        reconciliation::reconcile(&s, "production", "reconcile")
             .await
             .is_err()
     );
@@ -3111,13 +3312,13 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
         snapshot["availability"] = json!("active");
         snapshot["effective_configuration"]["app_secret"] = json!("never-save-this");
     }
-    reconciliation::reconcile(&s, "production", "tos>reconcile")
+    reconciliation::reconcile(&s, "production", "reconcile")
         .await
         .unwrap();
     let (_, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereconcile",
+        "/api/v1/apps/reconcile",
         Some("admin"),
         Value::Null,
         "",
@@ -3131,22 +3332,22 @@ async fn signed_management_events_reconcile_revocation_without_stale_or_unpublis
     assert_eq!(app["iam_revision"], 5);
     assert!(!app.to_string().contains("never-save-this"));
     // A genuinely completed local publication may be restored by a newer accepted state.
-    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,created_at) VALUES('published-operation','production','admin','published-operation-key','publication.activate','tos>reconcile','test',1,'accepted',1)").execute(&s.db).await.unwrap();
-    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,activation_operation) VALUES('published-request','production','tos>reconcile',1,'published','admin',1,'published-operation')").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,created_at) VALUES('published-operation','production','admin','published-operation-key','publication.activate','reconcile','test',1,'accepted',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,activation_operation) VALUES('published-request','production','reconcile',1,'published','admin',1,'published-operation')").execute(&s.db).await.unwrap();
     {
         let mut snapshot = manager.0.lock().unwrap();
         snapshot["iam_revision"] = json!(6);
         snapshot["publication_request_id"] = json!("published-request");
     }
     signed_event(&s, &management_event(6), true).await;
-    reconciliation::reconcile(&s, "production", "tos>reconcile")
+    reconciliation::reconcile(&s, "production", "reconcile")
         .await
         .unwrap();
     assert_eq!(
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereconcile",
+            "/api/v1/apps/reconcile",
             None,
             Value::Null,
             "",
@@ -3175,13 +3376,13 @@ async fn management_notifications_remain_in_their_signed_testing_generation() {
     let root = "Abcdefgh123456789012345678901234";
     sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,generation,created_at,last_activity) VALUES('test-events','tos','admin','Events','',?,'unused-test-event-hash','ready',2,1,1)")
         .bind(s.encrypt(root).unwrap()).execute(&s.db).await.unwrap();
-    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,visibility,state,created_at,updated_at) SELECT 'test-events',app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,'public',state,created_at,updated_at FROM applications WHERE plane='production' AND app_id='tos>reconcile'").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,visibility,state,created_at,updated_at) SELECT 'test-events',app_id,org_id,name,description,config,effective_config,webhook_secret,revision,iam_revision,effective_revision,'public',state,created_at,updated_at FROM applications WHERE plane='production' AND app_id='reconcile'").execute(&s.db).await.unwrap();
     let mut metadata = management_event(2);
     metadata.as_object_mut().unwrap().remove("data");
     metadata["aggregate"]["environment_id"] = json!("test-events");
     metadata["aggregate"]["generation"] = json!(1);
     let mut event =
-        json!({"test":{"testing_key":root,"metadata":metadata,"data":{"app_id":"tos>reconcile"}}});
+        json!({"test":{"testing_key":root,"metadata":metadata,"data":{"app_id":"reconcile"}}});
     assert_eq!(signed_event(&s, &event, true).await.0, StatusCode::CONFLICT);
     event["test"]["metadata"]["aggregate"]["generation"] = json!(2);
     let (status, body) = signed_event(&s, &event, true).await;
@@ -3192,7 +3393,7 @@ async fn management_notifications_remain_in_their_signed_testing_generation() {
         .unwrap();
     assert_eq!(plane, "test-events");
     let production: i64 = sqlx::query_scalar(
-        "SELECT iam_revision FROM applications WHERE plane='production' AND app_id='tos>reconcile'",
+        "SELECT iam_revision FROM applications WHERE plane='production' AND app_id='reconcile'",
     )
     .fetch_one(&s.db)
     .await
@@ -3202,7 +3403,7 @@ async fn management_notifications_remain_in_their_signed_testing_generation() {
         .fetch_one(&s.db)
         .await
         .unwrap();
-    assert_eq!(resource, "tos>reconcile");
+    assert_eq!(resource, "reconcile");
     assert!(!resource.contains(root));
     event["test"]["testing_key"] = json!("Bbcdefgh123456789012345678901234");
     assert_eq!(
@@ -3225,7 +3426,7 @@ async fn iam_management_notifications_use_independent_signatures_and_durable_ded
         None,
     )
     .await;
-    let body=json!({"event_id":uuid::Uuid::new_v4(),"operation_id":uuid::Uuid::new_v4(),"resource_id":"tos>reconcile","environment_id":null,"revision":2,"event_type":"application.scope.decided","data":{"app_secret":"must-never-persist"}}).to_string();
+    let body=json!({"event_id":uuid::Uuid::new_v4(),"operation_id":uuid::Uuid::new_v4(),"resource_id":"reconcile","environment_id":null,"revision":2,"event_type":"application.scope.decided","data":{"app_secret":"must-never-persist"}}).to_string();
     let timestamp = silicon_honeycomb_server::now();
     let key = "independent-management-signing-key";
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).unwrap();
@@ -3272,7 +3473,7 @@ async fn iam_management_notifications_use_independent_signatures_and_durable_ded
         .fetch_one(&s.db)
         .await
         .unwrap();
-    assert_eq!(resource, "tos>reconcile");
+    assert_eq!(resource, "reconcile");
     let queued: i64 = sqlx::query_scalar("SELECT target_revision FROM application_reconciliation")
         .fetch_one(&s.db)
         .await
@@ -3292,15 +3493,15 @@ impl Management for CatalogManager {
     async fn scope_catalog(&self, org: &str, provider: Option<&str>) -> Result<Value> {
         assert_eq!(org, "tos");
         Ok(
-            json!({"items":[{"scope":provider.map(|p|format!("obo:{p}:files.read")).unwrap_or_else(||"self.profile.read".into()),"description":"Read permitted data","critical":provider.is_some(),"eligible":true},{"scope":"obo:hidden>provider:secret","description":"Must be filtered","critical":true,"eligible":true}]}),
+            json!({"items":[{"scope":provider.map(|p|format!("obo:{p}:files.read")).unwrap_or_else(||"self.profile.read".into()),"description":"Read permitted data","critical":provider.is_some(),"eligible":true},{"scope":"obo:provider:secret","description":"Must be filtered","critical":true,"eligible":true}]}),
         )
     }
 }
 #[tokio::test]
 async fn permission_discovery_requires_current_admin_and_does_not_reveal_private_providers() {
     let (mut s, _) = setup(true).await;
-    import_source(&s, "other>private-provider", &[], false).await;
-    sqlx::query("UPDATE applications SET effective_config=json_set(effective_config,'$.obo_endpoints',json('[{\"endpoint_id\":\"files.read\",\"path\":\"/files\",\"critical\":true}]')) WHERE app_id='other>private-provider'").execute(&s.db).await.unwrap();
+    import_source(&s, "private-provider", &[], false).await;
+    sqlx::query("UPDATE applications SET effective_config=json_set(effective_config,'$.obo_endpoints',json('[{\"endpoint_id\":\"files.read\",\"path\":\"/files\",\"critical\":true}]')) WHERE app_id='private-provider'").execute(&s.db).await.unwrap();
     s.management = Arc::new(CatalogManager);
     let path = "/api/v1/organizations/tos/scope-catalog";
     for actor in [Some("member"), Some("outsider"), None] {
@@ -3315,27 +3516,25 @@ async fn permission_discovery_requires_current_admin_and_does_not_reveal_private
     assert_eq!(status, StatusCode::OK);
     assert_eq!(catalog["items"].as_array().unwrap().len(), 1);
     assert_eq!(catalog["providers"], json!([]));
-    let provider = format!("{path}?provider=other%3Eprivate-provider");
+    let provider = format!("{path}?provider=private-provider");
     assert_eq!(
         call(&s, "GET", &provider, Some("admin"), Value::Null, "", None)
             .await
             .0,
         StatusCode::NOT_FOUND
     );
-    sqlx::query(
-        "UPDATE applications SET visibility='public' WHERE app_id='other>private-provider'",
-    )
-    .execute(&s.db)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE applications SET visibility='public' WHERE app_id='private-provider'")
+        .execute(&s.db)
+        .await
+        .unwrap();
     let (status, catalog) = call(&s, "GET", &provider, Some("admin"), Value::Null, "", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(catalog["items"].as_array().unwrap().len(), 1);
     assert_eq!(
         catalog["items"][0]["scope"],
-        "obo:other>private-provider:files.read"
+        "obo:private-provider:files.read"
     );
-    assert_eq!(catalog["providers"][0]["app_id"], "other>private-provider");
+    assert_eq!(catalog["providers"][0]["app_id"], "private-provider");
 }
 
 struct WebhookManager {
@@ -3413,7 +3612,7 @@ async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_witho
         None,
     )
     .await;
-    let path = "/api/v1/apps/tos%3Ewebhooks/webhook";
+    let path = "/api/v1/apps/webhooks/webhook";
     for (token, status) in [
         (None, StatusCode::UNAUTHORIZED),
         (Some("member"), StatusCode::FORBIDDEN),
@@ -3485,7 +3684,7 @@ async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_witho
         call(
             &s,
             "PUT",
-            "/api/v1/apps/tos%3Ewebhooks",
+            "/api/v1/apps/webhooks",
             Some("admin"),
             input("webhooks"),
             "webhook-edit-blocked-0001",
@@ -3499,7 +3698,7 @@ async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_witho
         call(
             &s,
             "POST",
-            "/api/v1/apps/tos%3Ewebhooks/secret-rotations",
+            "/api/v1/apps/webhooks/secret-rotations",
             Some("admin"),
             json!({}),
             "webhook-secret-blocked-0001",
@@ -3583,7 +3782,7 @@ async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_witho
     assert_eq!(result["state"], "accepted");
     assert_eq!(result["webhook_secret_version"], 2);
     let encrypted: String =
-        sqlx::query_scalar("SELECT webhook_secret FROM applications WHERE app_id='tos>webhooks'")
+        sqlx::query_scalar("SELECT webhook_secret FROM applications WHERE app_id='webhooks'")
             .fetch_one(&s.db)
             .await
             .unwrap();
@@ -3601,7 +3800,7 @@ async fn webhook_changes_require_current_authority_bind_endpoint_and_retry_witho
     let (_, operations) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ewebhooks/operations",
+        "/api/v1/apps/webhooks/operations",
         Some("admin"),
         json!({}),
         "webhook-list-0001",
@@ -3619,19 +3818,19 @@ async fn retention_fixture(s: &State) -> i64 {
     sqlx::query("INSERT INTO environments(id,org_id,creator,name,description,encrypted_key,key_hash,state,created_at,last_activity) VALUES('retention-env','tos','admin','Retention','',?,?,'ready',?,?)")
         .bind(s.encrypt(root).unwrap()).bind(hex::encode(Sha256::digest(root))).bind(at-40*86400).bind(at-40*86400).execute(&s.db).await.unwrap();
     for (app, days, dependencies) in [
-        ("a", 1, vec!["tos>b"]),
-        ("b", 1, vec!["tos>c"]),
-        ("c", 1, vec!["tos>b"]),
+        ("a", 1, vec!["b"]),
+        ("b", 1, vec!["c"]),
+        ("c", 1, vec!["b"]),
         ("d", 1, vec![]),
         ("long", 1, vec![]),
     ] {
         let config=json!({"testing_idle_days":days,"app_scope":{"external":dependencies.into_iter().map(|d|json!({"app_id":d,"endpoint_id":"use"})).collect::<Vec<_>>()}}).to_string();
-        let id = format!("tos>{app}");
+        let id = app.to_string();
         sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('retention-env',?,'tos',?,'','active',1,1,?,?,'',?,?)")
             .bind(&id).bind(app).bind(&config).bind(&config).bind(at-40*86400).bind(at).execute(&s.db).await.unwrap();
         sqlx::query("INSERT INTO environment_app_activity(environment_id,app_id,last_activity) VALUES('retention-env',?,?)").bind(&id).bind(if app=="a" {at} else {at-40*86400}).execute(&s.db).await.unwrap();
     }
-    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production','tos>long','tos','Long','','active',1,1,'{}','{\"testing_idle_days\":90}','',?,?)").bind(at).bind(at).execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,state,iam_revision,effective_revision,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production','long','tos','Long','','active',1,1,'{}','{\"testing_idle_days\":90}','',?,?)").bind(at).bind(at).execute(&s.db).await.unwrap();
     at
 }
 #[tokio::test]
@@ -3643,17 +3842,17 @@ async fn retention_protects_transitive_dependencies_cycles_and_longer_production
         .await
         .unwrap();
     let apps = plan["applications"].as_array().unwrap();
-    for id in ["tos>b", "tos>c"] {
+    for id in ["b", "c"] {
         let app = apps.iter().find(|a| a["app_id"] == id).unwrap();
         assert_eq!(app["required_by_active_app"], true);
         assert_eq!(app["eligible_for_retirement"], false);
     }
     assert_eq!(
-        apps.iter().find(|a| a["app_id"] == "tos>d").unwrap()["eligible_for_retirement"],
+        apps.iter().find(|a| a["app_id"] == "d").unwrap()["eligible_for_retirement"],
         true
     );
     assert_eq!(
-        apps.iter().find(|a| a["app_id"] == "tos>long").unwrap()["idle_days"],
+        apps.iter().find(|a| a["app_id"] == "long").unwrap()["idle_days"],
         90
     );
     assert_eq!(plan["delete_after"], at + 50 * 86400);
@@ -3678,7 +3877,7 @@ async fn retention_protects_transitive_dependencies_cycles_and_longer_production
 async fn activity_is_generation_bound_server_timed_and_replay_does_not_keep_environment_alive() {
     let (s, _) = setup(true).await;
     let at = retention_fixture(&s).await;
-    let path = "/api/v1/environments/retention-env/apps/tos%3Ed/activity";
+    let path = "/api/v1/environments/retention-env/apps/d/activity";
     let payload = json!({"generation":1,"key_version":1});
     assert_eq!(
         call(
@@ -3735,7 +3934,7 @@ async fn activity_is_generation_bound_server_timed_and_replay_does_not_keep_envi
         call(
             &s,
             "POST",
-            "/api/v1/environments/retention-env/apps/tos%3Eb/activity",
+            "/api/v1/environments/retention-env/apps/b/activity",
             Some("admin"),
             payload,
             "activity-report-0001",
@@ -3908,8 +4107,8 @@ impl Management for RetentionServices {
             .lock()
             .unwrap()
             .push((app.into(), o["action"].as_str().unwrap().into()));
-        if (app == "tos>iam" && self.fail_iam.load(Ordering::SeqCst))
-            || (app == "tos>briefcase" && self.fail_storage.load(Ordering::SeqCst))
+        if (app == "iam" && self.fail_iam.load(Ordering::SeqCst))
+            || (app == "briefcase" && self.fail_storage.load(Ordering::SeqCst))
         {
             return Err(Error::unavailable("Service temporarily unavailable"));
         }
@@ -3919,7 +4118,7 @@ impl Management for RetentionServices {
     }
 }
 async fn add_storage_participant(s: &State) {
-    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES('retention-env','tos>briefcase',1,'{}','ready','earlier',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES('retention-env','briefcase',1,'{}','ready','earlier',1)").execute(&s.db).await.unwrap();
 }
 #[tokio::test]
 async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_and_production() {
@@ -3945,7 +4144,7 @@ async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_
             .fetch_all(&s.db)
             .await
             .unwrap();
-    assert_eq!(targets, vec!["tos>d"]);
+    assert_eq!(targets, vec!["d"]);
     silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
         .await
         .unwrap();
@@ -3963,7 +4162,7 @@ async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_
         call(
             &s,
             "POST",
-            "/api/v1/environments/retention-env/apps/tos%3Ed/activity",
+            "/api/v1/environments/retention-env/apps/d/activity",
             Some("admin"),
             json!({"generation":1,"key_version":1}),
             "retiring-activity-0001",
@@ -3977,7 +4176,7 @@ async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_
         call(
             &s,
             "POST",
-            "/api/v1/environments/retention-env/apps/tos%3Ea/activity",
+            "/api/v1/environments/retention-env/apps/a/activity",
             Some("admin"),
             json!({"generation":1,"key_version":1}),
             "active-survivor-0001",
@@ -4004,7 +4203,7 @@ async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_
         .lock()
         .unwrap()
         .iter()
-        .filter(|(a, _)| a == "tos>iam")
+        .filter(|(a, _)| a == "iam")
         .count();
     services.fail_storage.store(false, Ordering::SeqCst);
     let completed = silicon_honeycomb_server::lifecycle::coordinate(&s, "retention-env", &op, "")
@@ -4017,7 +4216,7 @@ async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_
             .lock()
             .unwrap()
             .iter()
-            .filter(|(a, _)| a == "tos>iam")
+            .filter(|(a, _)| a == "iam")
             .count(),
         iam_calls
     );
@@ -4032,7 +4231,7 @@ async fn scheduled_retirement_requires_exact_receipts_and_preserves_active_apps_
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM applications WHERE plane='production' AND app_id='tos>long'"
+            "SELECT COUNT(*) FROM applications WHERE plane='production' AND app_id='long'"
         )
         .fetch_one(&s.db)
         .await
@@ -4201,6 +4400,7 @@ impl ArchiveStorage for LogoStorage {
     }
     async fn put(
         &self,
+        _org: &str,
         _: &str,
         _: &str,
         _: &std::path::Path,
@@ -4525,20 +4725,20 @@ async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() 
     .await;
     let config: Value = serde_json::from_str(
         &sqlx::query_scalar::<_, String>(
-            "SELECT effective_config FROM applications WHERE app_id='tos>reconcile'",
+            "SELECT effective_config FROM applications WHERE app_id='reconcile'",
         )
         .fetch_one(&s.db)
         .await
         .unwrap(),
     )
     .unwrap();
-    sqlx::query("UPDATE applications SET revision=0,effective_revision=0,iam_revision=9,credential_version=1,webhook_secret='' WHERE app_id='tos>reconcile'").execute(&s.db).await.unwrap();
+    sqlx::query("UPDATE applications SET revision=0,effective_revision=0,iam_revision=9,credential_version=1,webhook_secret='' WHERE app_id='reconcile'").execute(&s.db).await.unwrap();
     let manager = Arc::new(SnapshotManager(std::sync::Mutex::new(
-        json!({"app_id":"tos>reconcile","iam_revision":10,"configuration_revision":0,"visibility":"public","availability":"active","effective_configuration":config}),
+        json!({"app_id":"reconcile","iam_revision":10,"configuration_revision":0,"visibility":"public","availability":"active","effective_configuration":config}),
     )));
     s.management = manager.clone();
     reconciliation::tick(&s).await.unwrap();
-    let result: (i64, i64, String, String, i64) = sqlx::query_as("SELECT iam_revision,effective_revision,visibility,state,credential_version FROM applications WHERE app_id='tos>reconcile'").fetch_one(&s.db).await.unwrap();
+    let result: (i64, i64, String, String, i64) = sqlx::query_as("SELECT iam_revision,effective_revision,visibility,state,credential_version FROM applications WHERE app_id='reconcile'").fetch_one(&s.db).await.unwrap();
     assert_eq!(result, (10, 0, "private".into(), "active".into(), 1));
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT state FROM application_reconciliation")
@@ -4557,7 +4757,7 @@ async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() 
         .await
         .unwrap();
     assert!(
-        reconciliation::reconcile(&s, "production", "tos>reconcile")
+        reconciliation::reconcile(&s, "production", "reconcile")
             .await
             .is_err()
     );
@@ -4569,7 +4769,7 @@ async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() 
     .await
     .unwrap();
     assert!(
-        reconciliation::reconcile(&s, "production", "tos>reconcile")
+        reconciliation::reconcile(&s, "production", "reconcile")
             .await
             .is_err()
     );
@@ -4582,9 +4782,200 @@ async fn adopted_legacy_revision_zero_reconciles_without_granting_publication() 
         .unwrap()
         .remove("configuration_revision");
     assert!(
-        reconciliation::reconcile(&s, "production", "tos>reconcile")
+        reconciliation::reconcile(&s, "production", "reconcile")
             .await
             .is_err()
+    );
+}
+
+struct PublicAdoptionManager {
+    snapshot: std::sync::Mutex<Value>,
+    configurations: std::sync::Mutex<Vec<Value>>,
+}
+#[async_trait]
+impl Management for PublicAdoptionManager {
+    async fn configure(&self, request: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        // Like IAM, leave the current accepted public configuration live while
+        // the proposed change completes ordinary publication authorization.
+        assert_eq!(request["visibility"], "public");
+        self.configurations.lock().unwrap().push(request.clone());
+        Ok(json!({"state":"pending"}))
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        unreachable!()
+    }
+    async fn application_snapshot(&self, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn adopted_public_identity_survives_pending_configuration_but_cannot_approve_it() {
+    use silicon_honeycomb_server::reconciliation;
+    let (mut s, _) = setup(true).await;
+    call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        input("reconcile"),
+        "public-adoption-create-0001",
+        None,
+    )
+    .await;
+    let config: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT effective_config FROM applications WHERE app_id='reconcile'",
+        )
+        .fetch_one(&s.db)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    sqlx::query("UPDATE applications SET revision=0,effective_revision=0,iam_revision=9,credential_version=1,visibility='public',webhook_secret='' WHERE app_id='reconcile'").execute(&s.db).await.unwrap();
+    let receipt = json!({"app_id":"reconcile","configuration_revision":0,"iam_revision":9,"visibility":"public","preserved_public_visibility":true});
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,result,created_at) VALUES('public-adoption','production','operator:test','public-adoption','iam.adopt','reconcile','hash',0,'accepted',?,0)")
+        .bind(receipt.to_string()).execute(&s.db).await.unwrap();
+    let manager = Arc::new(PublicAdoptionManager {
+        snapshot: std::sync::Mutex::new(json!({
+            "app_id":"reconcile","iam_revision":10,"configuration_revision":0,
+            "visibility":"public","availability":"active","effective_configuration":config,
+        })),
+        configurations: Default::default(),
+    });
+    s.management = manager.clone();
+    reconciliation::tick(&s).await.unwrap();
+    let visibility = || {
+        sqlx::query_scalar::<_, String>(
+            "SELECT visibility FROM applications WHERE app_id='reconcile'",
+        )
+        .fetch_one(&s.db)
+    };
+    assert_eq!(visibility().await.unwrap(), "public");
+    // A desired configuration must not disable the existing public IAM identity
+    // while its ordinary publication request is prepared and reviewed.
+    // A notification first hides the local catalog entry until its authoritative
+    // snapshot arrives. Updating in that window must never configure IAM private.
+    reconciliation::receive(
+        &s,
+        "production",
+        &json!({
+            "event_id":"public-adoption-event", "event_type":"honeycomb.application.changed.v1",
+            "aggregate":{"type":"application","version":11}, "data":{"app_id":"reconcile"},
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(visibility().await.unwrap(), "private");
+    let mut proposed = input("reconcile");
+    proposed["visibility"] = json!("public");
+    proposed["app_scope"]["iam"] = json!(["self.identity.read", "self.tags.read"]);
+    let (status, pending) = call(
+        &s,
+        "PUT",
+        "/api/v1/apps/reconcile",
+        Some("admin"),
+        proposed,
+        "public-adoption-config-0001",
+        Some(0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{pending}");
+    assert_eq!(pending["state"], "pending");
+    assert!(manager.configurations.lock().unwrap().is_empty());
+    manager.snapshot.lock().unwrap()["iam_revision"] = json!(11);
+    reconciliation::reconcile(&s, "production", "reconcile")
+        .await
+        .unwrap();
+    assert_eq!(visibility().await.unwrap(), "public");
+    let (status, retried) = call(
+        &s,
+        "POST",
+        &format!(
+            "/api/v1/operations/{}/retry",
+            pending["id"].as_str().unwrap()
+        ),
+        Some("admin"),
+        json!({}),
+        "public-adoption-retry-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried["state"], "pending");
+    assert_eq!(manager.configurations.lock().unwrap().len(), 1);
+    assert_eq!(
+        manager.configurations.lock().unwrap()[0]["expected_iam_revision"],
+        11
+    );
+    let (desired, effective): (i64, i64) = sqlx::query_as(
+        "SELECT revision,effective_revision FROM applications WHERE app_id='reconcile'",
+    )
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!((desired, effective), (1, 0));
+    assert_eq!(visibility().await.unwrap(), "public");
+    for invalid_receipt in [
+        json!({"app_id":"reconcile","configuration_revision":0,"iam_revision":9,"visibility":"public"}),
+        json!({"app_id":"other","configuration_revision":0,"iam_revision":9,"visibility":"public","preserved_public_visibility":true}),
+    ] {
+        sqlx::query("UPDATE operations SET result=? WHERE id='public-adoption'")
+            .bind(invalid_receipt.to_string())
+            .execute(&s.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE application_reconciliation SET state='pending'")
+            .execute(&s.db)
+            .await
+            .unwrap();
+        reconciliation::reconcile(&s, "production", "reconcile")
+            .await
+            .unwrap();
+        assert_eq!(visibility().await.unwrap(), "private");
+    }
+    sqlx::query("UPDATE operations SET result=? WHERE id='public-adoption'")
+        .bind(receipt.to_string())
+        .execute(&s.db)
+        .await
+        .unwrap();
+    // The operator receipt never overrides current IAM visibility/availability.
+    for (iam_visibility, availability) in [("private", "active"), ("public", "disabled")] {
+        {
+            let mut snapshot = manager.snapshot.lock().unwrap();
+            snapshot["visibility"] = json!(iam_visibility);
+            snapshot["availability"] = json!(availability);
+        }
+        sqlx::query("UPDATE application_reconciliation SET state='pending'")
+            .execute(&s.db)
+            .await
+            .unwrap();
+        reconciliation::reconcile(&s, "production", "reconcile")
+            .await
+            .unwrap();
+        assert_eq!(visibility().await.unwrap(), "private");
+    }
+    // A later accepted configuration needs its own completed publication proof.
+    {
+        let mut snapshot = manager.snapshot.lock().unwrap();
+        snapshot["visibility"] = json!("public");
+        snapshot["availability"] = json!("active");
+        snapshot["configuration_revision"] = json!(1);
+    }
+    sqlx::query("UPDATE application_reconciliation SET state='pending'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    reconciliation::reconcile(&s, "production", "reconcile")
+        .await
+        .unwrap();
+    assert_eq!(visibility().await.unwrap(), "private");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM publication_requests")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
     );
 }
 
@@ -4631,8 +5022,8 @@ impl Management for ConfiguredIdentityServices {
 }
 async fn configured_identity_environment() -> (State, Arc<ConfiguredIdentityServices>, Value) {
     let (mut s, _) = setup(true).await;
-    s.iam_app_id = "vendor>identity".into();
-    s.app_id = "vendor>coordinator".into();
+    s.iam_app_id = "identity".into();
+    s.app_id = "coordinator".into();
     let services = Arc::new(ConfiguredIdentityServices {
         db: s.db.clone(),
         identity: s.iam_app_id.clone(),
@@ -4664,8 +5055,8 @@ async fn configured_identity_environment_creation_uses_service_roles() {
     .fetch_all(&s.db)
     .await
     .unwrap();
-    assert_eq!(participants, ["vendor>coordinator", "vendor>identity"]);
-    assert_eq!(*services.calls.lock().unwrap(), ["vendor>identity"]);
+    assert_eq!(participants, ["coordinator", "identity"]);
+    assert_eq!(*services.calls.lock().unwrap(), ["identity"]);
 }
 #[tokio::test]
 async fn cleaned_participants_remain_linked_for_deletion_and_restoration() {
@@ -4673,7 +5064,7 @@ async fn cleaned_participants_remain_linked_for_deletion_and_restoration() {
     let id = env["environment_id"].as_str().unwrap();
     // Old product handles are ordinary participants when another identity and
     // coordinator are configured. They must not acquire implicit core status.
-    for app in ["aaa>participant", "tos>iam", "tos>honeycomb"] {
+    for app in ["participant", "iam", "honeycomb"] {
         sqlx::query("INSERT INTO environment_services(environment_id,app_id,source_revision,snapshot,state,operation_id,generation) VALUES(?,?,1,'{}','ready',?,1)")
             .bind(id).bind(app).bind(env["operation_id"].as_str().unwrap())
             .execute(&s.db).await.unwrap();
@@ -4694,12 +5085,7 @@ async fn cleaned_participants_remain_linked_for_deletion_and_restoration() {
     assert_eq!(result["generation"], 2);
     assert_eq!(
         *services.calls.lock().unwrap(),
-        [
-            "vendor>identity",
-            "aaa>participant",
-            "tos>honeycomb",
-            "tos>iam"
-        ]
+        ["identity", "honeycomb", "iam", "participant"]
     );
     let participants: Vec<String> = sqlx::query_scalar(
         "SELECT app_id FROM environment_services WHERE environment_id=? ORDER BY app_id",
@@ -4710,13 +5096,7 @@ async fn cleaned_participants_remain_linked_for_deletion_and_restoration() {
     .unwrap();
     assert_eq!(
         participants,
-        [
-            "aaa>participant",
-            "tos>honeycomb",
-            "tos>iam",
-            "vendor>coordinator",
-            "vendor>identity"
-        ]
+        ["coordinator", "honeycomb", "iam", "identity", "participant"]
     );
     let ready: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM environment_services WHERE environment_id=? AND state='ready' AND generation=2",
@@ -4738,12 +5118,7 @@ async fn cleaned_participants_remain_linked_for_deletion_and_restoration() {
         assert_eq!(result["state"], state);
         assert_eq!(
             *services.calls.lock().unwrap(),
-            [
-                "vendor>identity",
-                "aaa>participant",
-                "tos>honeycomb",
-                "tos>iam"
-            ]
+            ["identity", "honeycomb", "iam", "participant"]
         );
     }
 }
@@ -4802,15 +5177,15 @@ async fn publication_plans_require_iam_validator_and_exact_qualified_scopes() {
     s.management = Arc::new(ReviewManager::default());
     let id = review_application(&s).await;
     let validator = json!({"provider":"honeycomb","scopes":[]});
-    let provider = json!({"provider":"other>provider","scopes":["obo:other>provider:files.read"]});
+    let provider = json!({"provider":"provider","scopes":["obo:provider:files.read"]});
     for gates in [
         json!([]),
         json!([provider.clone()]),
         json!([validator.clone(), validator.clone()]),
         json!([{"provider":"honeycomb","scopes":["self.identity.read"]}]),
-        json!([validator.clone(), {"provider":"other>provider","scopes":["files.read"]}]),
-        json!([validator.clone(), {"provider":"other>provider","scopes":["obo:unrelated>provider:files.read"]}]),
-        json!([validator.clone(), {"provider":"other>provider","scopes":[]}]),
+        json!([validator.clone(), {"provider":"provider","scopes":["files.read"]}]),
+        json!([validator.clone(), {"provider":"provider","scopes":["obo:unrelated>provider:files.read"]}]),
+        json!([validator.clone(), {"provider":"provider","scopes":[]}]),
     ] {
         sqlx::query("DELETE FROM review_gates WHERE request_id=?")
             .bind(&id)
@@ -4875,10 +5250,7 @@ async fn publication_plans_require_iam_validator_and_exact_qualified_scopes() {
         gates,
         [
             ("honeycomb".into(), "[]".into()),
-            (
-                "other>provider".into(),
-                "[\"obo:other>provider:files.read\"]".into()
-            )
+            ("provider".into(), "[\"obo:provider:files.read\"]".into())
         ]
     );
 }
@@ -4894,7 +5266,7 @@ async fn publication_review_checks_live_plan_eligibility_and_iam_reason_limits()
     });
     s.management = manager.clone();
     s.identity = Arc::new(ReviewIdentity);
-    let path = format!("/api/v1/review-requests/{id}/other%3Eprovider/decisions");
+    let path = format!("/api/v1/review-requests/{id}/provider/decisions");
     let (status, _) = call(
         &s,
         "POST",
@@ -4959,14 +5331,7 @@ async fn publication_review_checks_live_plan_eligibility_and_iam_reason_limits()
     assert_eq!(result["state"], "accepted");
     assert_eq!(
         *manager.eligibility_calls.lock().unwrap(),
-        vec![
-            (
-                format!("plan-{id}"),
-                "other>provider".into(),
-                "outsider".into()
-            );
-            2
-        ]
+        vec![(format!("plan-{id}"), "provider".into(), "outsider".into()); 2]
     );
 }
 
@@ -4975,7 +5340,7 @@ async fn environment_changes_wait_for_pending_test_configuration_without_mutatin
     let (s, services, env) = configured_identity_environment().await;
     let id = env["environment_id"].as_str().unwrap();
     let pending = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,'member',?,'configure','vendor>app','fixture',1,1)")
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,?,'member',?,'configure','app','fixture',1,1)")
         .bind(&pending).bind(id).bind(&pending).execute(&s.db).await.unwrap();
     let before: (i64, i64, i64, String) = sqlx::query_as(
         "SELECT revision,generation,key_version,key_hash FROM environments WHERE id=?",
@@ -5082,7 +5447,7 @@ async fn final_external_validator_approval_publishes_without_owner_confirmation(
     let (status, app) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app",
+        "/api/v1/apps/review-app",
         None,
         Value::Null,
         "",
@@ -5116,7 +5481,7 @@ async fn automatic_publication_retries_storage_without_repeating_completed_steps
     s.storage = storage.clone();
     s.identity = Arc::new(ReviewIdentity);
     let id = review_application(&s).await;
-    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','2.0.0','fixture-only',1,'release-two',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','review-app','2.0.0','fixture-only',1,'release-two',1)").execute(&s.db).await.unwrap();
     approve_publication(&s, &id).await;
     let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
         .bind(&id)
@@ -5128,7 +5493,7 @@ async fn automatic_publication_retries_storage_without_repeating_completed_steps
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             None,
             Value::Null,
             "",
@@ -5178,7 +5543,7 @@ async fn requester_sign_in_resumes_approved_legacy_request_without_confirmation(
     let (_, history) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app/publication",
+        "/api/v1/apps/review-app/publication",
         Some("admin"),
         Value::Null,
         "",
@@ -5214,7 +5579,7 @@ async fn another_current_app_manager_can_complete_a_legacy_request_without_rewri
         .await
         .unwrap();
     approve_publication(&s, &id).await;
-    let path = "/api/v1/apps/tos%3Ereview-app/publication";
+    let path = "/api/v1/apps/review-app/publication";
     assert_eq!(
         call(&s, "GET", path, Some("member"), Value::Null, "", None)
             .await
@@ -5284,7 +5649,7 @@ async fn expired_requester_authorization_keeps_approvals_and_sign_in_resumes_aut
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             None,
             Value::Null,
             "",
@@ -5297,7 +5662,7 @@ async fn expired_requester_authorization_keeps_approvals_and_sign_in_resumes_aut
     call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app/publication",
+        "/api/v1/apps/review-app/publication",
         Some("admin"),
         Value::Null,
         "",
@@ -5311,7 +5676,7 @@ async fn expired_requester_authorization_keeps_approvals_and_sign_in_resumes_aut
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             None,
             Value::Null,
             "",
@@ -5330,7 +5695,7 @@ async fn automatic_publication_discards_authorization_for_a_superseded_revision(
     s.storage = Arc::new(PublicationStorage::default());
     s.identity = Arc::new(ReviewIdentity);
     review_application(&s).await;
-    sqlx::query("UPDATE applications SET revision=2 WHERE app_id='tos>review-app'")
+    sqlx::query("UPDATE applications SET revision=2 WHERE app_id='review-app'")
         .execute(&s.db)
         .await
         .unwrap();
@@ -5346,7 +5711,7 @@ async fn automatic_publication_discards_authorization_for_a_superseded_revision(
         call(
             &s,
             "GET",
-            "/api/v1/apps/tos%3Ereview-app",
+            "/api/v1/apps/review-app",
             None,
             Value::Null,
             "",
@@ -5371,7 +5736,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
         None,
     )
     .await;
-    let publication_path = "/api/v1/apps/tos%3Einvalid-release/publication";
+    let publication_path = "/api/v1/apps/invalid-release/publication";
     let (_, missing) = call(
         &s,
         "POST",
@@ -5416,7 +5781,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
     );
     let request = Request::builder()
         .method("POST")
-        .uri("/api/v1/apps/tos%3Einvalid-release/releases?channel=prod")
+        .uri("/api/v1/apps/invalid-release/releases?channel=prod")
         .header("authorization", "Bearer admin")
         .header("if-match", "1")
         .header("idempotency-key", "upload-invalid-release")
@@ -5442,7 +5807,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
         .with_token("admin");
     let error = client
         .upload_release(
-            "tos>invalid-release",
+            "invalid-release",
             &archive_path,
             honeycomb_client::ReleaseChannel::Prod,
             &honeycomb_client::Mutation::at_revision(1),
@@ -5494,7 +5859,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
         0
     );
     // Old revision failures are never attributed to a new application revision.
-    sqlx::query("UPDATE applications SET revision=2 WHERE app_id='tos>invalid-release'")
+    sqlx::query("UPDATE applications SET revision=2 WHERE app_id='invalid-release'")
         .execute(&s.db)
         .await
         .unwrap();
@@ -5546,7 +5911,7 @@ async fn publication_reports_exact_release_validation_and_separate_iam_blockers(
     let repaired = honeycomb_core::package::pack(dir.path(), None).unwrap();
     let request = Request::builder()
         .method("POST")
-        .uri("/api/v1/apps/tos%3Einvalid-release/releases?channel=prod")
+        .uri("/api/v1/apps/invalid-release/releases?channel=prod")
         .header("authorization", "Bearer admin")
         .header("if-match", "2")
         .header("idempotency-key", "upload-repaired-release")
@@ -5601,7 +5966,7 @@ async fn publication_preserves_both_channels_when_they_share_a_version() {
         .execute(&s.db)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','tos>review-app','dev','1.0.0','dev-checksum',1,'dev-release',1)").execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','review-app','dev','1.0.0','dev-checksum',1,'dev-release',1)").execute(&s.db).await.unwrap();
     approve_publication(&s, &id).await;
     let (_, done) = call(
         &s,
@@ -5627,7 +5992,7 @@ async fn publication_preserves_both_channels_when_they_share_a_version() {
         );
     }
     let references: Vec<String> = sqlx::query_scalar(
-        "SELECT storage_ref FROM releases WHERE app_id='tos>review-app' ORDER BY channel",
+        "SELECT storage_ref FROM releases WHERE app_id='review-app' ORDER BY channel",
     )
     .fetch_all(&s.db)
     .await
@@ -5637,7 +6002,7 @@ async fn publication_preserves_both_channels_when_they_share_a_version() {
     let (status, publication) = call(
         &s,
         "GET",
-        "/api/v1/apps/tos%3Ereview-app/publication",
+        "/api/v1/apps/review-app/publication",
         Some("admin"),
         Value::Null,
         "",

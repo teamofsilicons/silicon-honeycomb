@@ -3,7 +3,7 @@
 format_version: 1
 
 # Optional: restrict this archive to one registered application.
-# app_id: "your-org>your-app"
+# app_id: "your-app"
 
 version: "1.0.0"
 

@@ -25,7 +25,9 @@ pub struct Configuration {
     app_ids: Vec<String>,
 }
 fn organization(id: &str) -> Result<&str> {
-    if !honeycomb_core::valid_app_id(id) {
+    if !id.split_once('>').is_some_and(|(org, bundle)| {
+        honeycomb_core::valid_handle(org) && honeycomb_core::valid_handle(bundle)
+    }) {
         return Err(Error::bad("Use an organization-qualified bundle ID"));
     }
     Ok(id.split_once('>').unwrap().0)
@@ -39,7 +41,7 @@ fn authorize(c: &Context, id: &str) -> Result<()> {
     }
     Ok(())
 }
-fn validate(id: &str, input: &Configuration) -> Result<()> {
+async fn validate(s: &State, id: &str, input: &Configuration) -> Result<()> {
     let org = organization(id)?;
     if input.app_name.trim().is_empty() || input.app_name.chars().count() > 200 {
         return Err(Error::bad("Bundle name must contain 1–200 characters"));
@@ -51,7 +53,16 @@ fn validate(id: &str, input: &Configuration) -> Result<()> {
         return Err(Error::bad("Choose 1–100 unique applications"));
     }
     for member in &input.app_ids {
-        if member == id || organization(member)? != org {
+        if !honeycomb_core::valid_app_id(member) {
+            return Err(Error::bad("Bundle members must use bare application IDs"));
+        }
+        let owner: Option<String> = sqlx::query_scalar(
+            "SELECT org_id FROM applications WHERE plane='production' AND app_id=?",
+        )
+        .bind(member)
+        .fetch_optional(&s.db)
+        .await?;
+        if owner.as_deref() != Some(org) {
             return Err(Error::bad(
                 "Bundle members must be distinct applications from the bundle's organization",
             ));
@@ -132,7 +143,7 @@ pub async fn configure(
 ) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
     authorize(&c, &id)?;
-    validate(&id, &input)?;
+    validate(&s, &id, &input).await?;
     let expected = revision(&h)?;
     let k = key(&h)?;
     let actor = &c.identity()?.principal_id;

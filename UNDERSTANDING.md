@@ -26,7 +26,7 @@ For creating each applications we have a set of things we need:
 3) OBO Endpoints (can be defined by the user - optional)
 4) Base URL (optional, required if there are obo endpoints)
 5) App Scope (Scope of the application)
-6) App ID (This is the App ID, app ID is always in `org_id>local_app_id`)
+6) App ID (The globally unique, bare application ID, for example `briefcase`; the owning `org_id` is stored separately)
 7) App Name
 8) App Logo URL - optional
 9) App Version
@@ -37,7 +37,7 @@ For creating each applications we have a set of things we need:
 The end to end process for registering an application is a 3 step process:
 `Send Application > Application reviewed and approved > Goes to the apps for scope verification (if any critical scopes) > App Published`
 
-Even without publishing the application it should be possible to use the application but in that case the use of the application would be limited to the organisation who owns the app. So for eg: tos create an app named cat so tos>cat, and that's an app not yet published, so this becomes an tos only application - so login would be restricted to tos only members. Private applications bypass provider approval for critical IAM scopes and critical OBO scopes. They must still declare the requested scopes, obtain user consent and pass normal authorization and OBO proof checks. IAM restricts login and organisation grants to current members of the application's owning organisation. 
+Even without publishing the application it should be possible to use the application but in that case the use of the application would be limited to the organisation who owns the app. For example, `tos` creates an app with app_id `cat`, and that's an app not yet published, so this becomes an tos only application - so login would be restricted to tos only members. Private applications bypass provider approval for critical IAM scopes and critical OBO scopes. They must still declare the requested scopes, obtain user consent and pass normal authorization and OBO proof checks. IAM restricts login and organisation grants to current members of the application's owning organisation. 
 
 
 ### CLI
@@ -144,7 +144,7 @@ App_scope has two parts: iam for IAM permissions, and external for the app_id of
   "app_scope": {
     "iam": ["self.identity.read", "self.profile.read"],
     "external": [
-      {"app_id": "tos>briefcase", "endpoint_id": "files.upload"}
+      {"app_id": "briefcase", "endpoint_id": "files.upload"}
     ]
   }
 }
@@ -263,7 +263,7 @@ Define the need of each and every one of the critical scopes, why you wanna use 
 
 #### App ID
 
-For the App ID there would be an app handle so for eg: org tos is trying to create briefcase app, the app_id would be tos>briefcase. As each application is owned by an organisation, the user must only be able to configure the local_app_handle to set the app id. Once the app id is set it can't be changed.
+For the App ID the user configures a globally unique application handle, for example `briefcase` for an app owned by `tos`. The app_id is the bare handle, and the owning organisation is stored separately as `org_id`. Reject an app_id already used by another application, including one owned by another organisation. Once the app id is set it can't be changed.
 
 #### App Details
 
@@ -323,7 +323,15 @@ Once honeycomb gives the final go, the app would be published for public.
 
 # Command collision
 
-In case of command collision a command exists already for the installed command, it would ask for setting an alias for the new installation, which would set the alias, it should also be possible to set an alias at the time of installation. 
+A command that already exists inside Honeycomb's own bin directory and belongs to another package is a real collision: ask for an alias for the new installation, which would set the alias, and it should also be possible to set an alias at the time of installation.
+
+A command of the same name found elsewhere on PATH is a dependency question, not an ownership conflict, because Honeycomb never owned that file. Read the version already serving that command - from its package path when it is a Honeycomb launcher, otherwise by asking the executable itself with `--version`. Then:
+
+- If the version already there is new enough for the package being installed, report the dependency as resolved, install into Honeycomb's own bin directory, and leave the other installation alone.
+- If it is older, do not fail with a bare collision and do not guess. Say what is on the system and what the package needs - "You have dm 0.7.0 on your system at /path/to/dm; this package needs dm 0.9.2 to continue" - and ask "Shall we rewrite with the version required by the runtime?". On yes, rewrite that command where it already sits and keep the file it displaced, so uninstall puts the system back as it was. On no, stop and change nothing.
+- If the version cannot be read at all, say so and ask the same question.
+
+Nothing unattended can answer a question. Without a terminal, or under `--json`, the install stops and names the two ways to answer in advance: `--rewrite-existing` to accept the rewrite, or `--alias` to install alongside. Reinstalling a package already present at the required version reports dependency resolved rather than an error.
 
 # honeycomb install
 
@@ -367,6 +375,38 @@ A silicon/carbon should also be able to login to honeycomb, once they login to h
 Private apps are entirely restricted to their owning organisation and do not appear in public search. Their base URLs and downloads require access to the application. They bypass provider approval for critical IAM and OBO scopes, but still require declared scopes, user consent and normal authorization. IAM must enforce current membership and the owning-organisation restriction during login, token exchange, refresh, introspection and OBO exchange/verification. A user losing that membership loses access even if they still hold a previously issued token. When becoming public, the app stays private until all required critical-scope approvals, Honeycomb review and IAM activation are complete. 
 
 
+# App Release
+
+There can be two types of app releases:
+1) Dev App Release 
+2) Prod App Release
+
+At the time of release you need to define if this is a dev app release or a prod app release. For the dev app release it can be promoted to prod app release which would create a new release in the prod itself. 
+
+For each release it would be in the format {x.x.x}  where each would be a version so for example a release could be 2.4.1, etc. 
+
+Test version releases would be maintained differently then the prod release, during shifitng a test release to prod release asks the prod release version.
+
+For when someone downloads the test version for every update it should update to the latest test release version and the default version would be in the prod release which would be updated and wont have any connection to the test releases. For test releases like currently app name is {app_id} like `briefcase` for test releases it would be {app_id}>test like `briefcase>test` . 
+
+During installing i should also be able to specific the exact version i wanna download using @. Like `honeycomb install 'briefcase@3.4.2'` or `honeycomb install 'briefcase>test@2.1.0'`
+
+For when a prod version is installed and someone tries to install a dev version say a prod version is installed for this would you like to install the experimental dev version instead? And same for when someone has installed test version and tries to switch to prod say you were getting experimental dev updates would you just like to get the official releases now? 
+
+
+# Auto Update
+
+For each app installed via honeycomb it would by default have an auto installer with it.
+
+For updates a daemon would be running which checks if there is a new release (prod or dev based on the version installed for the user). This daemon would be checking for updates for the installed apps of the user every minute at 01 second so start of the minute. 
+
+In this check it would check for the installed version of the user's installed variant (dev or/and prod) is there a new version release if there is - update it. 
+
+
+# OBO Endpoints
+
+Honeycomb would have an OBO Endpoint which would let other apps and users fetch all the apps that user has in their organisation (including the private ones). This is a critical endpoint. 
+
 
 # Testing Environments
 
@@ -392,7 +432,7 @@ The environment stays provisioning until IAM and all requested applications ackn
 
 ### Apps Inside a Test Environment
 
-It should be possible to create a test-only application or import an existing production application. A new test-only app_id must not claim an ID already used by a production app. Importing keeps the original app_id and owning organisation. So importing google>drive creates or uses google inside the test environment and keeps the app as google>drive; it cannot become another organisation's app. The environment's root authority can create test owners and administrators for that test organisation without changing production ownership.
+It should be possible to create a test-only application or import an existing production application. A new test-only app_id must not claim an ID already used by a production app. Importing keeps the original app_id and owning organisation. For example, importing `drive`, owned by `google`, creates or uses `google` inside the test environment and keeps app_id `drive` and org_id `google`; it cannot become another organisation's app. The environment's root authority can create test owners and administrators for that test organisation without changing production ownership.
 
 Honeycomb would have its own isolated app catalog, releases, review records and store data for the environment. IAM's test identities, scope decisions and consents belong to that same environment. Test uploads must go to Briefcase's isolated test storage. Test publications, downloads, ratings, reviews and installs must not appear in the production store or alter production metrics. Each application must isolate its own files, caches, jobs and business records as well as database rows.
 
@@ -605,4 +645,12 @@ We ship highly configurable apps with sensible defaults. Very much like VS Code.
 
 # Updates
 
-All CLIs when installed, within their daemon run a update checker hourly. Update the CLI to the newest one if a update is found. Don't rely on user usage to check for updates.
+All CLIs when installed, within their daemon run a update checker every minute. Update the CLI to the newest one if a update is found. Don't rely on user usage to check for updates.
+
+This is the same daemon that runs for checking the updates for the installed apps. 
+
+# Identifier schema
+
+Silicon IDs use `si:{silicon_id}` (for example `si:cos`), Carbon IDs use `c:{carbon_id}` (for example `c:saket`), and application IDs use the bare `{app_id}` (for example `briefcase`). The components after `si:` and `c:` are handles; each prefix appears exactly once. Silicon IDs and application IDs do not contain an organisation component. Organisation membership and application ownership are stored separately under `org_id`.
+
+Outside the schema patterns above, fields and standalone placeholders named `silicon_id`, `sid`, `carbon_id`, or `cid` carry the complete prefixed public ID; `app_id` carries the bare application ID. This applies to authentication, API and CLI inputs and outputs, configuration, permissions, URLs, events and stored identity references. Where a CLI selector uses `@`, it precedes the complete ID, such as `@si:cos` or `@c:saket`.

@@ -173,7 +173,7 @@ fn configuration(request: &Value, response: &Value) -> Result<Value> {
         .cloned()
         .ok_or_else(|| Error::unavailable("IAM omitted its effective configuration"))?;
     if config.get("org_id") != request["configuration"].get("org_id")
-        || config.get("local_app_id") != request["configuration"].get("local_app_id")
+        || config.get("app_id") != request["configuration"].get("app_id")
     {
         return Err(Error::unavailable(
             "IAM returned another application's configuration",

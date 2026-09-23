@@ -251,8 +251,10 @@ pub trait ArchiveStorage: Send + Sync {
             "Briefcase logo uploads are not configured",
         ))
     }
+    #[allow(clippy::too_many_arguments)] // Organization ownership is explicit alongside the bare app ID.
     async fn put(
         &self,
+        _org: &str,
         app_id: &str,
         version: &str,
         path: &std::path::Path,
