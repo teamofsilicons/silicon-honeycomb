@@ -1,18 +1,51 @@
 # Honeycomb 0.3.3 verification — September 23, 2026
 
-## Publication complete; backend deployment pending
+## Published and deployed
 
 Release source is `8660b2bc0d73b5576e9167d4cc9c8e0eef9608d5`, tagged `v0.3.3`.
 The imported testing-application revision and rotation recovery fixes are
-published, but are **not deployed to the production backend**. A live
-`/api/v1/iam` read at `2026-09-22T22:41:13Z` still returned version `0.3.0`.
+published and deployed to the production backend. After IAM 3.0.2 was verified
+live, SSM command `17593180-e1e2-46f0-ba4b-6daad01ba536` successfully replaced
+only `honeycomb-backend` on host `i-06986627793021fb2` in `us-east-2`.
 
-AWS SSO requires renewal. One push to the existing ECR repository returned
-`403 Forbidden`; no remote backend artifact was confirmed. The locally built
-ARM64 image `silicon-honeycomb-backend:0.3.3` has the exact source revision label
-and passed startup, health, version and contract checks. Deploy only after IAM
-backend 3.0.2 is confirmed live, then verify recovery of the previously pending
-rotation and fresh credential use. Those live recovery checks remain outstanding.
+The verified Linux ARM64 image is
+`234951665042.dkr.ecr.us-east-2.amazonaws.com/silicon-honeycomb-backend@sha256:74f61449a04a38b9f93bcf88c9c8c81fadf48fbaf9835d80ee9a6ffb14567fa6`.
+Its source revision label matches the release. The remote OCI index, ARM64
+manifest and configuration digest were checked before deployment. Fresh AWS SSO
+and ECR authentication resolved the earlier expired-login push failure.
+
+Public `/health`, `/api/v1/iam` and `/api/contracts` returned 200 at
+`2026-09-23T07:21:25Z`; IAM metadata reported Honeycomb 0.3.3 and `tos>honeycomb`.
+The existing SQLite database passed integrity checks before and after rollout.
+A consistent backup remains on the host at
+`/var/lib/silicon-honeycomb/backups/release-0.3.3-20260923T072046Z/honeycomb.db`;
+the stopped prior container is retained for rollback.
+
+All three environment files, Caddy configuration and start script retained their
+hashes. Library, console and proxy container IDs, start times, persistent mounts,
+and restart policies remained identical. Their encrypted web session storage was
+not replaced. Docker is enabled and the new backend uses `unless-stopped`.
+
+## Live credential recovery
+
+In task environment `1d32b4c6-dc84-4c44-b7b7-a16be7a31d06`, a new authorized
+Ting rotation `3b01b022-ca4b-4610-92e2-abdd49f8b81f` was accepted as credential
+version 3. The official IAM Rust SDK 3.1.0 then performed a fresh DM Carbon login
+and a fresh signed `subscriptions.register` exchange. The audience credential
+returned by that exchange matched the new Ting credential and authenticated
+IAM's testing-context endpoint for the exact environment and `tos>ting`. Its IAM
+key also matched. The diagnostic proof was neither consumed nor persisted, and
+no alternate credential was substituted.
+
+The older operation `a2b700ff-90dd-4795-b6c1-27e98871ba9c` in environment
+`d70c8674-6d2e-41d4-bf8d-96ddd882edbd` is still pending. A supported recovery under
+its original `dm-ting-tester` actor returned a generic revision conflict. A
+read-only inspection found its immutable environment revision is 19 while IAM
+is now at 21, with generation and key version still 1. IAM 3.0.2 checks this
+lifecycle fence before looking up the target-plane receipt, so it cannot yet
+reach the definitive configuration-revision rejection handled by Honeycomb
+0.3.3. The saved request and operation were not modified. IAM follow-up and a
+supported retry are required before claiming this older recovery is complete.
 
 ## Published artifacts and checks
 
