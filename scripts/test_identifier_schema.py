@@ -18,7 +18,7 @@ class IdentifierMigration(unittest.TestCase):
         config = json.dumps({'org_id':'tos','local_app_id':'hello','name':'Hello',
                              'metadata':{'app_id':'tos>hello'},'description':'saket tos>hello'})
         db.execute("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,created_at,updated_at) VALUES('production','tos>hello','tos','Hello','saket',?,?,'encrypted:secret',1,1)", (config,config))
-        db.execute("INSERT INTO releases VALUES('production','tos>hello','prod','1.0.0','unchanged-checksum',7,'opaque:tos>hello:ref',1)")
+        db.execute("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES('production','tos>hello','prod','1.0.0','unchanged-checksum',7,'opaque:tos>hello:ref',1)")
         db.execute("INSERT INTO stars VALUES('production','tos>hello','saket')")
         db.execute("INSERT INTO downloads VALUES('production','tos>hello','opaque-download-token',1)")
         db.execute("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,created_at) VALUES('op','production','saket','old-key','configure','tos>hello','old-hash',1,'accepted',1)")

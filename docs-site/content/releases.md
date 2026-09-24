@@ -34,3 +34,31 @@ Use the returned `logo_url` in your application configuration. PNG, JPEG, and We
 
 ## Storage authorization
 Private reads, uploads, and publication access changes select the resource's owning organization when calling Briefcase on the user's behalf. The identity provider, service issuer, and resource organization can differ. Missing platform OBO grants or missing current consent stop storage operations; they must not silently fall back to another organization or production testing context.
+
+## Release visibility and permission approval
+
+Each release has its own `visibility` (`private` or `public`) and immutable
+`configuration_revision`. A public application stays public when an update requests
+additional permissions. The new release stays private while its configuration or
+required reviews are pending. The developer console explains that additional
+permission approval is required; a denial keeps the release private.
+
+After the matching revision receives all provider and Honeycomb approvals, IAM
+accepts it, and archive publication completes, Honeycomb makes that release public.
+Existing installations continue using the last public version until then. Both
+production and development channels, version-pinned downloads, and legacy API
+clients respect this boundary. New uploads against an already accepted public
+revision remain public without another permission review.
+
+Normal release lists and automatic updates omit pending releases of public apps,
+including for the app owner. Managers can inspect them with
+`honeycomb releases list APP_ID --include-private` or
+`GET /api/v2/apps/APP_ID/releases?channel=prod&include_private=true`.
+This history is for management, not update selection. Private applications retain
+organization-restricted distribution. End-user consent remains a separate IAM
+requirement; publishing a release does not expand existing users' tokens.
+
+Approval is bound to the release's configuration revision. A superseded private
+release is not published by approval of a later revision; upload a new version
+against the configuration being reviewed. Previously distributed releases retain
+their visibility when the release-visibility migration is applied.

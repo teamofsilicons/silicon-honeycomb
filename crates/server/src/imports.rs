@@ -186,7 +186,7 @@ async fn import_inner(
             )
             .map_err(|e| anyhow::anyhow!(e))?;
             let versions: Vec<String> = sqlx::query_scalar(
-                "SELECT version FROM releases WHERE plane='production' AND channel='prod' AND app_id=?",
+                "SELECT version FROM releases WHERE plane='production' AND channel='prod' AND app_id=? AND (visibility='public' OR EXISTS(SELECT 1 FROM applications a WHERE a.plane=releases.plane AND a.app_id=releases.app_id AND a.visibility='private' AND NOT EXISTS(SELECT 1 FROM releases published WHERE published.plane=a.plane AND published.app_id=a.app_id AND published.visibility='public')))",
             )
             .bind(&app)
             .fetch_all(&mut *tx)

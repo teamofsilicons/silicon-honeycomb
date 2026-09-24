@@ -40,6 +40,15 @@ Release uploads accept raw gzip archive bytes with `Content-Type: application/gz
 | Download | `GET /api/v1/apps/{id}/download?version=1.0.0`; production only | `GET /api/v2/apps/{id}/download?channel=dev&version=1.0.0`; channel defaults prod, version defaults latest in that channel |
 | Promote | Not available | `POST /api/v2/apps/{id}/releases/{dev_version}/promote` with JSON `{"version":"2.0.0"}` and mutation headers |
 
+Release records include `visibility`, `configuration_revision`,
+`permission_approval_required`, and optional `approval_status`. For public apps,
+normal lists, downloads (including a requested version), and `latest_version`
+select only public releases. Managers can use the v2 list's
+`include_private=true` query to inspect pending releases; this does not grant
+install or update access to those releases. An upload receipt includes the
+stored release's status in its `release` object. Approval of the matching
+configuration publishes the release automatically after archive reconciliation.
+
 The CLI, Rust client and console use v2 for release operations. Authentication, app configuration, catalog, publication and testing-environment APIs remain v1. There is no automatic major-version fallback. Existing immutable releases remain readable with their original versions and bytes.
 
 Logo uploads use raw bytes with `Content-Type: application/octet-stream` at `POST /api/v1/organizations/{org}/logos`; limit 2 MiB. [Releases and assets](/releases/) covers image rules and visibility.

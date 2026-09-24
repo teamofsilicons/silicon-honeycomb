@@ -3,11 +3,11 @@ import { test, expect, type Page } from "@playwright/test";
 const consoleSite = "http://localhost:19174";
 const archive = { name: "release.tar.gz", mimeType: "application/gzip", buffer: Buffer.from("browser fixture archive") };
 
-async function fixture(page: Page) {
+async function fixture(page: Page, publicApp = false) {
   const app = {
     app_id: "channels", org_id: "tos", name: "Channel fixture", description: "Tools with independent release channels.",
-    visibility: "private", state: "active", revision: 4, iam_revision: 1, effective_revision: 4,
-    effective_config: {}, config: { visibility: "private" }, latest_version: "1.0.0", rating: 0, reviews: 0, stars: 0, installs: 0,
+    visibility: publicApp ? "public" : "private", state: "active", revision: 4, iam_revision: 1, effective_revision: 4,
+    effective_config: {}, config: { visibility: publicApp ? "public" : "private" }, latest_version: "1.0.0", rating: 0, reviews: 0, stars: 0, installs: 0,
   };
   const releases = {
     prod: [{ version: "1.0.0", channel: "prod", created_at: 1750000000 }],
@@ -179,4 +179,29 @@ test("publication progress distinguishes equal versions from both channels", asy
   const publication = page.locator(".review-thread");
   await expect(publication).toContainText("Production release 1.0.0 · accepted");
   await expect(publication).toContainText("Dev release 1.0.0 · pending");
+});
+
+
+test("pending permission releases show private status and retain the public install target", async ({ page }) => {
+  await fixture(page, true);
+  await page.route("**/api/v2/apps/*/releases?**", route => {
+    expect(new URL(route.request().url()).searchParams.get("include_private")).toBe("true");
+    return route.fulfill({ json: { items: [
+      { version: "2.0.0", channel: "prod", created_at: 1750000002, visibility: "private", permission_approval_required: true, approval_status: "awaiting_scope_review" },
+      { version: "1.0.0", channel: "prod", created_at: 1750000000, visibility: "public", approval_status: "published" },
+    ] } });
+  });
+  await page.goto(consoleSite);
+  await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
+  await page.getByRole("button", { name: "Releases & publication" }).click();
+  const history = page.getByRole("region", { name: "Release history" });
+  const pending = history.getByRole("listitem").filter({ hasText: "2.0.0" });
+  await expect(pending).toContainText("Private");
+  await expect(pending.locator("code")).toHaveCount(0);
+  await expect(pending).toContainText("This release requires additional permission approval");
+  await expect(pending).toContainText("Existing installations will not update until it becomes public");
+  await expect(history.getByRole("listitem").filter({ hasText: "1.0.0" })).toContainText("Public");
+  await pending.scrollIntoViewIfNeeded();
+  await expect(pending).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("release-permission-approval.png") });
 });

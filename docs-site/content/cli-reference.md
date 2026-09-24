@@ -792,6 +792,8 @@ Options:
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
       --channel <CHANNEL>
           [default: prod]
+      --include-private
+          Include private pending releases (requires application management access)
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json

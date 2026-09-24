@@ -256,6 +256,9 @@ enum Releases {
         app_id: String,
         #[arg(long, default_value = "prod", value_parser = selection::channel)]
         channel: ReleaseChannel,
+        /// Include private pending releases (requires application management access).
+        #[arg(long)]
+        include_private: bool,
     },
     Upload {
         app_id: String,
@@ -929,8 +932,17 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             )?,
         },
         Command::Releases { command } => match command {
-            Releases::List { app_id, channel } => {
-                show(&client.releases_channel(app_id, *channel).await?)?
+            Releases::List {
+                app_id,
+                channel,
+                include_private,
+            } => {
+                let releases = if *include_private {
+                    client.release_history(app_id, *channel).await?
+                } else {
+                    client.releases_channel(app_id, *channel).await?
+                };
+                show(&releases)?
             }
             Releases::Upload {
                 app_id,

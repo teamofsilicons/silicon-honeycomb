@@ -41,7 +41,7 @@ impl IdentityProvider for IdentityService {
                 ),
             )]),
             testing_environment_id: environment.map(|_| "release-test".into()),
-            validator: false,
+            validator: token == "admin",
         })
     }
     async fn login(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
@@ -54,7 +54,8 @@ impl IdentityProvider for IdentityService {
         unreachable!()
     }
 }
-struct Manager;
+#[derive(Default)]
+struct Manager(Mutex<Option<Value>>);
 #[async_trait]
 impl Management for Manager {
     async fn configure(&self, _: &Value, _: &str, _: Option<&str>) -> Result<Value> {
@@ -63,9 +64,40 @@ impl Management for Manager {
     async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
         unreachable!()
     }
+    async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(
+            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"iam","scopes":["directory.carbons.read"]},{"provider":"honeycomb","scopes":[]}]}),
+        )
+    }
+    async fn review_eligibility(
+        &self,
+        _: &str,
+        _: &str,
+        token: &str,
+        _: Option<&str>,
+    ) -> Result<bool> {
+        Ok(token == "admin")
+    }
+    async fn review_decision(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        let mut result = o.clone();
+        result["state"] = json!("accepted");
+        Ok(result)
+    }
+    async fn activate_publication(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        let response = json!({"state":"accepted","operation_id":o["operation_id"],"request_id":o["request_id"],"publication_request_id":o["request_id"],"app_id":o["app_id"],"configuration_revision":o["configuration_revision"],"iam_revision":o["expected_iam_revision"].as_i64().unwrap()+1,"visibility":"public","effective_configuration":o["configuration"]});
+        *self.0.lock().unwrap() = Some(response.clone());
+        Ok(response)
+    }
+    async fn application_state(&self, _: &str, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(self.0.lock().unwrap().clone().unwrap())
+    }
 }
 #[derive(Default)]
-struct Storage(Mutex<BTreeMap<String, Vec<u8>>>);
+struct Storage(
+    Mutex<BTreeMap<String, Vec<u8>>>,
+    Mutex<Vec<String>>,
+    std::sync::atomic::AtomicBool,
+);
 #[async_trait]
 impl ArchiveStorage for Storage {
     async fn put(
@@ -107,18 +139,27 @@ impl ArchiveStorage for Storage {
         _: Option<&str>,
         _: &str,
     ) -> Result<String> {
+        if self.2.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::unavailable("Publication storage unavailable"));
+        }
+        self.1.lock().unwrap().push(reference.into());
         Ok(reference.into())
     }
 }
 async fn setup() -> (State, Client, tokio::task::JoinHandle<()>) {
+    let (s, client, server, _) = setup_with_storage().await;
+    (s, client, server)
+}
+async fn setup_with_storage() -> (State, Client, tokio::task::JoinHandle<()>, Arc<Storage>) {
+    let storage = Arc::new(Storage::default());
     let s = State {
         telemetry: Default::default(),
         db: silicon_honeycomb_server::database("sqlite::memory:")
             .await
             .unwrap(),
         identity: Arc::new(IdentityService),
-        management: Arc::new(Manager),
-        storage: Arc::new(Storage::default()),
+        management: Arc::new(Manager::default()),
+        storage: storage.clone(),
         app_id: "honeycomb".into(),
         iam_app_id: "iam".into(),
         iam_login_url: "https://iam.example.com".into(),
@@ -141,7 +182,7 @@ async fn setup() -> (State, Client, tokio::task::JoinHandle<()>) {
     let handle = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    (s, client, handle)
+    (s, client, handle, storage)
 }
 fn archive(version: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let d = tempfile::tempdir().unwrap();
@@ -697,5 +738,402 @@ async fn v1_upload_and_archive_semver_contract_survive_v2_channel_introduction()
             .as_ref(),
         bytes
     );
+    server.abort();
+}
+
+async fn request_bytes(s: &State, path: &str, token: Option<&str>) -> (StatusCode, Vec<u8>) {
+    let mut request = Request::builder().uri(path);
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let response = silicon_honeycomb_server::api::router(s.clone())
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    (
+        response.status(),
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+}
+async fn request_scope_expansion(s: &State, revision: i64) {
+    let config = json!({"app_id":"tracks","org_id":"tos","visibility":"public","app_scope":{"iam":["directory.carbons.read"],"external":[]}});
+    sqlx::query(
+        "UPDATE applications SET revision=?,config=? WHERE plane='production' AND app_id='tracks'",
+    )
+    .bind(revision)
+    .bind(config.to_string())
+    .execute(&s.db)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn public_updates_wait_for_permission_approval_across_lists_downloads_and_channels() {
+    let (s, client, server, storage) = setup_with_storage().await;
+    let (_old, old) = archive("1.0.0");
+    for channel in [ReleaseChannel::Prod, ReleaseChannel::Dev] {
+        client
+            .upload_release("tracks", &old, channel, &Mutation::at_revision(1))
+            .await
+            .unwrap();
+    }
+    request_scope_expansion(&s, 2).await;
+    let (_new, new) = archive("2.0.0");
+    let mutation = Mutation::at_revision(2);
+    let receipt = client
+        .upload_release("tracks", &new, ReleaseChannel::Prod, &mutation)
+        .await
+        .unwrap();
+    assert_eq!(receipt["release"]["visibility"], "private");
+    assert_eq!(receipt["release"]["permission_approval_required"], true);
+    assert_eq!(receipt["release"]["configuration_revision"], 2);
+    assert_eq!(receipt["publication"]["state"], "awaiting_scope_review");
+    let id = receipt["publication"]["id"].as_str().unwrap();
+    let replay = client
+        .upload_release("tracks", &new, ReleaseChannel::Prod, &mutation)
+        .await
+        .unwrap();
+    assert_eq!(receipt["release"], replay["release"]);
+    client
+        .upload_release(
+            "tracks",
+            &new,
+            ReleaseChannel::Dev,
+            &Mutation::at_revision(2),
+        )
+        .await
+        .unwrap();
+    let promoted = client
+        .promote_release("tracks", "2.0.0", "3.0.0", &Mutation::at_revision(2))
+        .await
+        .unwrap();
+    assert_eq!(promoted["release"]["visibility"], "private");
+    assert_eq!(
+        storage.1.lock().unwrap().len(),
+        2,
+        "Only the previously public archives may be shared"
+    );
+    let history = client
+        .release_history("tracks", ReleaseChannel::Prod)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    assert_eq!(
+        history[0].approval_status.as_deref(),
+        Some("awaiting_scope_review")
+    );
+    assert!(history[0].permission_approval_required);
+    for token in [None, Some("outsider"), Some("member"), Some("admin")] {
+        for channel in ["prod", "dev"] {
+            let (status, body) = request_bytes(
+                &s,
+                &format!("/api/v2/apps/tracks/releases?channel={channel}"),
+                token,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let list: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(list["items"].as_array().unwrap().len(), 1);
+            assert_eq!(list["items"][0]["version"], "1.0.0");
+            let (status, body) = request_bytes(
+                &s,
+                &format!("/api/v2/apps/tracks/download?channel={channel}"),
+                token,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, std::fs::read(&old).unwrap());
+            assert_eq!(
+                request_bytes(
+                    &s,
+                    &format!("/api/v2/apps/tracks/download?channel={channel}&version=2.0.0"),
+                    token
+                )
+                .await
+                .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        let (status, body) = request_bytes(&s, "/api/v1/apps/tracks/releases", token).await;
+        assert_eq!(status, StatusCode::OK);
+        let list: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            request_bytes(&s, "/api/v1/apps/tracks/download?version=2.0.0", token)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        let (_, body) = request_bytes(&s, "/api/v1/apps/tracks", token).await;
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["latest_version"],
+            "1.0.0"
+        );
+    }
+    assert!(
+        client
+            .clone()
+            .with_token("member")
+            .release_history("tracks", ReleaseChannel::Prod)
+            .await
+            .is_err()
+    );
+    // A notification's temporary private fence must not let members update early.
+    sqlx::query(
+        "UPDATE applications SET visibility='private' WHERE plane='production' AND app_id='tracks'",
+    )
+    .execute(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(client.releases("tracks").await.unwrap()[0].version, "1.0.0");
+    assert_eq!(
+        request_bytes(
+            &s,
+            "/api/v2/apps/tracks/download?version=2.0.0",
+            Some("admin")
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query(
+        "UPDATE applications SET visibility='public' WHERE plane='production' AND app_id='tracks'",
+    )
+    .execute(&s.db)
+    .await
+    .unwrap();
+    // Scope-provider approval alone is not publication approval.
+    client
+        .decide_review(id, "iam", "approve", "", &Mutation::at_revision(2))
+        .await
+        .unwrap();
+    assert_eq!(client.releases("tracks").await.unwrap()[0].version, "1.0.0");
+    storage.2.store(true, std::sync::atomic::Ordering::SeqCst);
+    client
+        .decide_review(id, "honeycomb", "approve", "", &Mutation::at_revision(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        client.releases("tracks").await.unwrap()[0].version,
+        "1.0.0",
+        "Accepted permissions alone cannot bypass failed archive publication"
+    );
+    storage.2.store(false, std::sync::atomic::Ordering::SeqCst);
+    sqlx::query("UPDATE publication_authorizations SET next_attempt_at=0 WHERE request_id=?")
+        .bind(id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    silicon_honeycomb_server::publication_worker::tick(&s)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.1.lock().unwrap().len(),
+        5,
+        "Only the three new archives are shared after approval"
+    );
+    assert_eq!(client.releases("tracks").await.unwrap()[0].version, "3.0.0");
+    assert_eq!(
+        client
+            .releases_channel("tracks", ReleaseChannel::Dev)
+            .await
+            .unwrap()[0]
+            .version,
+        "2.0.0"
+    );
+    let (_, body) = request_bytes(&s, "/api/v2/apps/tracks/download?version=2.0.0", None).await;
+    assert_eq!(body, std::fs::read(new).unwrap());
+    assert_eq!(client.app("tracks").await.unwrap().visibility, "public");
+    let history = client
+        .release_history("tracks", ReleaseChannel::Prod)
+        .await
+        .unwrap();
+    assert!(
+        history
+            .iter()
+            .all(|r| r.visibility == "public" && !r.permission_approval_required)
+    );
+    // Later releases on the approved configuration need no additional review.
+    let (_later, later) = archive("4.0.0");
+    let receipt = client
+        .upload_release(
+            "tracks",
+            &later,
+            ReleaseChannel::Prod,
+            &Mutation::at_revision(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt["release"]["visibility"], "public");
+    server.abort();
+}
+
+#[tokio::test]
+async fn denied_and_superseded_releases_never_publish_with_a_later_approval() {
+    let (s, client, server) = setup().await;
+    let (_old, old) = archive("1.0.0");
+    client
+        .upload_release(
+            "tracks",
+            &old,
+            ReleaseChannel::Prod,
+            &Mutation::at_revision(1),
+        )
+        .await
+        .unwrap();
+    request_scope_expansion(&s, 2).await;
+    let (_new, new) = archive("2.0.0");
+    let receipt = client
+        .upload_release(
+            "tracks",
+            &new,
+            ReleaseChannel::Prod,
+            &Mutation::at_revision(2),
+        )
+        .await
+        .unwrap();
+    let id = receipt["publication"]["id"].as_str().unwrap();
+    client
+        .decide_review(
+            id,
+            "iam",
+            "deny",
+            "Narrow the requested access.",
+            &Mutation::at_revision(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .release_history("tracks", ReleaseChannel::Prod)
+            .await
+            .unwrap()[0]
+            .approval_status
+            .as_deref(),
+        Some("denied")
+    );
+    assert_eq!(client.releases("tracks").await.unwrap()[0].version, "1.0.0");
+    request_scope_expansion(&s, 3).await;
+    let (_later, later) = archive("3.0.0");
+    let receipt = client
+        .upload_release(
+            "tracks",
+            &later,
+            ReleaseChannel::Prod,
+            &Mutation::at_revision(3),
+        )
+        .await
+        .unwrap();
+    let id = receipt["publication"]["id"].as_str().unwrap();
+    for provider in ["iam", "honeycomb"] {
+        client
+            .decide_review(id, provider, "approve", "", &Mutation::at_revision(3))
+            .await
+            .unwrap();
+    }
+    let list = client.releases("tracks").await.unwrap();
+    assert_eq!(
+        list.iter().map(|r| r.version.as_str()).collect::<Vec<_>>(),
+        ["3.0.0", "1.0.0"]
+    );
+    let history = client
+        .release_history("tracks", ReleaseChannel::Prod)
+        .await
+        .unwrap();
+    assert_eq!(history[1].visibility, "private");
+    assert_eq!(history[1].approval_status.as_deref(), Some("superseded"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn visibility_migration_preserves_existing_distribution_and_new_rows_default_private() {
+    use sqlx::Row;
+    let db = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::raw_sql("CREATE TABLE applications(plane TEXT,app_id TEXT,visibility TEXT,revision INTEGER,effective_revision INTEGER); CREATE TABLE releases(plane TEXT,app_id TEXT,channel TEXT,version TEXT); INSERT INTO applications VALUES('production','live','public',3,2),('production','internal','private',4,4); INSERT INTO releases VALUES('production','live','prod','1.0.0'),('production','live','dev','8.0.0'),('production','internal','prod','2.0.0');").execute(&db).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0027_release_visibility.sql"))
+        .execute(&db)
+        .await
+        .unwrap();
+    let rows =
+        sqlx::query("SELECT visibility,configuration_revision FROM releases WHERE app_id='live'")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert!(
+        rows.iter()
+            .all(|r| r.get::<String, _>("visibility") == "public"
+                && r.get::<i64, _>("configuration_revision") == 2)
+    );
+    let row = sqlx::query(
+        "SELECT visibility,configuration_revision FROM releases WHERE app_id='internal'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("visibility"), "private");
+    assert_eq!(row.get::<i64, _>("configuration_revision"), 4);
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version) VALUES('production','live','prod','2.0.0')").execute(&db).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT visibility FROM releases WHERE app_id='live' AND version='2.0.0'"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap(),
+        "private"
+    );
+}
+
+#[tokio::test]
+async fn private_apps_retain_organization_only_release_distribution() {
+    let (s, client, server, storage) = setup_with_storage().await;
+    sqlx::query("UPDATE applications SET visibility='private' WHERE app_id='tracks'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (_dir, path) = archive("1.0.0");
+    let receipt = client
+        .upload_release(
+            "tracks",
+            &path,
+            ReleaseChannel::Prod,
+            &Mutation::at_revision(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt["release"]["visibility"], "private");
+    assert!(storage.1.lock().unwrap().is_empty());
+    let member = client.clone().with_token("member");
+    assert_eq!(
+        member.releases("tracks").await.unwrap()[0].visibility,
+        "private"
+    );
+    let (status, body) = request_bytes(&s, "/api/v2/apps/tracks/download", Some("member")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, std::fs::read(path).unwrap());
+    for token in [None, Some("outsider")] {
+        assert_eq!(
+            request_bytes(&s, "/api/v2/apps/tracks/releases", token)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            request_bytes(&s, "/api/v2/apps/tracks/download", token)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
     server.abort();
 }

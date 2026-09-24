@@ -283,6 +283,15 @@ pub fn valid_release_version(value: &str) -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Release {
+    /// Release visibility, independent of the application's catalog visibility.
+    #[serde(default = "public_release_visibility")]
+    pub visibility: String,
+    #[serde(default)]
+    pub configuration_revision: i64,
+    #[serde(default)]
+    pub permission_approval_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_status: Option<String>,
     /// Exact historical manifest identity, supplied only from migration records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_manifest_app_id: Option<String>,
@@ -293,6 +302,10 @@ pub struct Release {
     pub sha256: String,
     pub size: i64,
     pub created_at: i64,
+}
+fn public_release_visibility() -> String {
+    // Older servers only returned installable releases.
+    "public".into()
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Page<T> {
