@@ -6134,3 +6134,107 @@ async fn identifier_cutover_holds_never_retry_mutations_or_deliver_notifications
         0
     );
 }
+
+/// IAM reviews Honeycomb-provided scopes on the single validator gate.
+#[derive(Default)]
+struct HoneycombScopeManager {
+    decisions: std::sync::Mutex<Vec<Value>>,
+}
+#[async_trait]
+impl Management for HoneycombScopeManager {
+    async fn configure(&self, o: &Value, t: &str, e: Option<&str>) -> Result<Value> {
+        Manager { accept: true }.configure(o, t, e).await
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("pending"))
+    }
+    async fn publication_plan(&self, r: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        Ok(
+            json!({"state":"accepted","request_id":r["request_id"],"app_id":r["app_id"],"configuration_revision":r["configuration_revision"],"plan_id":format!("plan-{}",r["request_id"].as_str().unwrap()),"gates":[{"provider":"honeycomb","scopes":["obo:honeycomb:apps.list"]}]}),
+        )
+    }
+    async fn review_eligibility(
+        &self,
+        plan: &str,
+        provider: &str,
+        token: &str,
+        _: Option<&str>,
+    ) -> Result<bool> {
+        assert!(plan.starts_with("plan-"));
+        Ok(provider == "honeycomb" && token == "validator")
+    }
+    async fn review_decision(&self, o: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        self.decisions.lock().unwrap().push(o.clone());
+        let mut response = o.clone();
+        response["state"] = json!("accepted");
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn honeycomb_provided_scopes_are_reviewed_on_the_validator_gate() {
+    let (mut s, _) = setup(true).await;
+    let manager = Arc::new(HoneycombScopeManager::default());
+    s.management = manager.clone();
+    s.identity = Arc::new(ReviewIdentity);
+    let mut config = input("honeycomb-scoped-app");
+    config["app_scope"] = json!({"iam":["self.identity.read"],"external":[{"app_id":"honeycomb","endpoint_id":"apps.list"}]});
+    let (status, created) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        config,
+        "honeycomb-scoped-create-0001",
+        None,
+    )
+    .await;
+    assert!(status.is_success(), "{created}");
+    sqlx::query("INSERT INTO releases(plane,app_id,version,sha256,size,storage_ref,created_at) VALUES('production','honeycomb-scoped-app','1.0.0','fixture-only',1,'fixture-release',1)").execute(&s.db).await.unwrap();
+    let (status, request) = call(
+        &s,
+        "POST",
+        "/api/v1/apps/honeycomb-scoped-app/publication",
+        Some("admin"),
+        json!({"message":"Lists visible Honeycomb applications."}),
+        "honeycomb-scoped-publish-0001",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{request}");
+    let id = request["id"].as_str().unwrap().to_owned();
+    // A scoped validator gate is accepted and goes straight to Honeycomb validation.
+    let state: String = sqlx::query_scalar("SELECT state FROM publication_requests WHERE id=?")
+        .bind(&id)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "awaiting_validator");
+    let scopes: String = sqlx::query_scalar(
+        "SELECT scopes FROM review_gates WHERE request_id=? AND provider='honeycomb'",
+    )
+    .bind(&id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&scopes).unwrap(),
+        json!(["obo:honeycomb:apps.list"])
+    );
+    let (status, decided) = call(
+        &s,
+        "POST",
+        &format!("/api/v1/review-requests/{id}/honeycomb/decisions"),
+        Some("validator"),
+        json!({"decision":"approve"}),
+        "honeycomb-scoped-validate-0001",
+        Some(1),
+    )
+    .await;
+    assert!(status.is_success(), "{decided}");
+    // The single validator decision approves the Honeycomb-provided scopes too.
+    let sent = manager.decisions.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["provider"], "honeycomb");
+    assert_eq!(sent[0]["scopes"], json!(["obo:honeycomb:apps.list"]));
+}
