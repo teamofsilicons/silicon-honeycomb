@@ -93,12 +93,13 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
         }
         let scopes: Vec<String> = serde_json::from_value(gate["scopes"].clone())
             .map_err(|_| Error::unavailable("Invalid review scopes"))?;
-        if (provider == "honeycomb" && !scopes.is_empty())
-            || (provider != "honeycomb" && scopes.is_empty())
+        // The validator gate also carries Honeycomb-provided scopes (obo:honeycomb:*),
+        // which share its provider name; the declaration check below still applies.
+        if (provider != "honeycomb" && scopes.is_empty())
             || scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len()
         {
             return Err(Error::unavailable(
-                "Review scopes must be distinct; only the validator gate has no scopes",
+                "Review scopes must be distinct; only the validator gate may have no scopes",
             ));
         }
         for scope in &scopes {
