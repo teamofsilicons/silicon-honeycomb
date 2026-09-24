@@ -33,7 +33,7 @@ fn fixture_named(
             serde_json::json!({"root":format!("targets/{t}"),"executables":{"app":format!("bin/{filename}")}}),
         );
     }
-    let manifest = serde_json::json!({"format_version":1,"app_id":"tos>hello","version":version,"bin":{first:"app",second:"app"},"targets":targets});
+    let manifest = serde_json::json!({"format_version":1,"app_id":"hello","version":version,"bin":{first:"app",second:"app"},"targets":targets});
     fs::write(root.join("honeycomb.yaml"), manifest.to_string()).unwrap();
     package::pack(root, None).unwrap()
 }
@@ -44,7 +44,7 @@ fn optional_identity_uses_selected_app_and_preserves_ownership() {
     let dest = tempfile::tempdir().unwrap();
     let archive = fixture(src.path(), "1.0.0");
     assert!(
-        installer::install_archive_for("tos>other", &archive, dest.path(), &BTreeMap::new(), None)
+        installer::install_archive_for("other", &archive, dest.path(), &BTreeMap::new(), None)
             .is_err()
     );
     let path = src.path().join("honeycomb.yaml");
@@ -58,26 +58,21 @@ fn optional_identity_uses_selected_app_and_preserves_ownership() {
         installer::install_archive_for("../unsafe", &archive, dest.path(), &BTreeMap::new(), None)
             .is_err()
     );
-    let installed = installer::install_archive_for(
-        "tos>selected",
-        &archive,
-        dest.path(),
-        &BTreeMap::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(installed.app_id, "tos>selected");
+    let installed =
+        installer::install_archive_for("selected", &archive, dest.path(), &BTreeMap::new(), None)
+            .unwrap();
+    assert_eq!(installed.app_id, "selected");
     assert!(
         installed.directory.starts_with(
             dest.path()
                 .canonicalize()
                 .unwrap()
-                .join("packages/tos/selected")
+                .join("packages/selected")
         )
     );
     assert!(
         installer::install_archive_for(
-            "tos>other",
+            "other",
             &archive,
             dest.path(),
             &BTreeMap::new(),
@@ -298,7 +293,7 @@ fn an_older_command_on_path_reports_both_versions_and_installs_nothing() {
     let existing = other_installation(elsewhere.path(), "honeycomb-path-hi", "0.5.0");
     let _path = with_path(elsewhere.path());
     let error = installer::install_archive_resolving(
-        "tos>hello",
+        "hello",
         &archive,
         dest.path(),
         &BTreeMap::new(),
@@ -347,7 +342,7 @@ fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
     let existing = other_installation(elsewhere.path(), "honeycomb-path-hi", "0.5.0");
     let _path = with_path(elsewhere.path());
     let installed = installer::install_archive_resolving(
-        "tos>hello",
+        "hello",
         &archive,
         dest.path(),
         &BTreeMap::new(),
@@ -369,7 +364,7 @@ fn rewriting_replaces_an_older_command_and_uninstall_puts_it_back() {
         "honeycomb-path-hi",
     );
     let updated = installer::install_archive_channel_resolving(
-        "tos>hello",
+        "hello",
         silicon_honeycomb_client::ReleaseChannel::Dev,
         &newer,
         dest.path(),
@@ -409,7 +404,7 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     let existing = other_installation(elsewhere.path(), "honeycomb-test-hi", "0.5.0");
     let _path = with_path(elsewhere.path());
     let installed = installer::install_archive_resolving(
-        "tos>hello",
+        "hello",
         &archive,
         dest.path(),
         &BTreeMap::new(),
@@ -429,7 +424,7 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     let archive =
         package::pack(src.path(), Some(&src.path().join("removed-command.tar.gz"))).unwrap();
     let updated = installer::install_archive_channel_resolving(
-        "tos>hello",
+        "hello",
         silicon_honeycomb_client::ReleaseChannel::Dev,
         &archive,
         dest.path(),
@@ -451,6 +446,76 @@ fn removing_a_rewritten_command_restores_its_original_during_channel_switch() {
     );
     installer::uninstall(&updated, dest.path()).unwrap();
     assert!(existing.exists());
+}
+
+#[test]
+fn historical_archive_requires_its_exact_catalog_alias_and_promotes_canonically() {
+    let _serial = serial();
+    let source = tempfile::tempdir().unwrap();
+    fixture(source.path(), "1.0.0");
+    let path = source.path().join("honeycomb.yaml");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["app_id"] = "tos>hello".into();
+    fs::write(&path, manifest.to_string()).unwrap();
+    let archive = source.path().join("historical.tar.gz");
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        fs::File::create(&archive).unwrap(),
+        flate2::Compression::default(),
+    ));
+    tar.append_path_with_name(&path, "honeycomb.yaml").unwrap();
+    tar.append_dir_all("targets", source.path().join("targets"))
+        .unwrap();
+    tar.into_inner().unwrap().finish().unwrap();
+    let checksum = package::sha256(&archive).unwrap();
+    assert!(
+        !package::validate(&archive).valid,
+        "New uploads reject old IDs"
+    );
+    let destination = tempfile::tempdir().unwrap();
+    for alias in [None, Some("other>hello")] {
+        assert!(
+            installer::install_catalog_archive(
+                "hello",
+                Default::default(),
+                alias,
+                &archive,
+                destination.path(),
+                &BTreeMap::new(),
+                None,
+                false
+            )
+            .is_err()
+        );
+    }
+    let installed = installer::install_catalog_archive(
+        "hello",
+        Default::default(),
+        Some("tos>hello"),
+        &archive,
+        destination.path(),
+        &BTreeMap::new(),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(installed.app_id, "hello");
+    let promoted = source.path().join("promoted.tar.gz");
+    package::repack_catalog_release(
+        &archive,
+        "2.0.0",
+        &promoted,
+        Some(("hello", Some("tos>hello"))),
+    )
+    .unwrap();
+    let validation = package::validate(&promoted);
+    assert!(validation.valid);
+    assert_eq!(
+        validation.manifest.unwrap().app_id.as_deref(),
+        Some("hello")
+    );
+    assert_eq!(package::sha256(&archive).unwrap(), checksum);
+    installer::uninstall(&installed, destination.path()).unwrap();
 }
 
 #[cfg(windows)]

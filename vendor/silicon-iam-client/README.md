@@ -14,13 +14,22 @@ provider callbacks, and browser navigations remain outside this crate.
 
 ```toml
 [dependencies]
-silicon-iam-client = "1.8.0"
+silicon-iam-client = "4.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Version 2 uses public membership IDs such as `saket[tos]` and
+`helper:tos[tos]` in place of UUID membership references. Upgrade membership
+arguments and stored public references to strings. Existing official 1.x clients
+retain their UUID wire representation during rollout, including introspection;
+all current clients and ordinary API requests use the canonical IDs. Existing
+signed v1 webhook envelopes retain their UUID contract for consumer compatibility.
+The database mapping covers every existing membership without replacing private
+foreign keys or invalidating sessions.
+
 The client speaks HTTP API major `v1` and requires Rust 1.98 or newer.
 The crate SemVer and HTTP API major are separate: upgrading the crate within
-the 1.x line does not select a different wire major. `Client::new` and
+the 2.x line does not select a different wire major. `Client::new` and
 `ClientBuilder::build` perform no network handshake; call
 `client.system().negotiate().await?` during startup when you want an upfront
 compatibility check. It validates the service identity, ordered version
@@ -87,7 +96,7 @@ use silicon_iam_client::{Client, Credential, Mutation};
 
 #[tokio::main]
 async fn main() -> silicon_iam_client::Result<()> {
-    let app_id = "acme>checkout";
+    let app_id = "checkout";
     let application = Client::new("https://backend.iam.teamofsilicons.com")?
         .with_credential(Credential::application(app_id, "ask_your_application_secret"));
 
@@ -105,6 +114,41 @@ async fn main() -> silicon_iam_client::Result<()> {
 An Application never starts or verifies an OTP challenge. IAM performs that
 identity ceremony on its own hosted login surface; the Rust client accepts
 only the resulting single-use SLT for a new Application login.
+
+## Application identity verification
+
+Use an app's own credentials to issue a short-lived identity key, then the
+receiving app's credentials to verify it. No user session or SLT is involved:
+
+```rust
+use silicon_iam_client::{Client, Credential, models};
+
+let caller = Client::new("https://backend.iam.teamofsilicons.com")?
+    .with_credential(Credential::application("checkout", caller_secret));
+let issued = caller.app_verification()
+    .issue(&models::AppAccessKeyIssue { ttl_seconds: Some(300) }).await?;
+// Send issued.app_id and issued.app_access_key to the receiving application.
+let receiver = Client::new("https://backend.iam.teamofsilicons.com")?
+    .with_credential(Credential::application("vendor>billing", receiver_secret));
+let verified = receiver.app_verification().verify(&models::AppAccessKeyVerify {
+    app_id: issued.app_id,
+    app_access_key: issued.app_access_key,
+}).await?;
+if verified.valid_key {
+    // Identity is verified; authorize the requested action separately.
+}
+```
+
+An omitted `ttl_seconds` uses 300 seconds; 60–3600 seconds inclusive is accepted.
+Each issuance creates a distinct key and returns `app_access_key`, `valid_till`
+and `app_id`. The SDK stores nothing; never log or archive the secret. The two
+key-bearing models redact their `Debug` output, but serialization includes the key.
+Verification does not consume a key. Invalid keys return `valid_key: false` with
+no app details; invalid receiver credentials produce an authentication error.
+Secret rotation and application disablement revoke keys. For tests, set the
+same `EnvironmentKey` on each client and use that environment's app secrets;
+keys cannot cross environments or survive cleaning generations. Identity keys
+do not grant user permissions or replace OBO.
 
 ## What the API groups look like
 
@@ -125,6 +169,7 @@ Every group hangs off the client and borrows it, so obtaining one is free:
 | `client.silicons()` | Silicons, credentials, webhooks |
 | `client.applications()` | Applications, secrets, webhooks |
 | `client.oauth()` | Short-lived-token exchange, introspection, revocation |
+| `client.app_verification()` | Issue and verify short-lived application identity keys |
 | `client.obo()` | Catalog-bound signing and delegated access between applications |
 | `client.sso()` | An organization's SSO configuration |
 | `client.environments()` | Testing environments |
@@ -135,8 +180,9 @@ and to the browser.
 
 ## Idempotency is explicit
 
-Every mutating route requires an idempotency key, so mutations take a
-`Mutation` that carries one. The service binds the key to the caller, the route
+Ordinary mutating routes require an idempotency key, so those mutations take a
+`Mutation` that carries one. Application identity key issuance is an exception:
+it creates a fresh independent key on each call and has no replay storage. The service binds the key to the caller, the route
 and the exact body, then replays the original response for a repeat of the same
 request — which only helps if a retry presents the *same* key:
 
@@ -296,7 +342,7 @@ verified Application's base URL, even across organizations:
 # use silicon_iam_client::{Client, Credential};
 # async fn discover(base: &str, caller_secret: &str) -> silicon_iam_client::Result<()> {
 let caller = Client::new(base)?.with_credential(Credential::application(
-    "acme>checkout",
+    "checkout",
     caller_secret,
 ));
 let billing = caller
@@ -316,7 +362,7 @@ successor during explicit webhook rotation:
 ```rust
 # use silicon_iam_client::{Client, Mutation, models};
 # async fn rotate(client: &Client, step_up: &str) -> silicon_iam_client::Result<()> {
-let app = client.applications().get("acme>checkout").await?;
+let app = client.applications().get("checkout").await?;
 let mutation = Mutation::new().step_up(step_up);
 let rotated = client
     .applications()
@@ -360,7 +406,7 @@ resource. Use the assertion and current aggregate version:
 ```rust
 # use silicon_iam_client::{Client, Mutation};
 # async fn approve(client: &Client, step_up: &str) -> silicon_iam_client::Result<()> {
-let app_id = "acme>checkout";
+let app_id = "checkout";
 let current = client.applications().webhook(app_id).await?;
 let mutation = Mutation::new().step_up(step_up);
 let webhook = client.applications()
@@ -491,7 +537,7 @@ let created = sandbox.applications().create(
     },
     &Mutation::new(),
 ).await?;
-assert_eq!(created.application.app_id, "acme>checkout");
+assert_eq!(created.application.app_id, "checkout");
 # Ok(())
 # }
 ```
@@ -534,7 +580,7 @@ both caller and target resolve in that environment:
 # async fn discover(base: &str, key: &str, secret: &str) -> silicon_iam_client::Result<()> {
 let caller = Client::new(base)?
     .with_environment(EnvironmentKey::new(key)?)
-    .with_credential(Credential::application("acme>checkout", secret));
+    .with_credential(Credential::application("checkout", secret));
 let target = caller
     .applications()
     .discover_base_url("google>drive")
@@ -698,7 +744,7 @@ replace the test destination to install an independent test secret.
 An application's user access token carries only approved scopes. Organization lists include
 only explicitly selected active memberships. Directory lists require the corresponding
 `directory.carbons.read` or `directory.silicons.read`; field scopes independently control
-profiles, roles, job roles, tags, hierarchy, capabilities, and accessible Silicons.
+profiles, roles, job descriptions, tags, hierarchy, capabilities, and accessible Silicons.
 Self permissions never reveal those fields for other members. Email and phone are self-only.
 Absent fields mean undisclosed and must not be replaced with cached wider permissions.
 

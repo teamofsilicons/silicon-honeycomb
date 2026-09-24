@@ -1,0 +1,42 @@
+name: Build service image candidates
+on:
+  push:
+    branches: [release/public-identifiers-20260923]
+    paths: [.github/workflows/service-images.yml]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact Honeycomb source revision
+        required: true
+        default: b39b1ceb96997ec4c80cb5c5354130ecb9da73eb
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, web]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || 'b39b1ceb96997ec4c80cb5c5354130ecb9da73eb' }}
+      - name: Build and save immutable ARM64 candidate
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          SOURCE_REVISION=$(git rev-parse HEAD)
+          docker build --label org.opencontainers.image.revision="$SOURCE_REVISION" -f "deploy/Dockerfile.$COMPONENT" -t "honeycomb-$COMPONENT:candidate" .
+          mkdir candidate
+          docker image inspect "honeycomb-$COMPONENT:candidate" > candidate/image.json
+          printf '%s\n' "$SOURCE_REVISION" > candidate/SOURCE_REVISION
+          docker save "honeycomb-$COMPONENT:candidate" | gzip > "candidate/honeycomb-$COMPONENT-arm64.tar.gz"
+          (cd candidate && sha256sum *.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: honeycomb-${{ matrix.component }}-arm64-candidate
+          path: candidate/*
+          retention-days: 14
+# Artifacts only; no registry push, publication, or deployment.

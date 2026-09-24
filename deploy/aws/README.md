@@ -90,8 +90,8 @@ Run on the backend host, using the existing protected environment file and local
 SQLite database; first omit `--apply` to review its safe projection:
 
 ```sh
-python3 adopt_legacy_app.py --app 'tos>briefcase' \
-  --expected-identity 'tos>briefcase' \
+python3 adopt_legacy_app.py --app 'briefcase' \
+  --expected-identity 'briefcase' \
   --metadata briefcase-catalog.json \
   --database /var/lib/silicon-honeycomb/backend/honeycomb.db \
   --env-file /etc/silicon-honeycomb/backend.env \

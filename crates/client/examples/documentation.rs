@@ -25,7 +25,7 @@ pub async fn upload_example() -> anyhow::Result<()> {
     use std::path::Path;
     let client = Client::new("https://backend.honeycomb.teamofsilicons.com")?
         .with_token(std::env::var("HONEYCOMB_ACCESS_TOKEN")?);
-    let app = client.app("my-org>my-app").await?;
+    let app = client.app("my-app").await?;
     let mutation = Mutation {
         idempotency_key: "my-app-release-upload-0001".into(),
         revision: Some(app.revision),

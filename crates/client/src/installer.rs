@@ -92,7 +92,7 @@ pub fn install_archive(
     aliases: &BTreeMap<String, String>,
     previous: Option<&Installed>,
 ) -> Result<Installed> {
-    install_archive_with_identity(archive, state_dir, aliases, previous, None, false)
+    install_archive_with_identity(archive, state_dir, aliases, previous, None, false, None)
 }
 
 /// Install using the application selected by the caller's verified release record.
@@ -111,6 +111,7 @@ pub fn install_archive_for(
         previous,
         Some((app_id, ReleaseChannel::Prod)),
         false,
+        None,
     )
 }
 
@@ -153,6 +154,31 @@ pub fn install_archive_channel_resolving(
         previous,
         Some((app_id, channel)),
         rewrite,
+        None,
+    )
+}
+
+/// Install a release with its exact migration alias from the trusted catalog.
+/// Callers must verify the downloaded archive checksum against that release.
+#[allow(clippy::too_many_arguments)]
+pub fn install_catalog_archive(
+    app_id: &str,
+    channel: ReleaseChannel,
+    legacy_app_id: Option<&str>,
+    archive: &Path,
+    state_dir: &Path,
+    aliases: &BTreeMap<String, String>,
+    previous: Option<&Installed>,
+    rewrite: bool,
+) -> Result<Installed> {
+    install_archive_with_identity(
+        archive,
+        state_dir,
+        aliases,
+        previous,
+        Some((app_id, channel)),
+        rewrite,
+        legacy_app_id,
     )
 }
 
@@ -163,12 +189,13 @@ fn install_archive_with_identity(
     previous: Option<&Installed>,
     requested: Option<(&str, ReleaseChannel)>,
     rewrite: bool,
+    legacy_app_id: Option<&str>,
 ) -> Result<Installed> {
     let expected_sha = package::sha256(archive)?;
     fs::create_dir_all(state_dir)?;
     let state_dir = state_dir.canonicalize()?;
     let stage = tempfile::tempdir_in(&state_dir)?;
-    let m = package::unpack(archive, stage.path())?;
+    let m = package::unpack_with_legacy_identity(archive, stage.path(), legacy_app_id)?;
     let channel = requested.map(|(_, channel)| channel).unwrap_or_default();
     let app_id = requested
         .map(|(id, _)| id)
@@ -180,7 +207,10 @@ fn install_archive_with_identity(
     if !honeycomb_core::valid_app_id(app_id) {
         bail!("Invalid installation application ID");
     }
-    if m.app_id.as_deref().is_some_and(|id| id != app_id) {
+    if m.app_id
+        .as_deref()
+        .is_some_and(|id| id != app_id && Some(id) != legacy_app_id)
+    {
         bail!("Archive app_id differs from the selected application");
     }
     let target = package::current_target()?;
@@ -440,15 +470,15 @@ fn launcher_version(path: &Path) -> Option<Version> {
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
-    // <state>/packages/<org>/<app>/<version>-<sha12>/<executable>
+    // New packages omit the organization directory; retained old installations
+    // keep it. Locate the immutable version directory in either layout.
     let packages = parts.iter().rposition(|p| p == "packages")?;
-    let offset = if parts.get(packages + 3)? == "dev" {
-        4
-    } else {
-        3
-    };
-    let (version, _) = parts.get(packages + offset)?.rsplit_once('-')?;
-    Version::parse(version).ok()
+    parts[packages + 1..].iter().find_map(|part| {
+        let (version, checksum) = part.rsplit_once('-')?;
+        (checksum.len() == 12 && checksum.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| Version::parse(version).ok())
+            .flatten()
+    })
 }
 
 fn probe_version(path: &Path) -> Option<Version> {

@@ -28,6 +28,7 @@ pub async fn activate(
         .fetch_optional(&s.db)
         .await?
         .ok_or_else(Error::missing)?;
+    Error::require_unheld(&publication.get::<String, _>("state"))?;
     let app_id: String = publication.get("app_id");
     let app = find_app(&s, &c, &app_id, true).await?;
     let digest = hex::encode(Sha256::digest(
@@ -66,7 +67,7 @@ pub async fn activate(
                 "All provider and Honeycomb approvals must be accepted",
             ));
         }
-        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','release','publication.activate'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state IN ('pending','held_identifier_migration') AND kind IN ('webhook.approve','webhook.rotate','secret.rotate','release','publication.activate'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
         if busy {
             return Err(Error::conflict(
                 "Finish the application's pending release or secret operation first",
@@ -82,16 +83,16 @@ pub async fn activate(
         let configuration_operations:Vec<String>=sqlx::query_scalar("SELECT id FROM operations WHERE plane=? AND resource=? AND kind='configure' AND revision=? AND state='pending'")
             .bind(&c.plane).bind(&app_id).bind(expected).fetch_all(&mut *tx).await?;
         let releases = sqlx::query(
-            "SELECT channel,version,storage_ref FROM releases WHERE plane=? AND app_id=?",
+            "SELECT channel,version,storage_ref FROM releases WHERE plane=? AND app_id=? AND visibility='private' AND (configuration_revision=? OR configuration_revision=0)",
         )
         .bind(&c.plane)
         .bind(&app_id)
+        .bind(expected)
         .fetch_all(&mut *tx)
         .await?;
-        if !releases
-            .iter()
-            .any(|r| r.get::<String, _>("channel") == "prod")
-        {
+        let has_prod: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM releases WHERE plane=? AND app_id=? AND channel='prod' AND (visibility='public' OR configuration_revision=? OR configuration_revision=0))")
+            .bind(&c.plane).bind(&app_id).bind(expected).fetch_one(&mut *tx).await?;
+        if !has_prod {
             return Err(Error::conflict("Publication requires a CLI release"));
         }
         let approvals: Vec<String> = sqlx::query_scalar(
@@ -173,7 +174,7 @@ fn configuration(request: &Value, response: &Value) -> Result<Value> {
         .cloned()
         .ok_or_else(|| Error::unavailable("IAM omitted its effective configuration"))?;
     if config.get("org_id") != request["configuration"].get("org_id")
-        || config.get("local_app_id") != request["configuration"].get("local_app_id")
+        || config.get("app_id") != request["configuration"].get("app_id")
     {
         return Err(Error::unavailable(
             "IAM returned another application's configuration",
@@ -345,6 +346,10 @@ async fn coordinate(s: &State, c: &Context, id: &str, lease: &str) -> Result<()>
         .bind(json!({"accepted_by_publication":id}).to_string()).bind(&c.plane).bind(app).bind(revision).execute(&mut *tx).await?;
     sqlx::query("UPDATE operations SET state='superseded',error='A newer publication configuration was accepted' WHERE plane=? AND resource=? AND kind='configure' AND revision<? AND state='pending'")
         .bind(&c.plane).bind(app).bind(revision).execute(&mut *tx).await?;
+    // Visibility changes only after IAM acceptance, every archive share, and
+    // current-state reconciliation, atomically with the accepted configuration.
+    sqlx::query("UPDATE releases SET visibility='public',permission_approval_required=0 WHERE plane=? AND app_id=? AND visibility='private' AND (configuration_revision=? OR configuration_revision=0) AND EXISTS(SELECT 1 FROM publication_archives p WHERE p.operation_id=? AND p.channel=releases.channel AND p.version=releases.version AND p.state='ready')")
+        .bind(&c.plane).bind(app).bind(revision).bind(id).execute(&mut *tx).await?;
     sqlx::query("UPDATE publication_requests SET state='published',error=NULL WHERE id=?")
         .bind(publication)
         .execute(&mut *tx)

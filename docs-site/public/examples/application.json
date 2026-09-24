@@ -1,6 +1,6 @@
 {
   "org_id": "my-org",
-  "local_app_id": "my-app",
+  "app_id": "my-app",
   "name": "My application",
   "description": "My application helps members of our organization prepare, inspect, and share project work from a consistent command line interface. It provides native builds for supported desktop and server platforms, uses IAM for identity and permissions, and keeps organization data separated. This application is maintained by our team and is intended for authorized members working on shared projects.",
   "webhook_url": "https://api.example.com/webhook/",

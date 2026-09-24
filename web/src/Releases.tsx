@@ -2,7 +2,7 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { releaseEndpoint, request, type AppRecord } from "./api";
 
 export type ReleaseChannel = "prod" | "dev";
-type Release = { version: string; channel: ReleaseChannel; created_at: number };
+type Release = { version: string; channel: ReleaseChannel; created_at: number; visibility: "private" | "public"; permission_approval_required?: boolean; approval_status?: string };
 
 export default function Releases(props: {
   app: AppRecord;
@@ -19,7 +19,7 @@ export default function Releases(props: {
   let pending: { signature: string; key: string } | undefined;
   const [releases, { refetch }] = createResource(
     () => ({ appId: props.app.app_id, channel: channel(), refresh: props.refresh }),
-    ({ appId, channel }) => request<{ items: Release[] }>(`${releaseEndpoint(appId)}/releases?channel=${channel}`),
+    ({ appId, channel }) => request<{ items: Release[] }>(`${releaseEndpoint(appId)}/releases?channel=${channel}&include_private=true`),
   );
 
   async function promote(event: Event) {
@@ -68,7 +68,7 @@ export default function Releases(props: {
         <option value="dev">Development — experimental releases</option>
       </select>
     </label>
-    <p class="muted">Production and development have independent versions and updates.</p>
+    <p class="muted">Production and development have independent versions and updates. Releases awaiting approval stay private; existing installations keep the last public version.</p>
     <Show when={notice()}><p class="inline-notice" role="status">{notice()}</p></Show>
     <Show when={error()}><p class="field-error" role="alert">{error()}</p></Show>
     <Show when={releases.error}>
@@ -81,8 +81,20 @@ export default function Releases(props: {
           <ul class="release-list">
             <For each={releases()?.items}>{release => <li>
               <div><strong>{release.version}</strong> <span class="badge">{release.channel === "dev" ? "Development" : "Production"}</span>
+                <span class="badge">{release.visibility === "private" ? "Private" : "Public"}</span>
+                <Show when={release.visibility === "private"}>
+                  <p class="muted">{release.approval_status === "denied"
+                    ? "Approval denied. This release remains private and will not be sent as an update."
+                    : release.approval_status === "superseded"
+                      ? "A newer application configuration superseded this release. Upload a new release against the current configuration for review."
+                      : release.permission_approval_required || release.approval_status === "awaiting_scope_review"
+                        ? "This release requires additional permission approval. Existing installations will not update until it becomes public."
+                        : props.app.visibility === "public" || props.app.config.visibility === "public"
+                          ? "Awaiting publication approval. Existing installations will not update until this release becomes public."
+                          : "Available only within the owning organization."}</p>
+                </Show>
                 <small>{new Date(release.created_at * 1000).toLocaleString()}</small>
-                <code>{`honeycomb install '${props.app.app_id}${release.channel === "dev" ? ">test" : ""}@${release.version}'`}</code>
+                <Show when={release.visibility !== "private" || props.app.visibility === "private"}><code>{`honeycomb install '${props.app.app_id}${release.channel === "dev" ? ">test" : ""}@${release.version}'`}</code></Show>
               </div>
               <Show when={release.channel === "dev"}>
                 <button class="button outline" disabled={props.busy} onClick={() => { setSource(release.version); setVersion(""); setError(""); setNotice(""); }}>

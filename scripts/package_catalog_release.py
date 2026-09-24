@@ -47,7 +47,7 @@ def main():
                         shutil.copyfileobj(source, output)
                 destination.chmod(0o755)
                 targets[target] = {'root': f'targets/{target}', 'executables': {'app': f'bin/{binary}'}}
-        manifest = {'format_version': 1, 'app_id': 'tos>honeycomb', 'version': args.version,
+        manifest = {'format_version': 1, 'app_id': 'honeycomb', 'version': args.version,
                     'bin': {'honeycomb': 'app'}, 'targets': targets}
         (root / 'honeycomb.yaml').write_text(json.dumps(manifest, indent=2) + '\n')
         shutil.copyfile(Path(__file__).resolve().parents[1] / 'LICENSE', root / 'LICENSE')

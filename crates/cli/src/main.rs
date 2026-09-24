@@ -26,7 +26,7 @@ use std::{
     name = "honeycomb",
     version,
     about = "Discover, publish and install Silicon applications.",
-    long_about = "Honeycomb is the application library for Carbons and Silicons.\n\nStart: honeycomb search briefcase\nAuthenticate: honeycomb login <slt>\nPublish: honeycomb validate → honeycomb pack → honeycomb apps create → honeycomb releases upload\n\nRepository: https://github.com/teamofsilicons/silicon-honeycomb\nLibrary: https://honeycomb.teamofsilicons.com\nRust client: https://crates.io/crates/silicon-honeycomb-client\n\nEvery command supports --help. Quote app identifiers: 'tos>briefcase'."
+    long_about = "Honeycomb is the application library for Carbons and Silicons.\n\nStart: honeycomb search briefcase\nAuthenticate: honeycomb login <slt>\nPublish: honeycomb validate → honeycomb pack → honeycomb apps create → honeycomb releases upload\n\nRepository: https://github.com/teamofsilicons/silicon-honeycomb\nLibrary: https://honeycomb.teamofsilicons.com\nRust client: https://crates.io/crates/silicon-honeycomb-client\n\nEvery command supports --help. Quote app identifiers: 'briefcase'."
 )]
 struct Cli {
     /// Honeycomb backend origin. HTTPS required outside localhost.
@@ -238,7 +238,7 @@ enum Apps {
     Get {
         app_id: String,
     },
-    /// Submit application.json containing org_id, local_app_id, details, webhook and scopes.
+    /// Submit application.json containing org_id, app_id, details, webhook and scopes.
     Create {
         file: PathBuf,
     },
@@ -256,6 +256,9 @@ enum Releases {
         app_id: String,
         #[arg(long, default_value = "prod", value_parser = selection::channel)]
         channel: ReleaseChannel,
+        /// Include private pending releases (requires application management access).
+        #[arg(long)]
+        include_private: bool,
     },
     Upload {
         app_id: String,
@@ -929,8 +932,17 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             )?,
         },
         Command::Releases { command } => match command {
-            Releases::List { app_id, channel } => {
-                show(&client.releases_channel(app_id, *channel).await?)?
+            Releases::List {
+                app_id,
+                channel,
+                include_private,
+            } => {
+                let releases = if *include_private {
+                    client.release_history(app_id, *channel).await?
+                } else {
+                    client.releases_channel(app_id, *channel).await?
+                };
+                show(&releases)?
             }
             Releases::Upload {
                 app_id,
@@ -1375,9 +1387,10 @@ async fn install(
         if let Some(progress) = progress {
             progress.stage("Unpacking and activating commands");
         }
-        match installer::install_archive_channel_resolving(
+        match installer::install_catalog_archive(
             id,
             selection.channel,
+            release.legacy_manifest_app_id.as_deref(),
             &stage,
             root,
             &aliases,
@@ -1398,9 +1411,10 @@ async fn install(
                                 .join(", ")
                         );
                     }
-                    installer::install_archive_channel_resolving(
+                    installer::install_catalog_archive(
                         id,
                         selection.channel,
+                        release.legacy_manifest_app_id.as_deref(),
                         &stage,
                         root,
                         &aliases,
@@ -1935,7 +1949,7 @@ mod tests {
                 json!({"root":format!("targets/{target}"),"executables":{"app":"bin/app"}}),
             );
         }
-        fs::write(root.join("honeycomb.yaml"), json!({"format_version":1,"app_id":"fixture>package","version":version,"bin":{"honeycomb-fixture-command":"app"},"targets":targets}).to_string()).unwrap();
+        fs::write(root.join("honeycomb.yaml"), json!({"format_version":1,"app_id":"package","version":version,"bin":{"honeycomb-fixture-command":"app"},"targets":targets}).to_string()).unwrap();
         package::pack(root, None).unwrap()
     }
     async fn release_server(
@@ -1948,7 +1962,7 @@ mod tests {
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let sha = package::sha256(archive).unwrap();
         let bytes = fs::read(archive).unwrap();
-        let release = json!({"items":[{"app_id":"fixture>package","version":"1.1.0","sha256":sha,"size":bytes.len(),"created_at":1}]}).to_string().into_bytes();
+        let release = json!({"items":[{"app_id":"package","version":"1.1.0","sha256":sha,"size":bytes.len(),"created_at":1}]}).to_string().into_bytes();
         let key = key.map(str::to_owned);
         let token = token.to_owned();
         let task = tokio::spawn(async move {
@@ -2109,8 +2123,8 @@ mod tests {
         testing_server.await.unwrap();
         let after: BTreeMap<String, Installed> =
             read(&production.directory(&root.0).join("installed.json")).unwrap();
-        assert_eq!(after["fixture>package"].version, "1.1.0");
-        assert_eq!(after["fixture>package"].aliases, before_prod.aliases);
+        assert_eq!(after["package"].version, "1.1.0");
+        assert_eq!(after["package"].aliases, before_prod.aliases);
         assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
         assert_eq!(
             fs::read(&before_test.commands["honeycomb-fixture-command"]).unwrap(),
@@ -2178,7 +2192,7 @@ mod auto_update_tests {
         fs::write(&executable, b"immutable executable").unwrap();
         fs::write(&launcher, b"old package launcher").unwrap();
         let record = Installed {
-            app_id: "tos>honeycomb".into(),
+            app_id: "honeycomb".into(),
             channel: ReleaseChannel::Prod,
             version: "0.3.0".into(),
             target: "windows-arm64".into(),
@@ -2191,7 +2205,7 @@ mod auto_update_tests {
         };
         write_private(
             &state.join("installed.json"),
-            &BTreeMap::from([("tos>honeycomb", record)]),
+            &BTreeMap::from([("honeycomb", record)]),
         )
         .unwrap();
         // A directly invoked .exe still registers its stable .cmd launcher, even under another home.

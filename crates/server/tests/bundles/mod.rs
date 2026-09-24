@@ -65,10 +65,22 @@ async fn fixture() -> (State, Arc<Bundles>) {
         receipts: Mutex::new(BTreeMap::new()),
     });
     s.management = manager.clone();
+    for app in [
+        "iam",
+        "dm",
+        "briefcase",
+        "commit",
+        "remind",
+        "waveform",
+        "browser",
+        "starter",
+    ] {
+        sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES('production',?,'tos',?,'','{}','',1,1)").bind(app).bind(app).execute(&s.db).await.unwrap();
+    }
     (s, manager)
 }
 fn definition() -> Value {
-    json!({"app_name":"Silicon Interface","app_ids":["tos>iam","tos>dm","tos>briefcase","tos>commit","tos>remind","tos>waveform","tos>browser","tos>starter"]})
+    json!({"app_name":"Silicon Interface","app_ids":["iam","dm","briefcase","commit","remind","waveform","browser","starter"]})
 }
 const PATH: &str = "/api/v1/bundles/tos%3Einterface";
 const KEY: &str = "bundle-create-request-1";
@@ -89,8 +101,8 @@ async fn bundle_authority_and_member_validation_fail_before_management() {
     }
     for members in [
         json!([]),
-        json!(["tos>iam", "tos>iam"]),
-        json!(["other>app"]),
+        json!(["iam", "iam"]),
+        json!(["other-app"]),
         json!(["tos>interface"]),
     ] {
         let mut body = definition();

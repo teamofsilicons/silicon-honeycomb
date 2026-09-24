@@ -17,7 +17,7 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
-const APP: &str = "custom>catalog";
+const APP: &str = "catalog";
 const ENV: &str = "aaaaaaaa-0000-4000-8000-000000000001";
 const ROOT: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const PROD: &str = "ask_ppppppppppppppppppppppppppppppppppppppppppp";

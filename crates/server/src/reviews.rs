@@ -42,6 +42,7 @@ async fn request(s: &State, c: &Context, id: &str) -> Result<SqliteRow> {
 }
 pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
     let row = request(s, c, id).await?;
+    Error::require_unheld(&row.get::<String, _>("state"))?;
     let app = find_app(s, c, &row.get::<String, _>("app_id"), true).await?;
     if row.get::<i64, _>("revision") != app.revision {
         return Err(Error::conflict(
@@ -242,6 +243,7 @@ pub async fn decide(
         ));
     }
     let row = request(&s, &c, &id).await?;
+    Error::require_unheld(&row.get::<String, _>("state"))?;
     if !can_review(&s, &c, &row, &provider).await? {
         return Err(Error::forbidden());
     }

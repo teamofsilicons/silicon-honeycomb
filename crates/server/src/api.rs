@@ -433,15 +433,42 @@ pub(crate) async fn find_app(s: &State, c: &Context, id: &str, manage: bool) -> 
         return Err(Error::missing());
     }
     let mut app = app_from(&row, admin)?;
-    app.latest_version = latest_version(s, c, id).await?;
+    app.latest_version = latest_version(
+        s,
+        c,
+        id,
+        manage || private_release_access(s, c, &app).await?,
+    )
+    .await?;
     Ok(app)
 }
-async fn latest_version(s: &State, c: &Context, id: &str) -> Result<Option<String>> {
+// A reconciliation notification temporarily fences an existing public app as
+// private. That must not expose its pending releases to organization members.
+async fn private_release_access(s: &State, c: &Context, app: &App) -> Result<bool> {
+    if app.visibility != "private" {
+        return Ok(false);
+    }
+    let previously_public: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM releases WHERE plane=? AND app_id=? AND visibility='public')",
+    )
+    .bind(&c.plane)
+    .bind(&app.app_id)
+    .fetch_one(&s.db)
+    .await?;
+    Ok(!previously_public)
+}
+async fn latest_version(
+    s: &State,
+    c: &Context,
+    id: &str,
+    include_private: bool,
+) -> Result<Option<String>> {
     let versions: Vec<String> = sqlx::query_scalar(
-        "SELECT version FROM releases WHERE plane=? AND app_id=? AND channel='prod'",
+        "SELECT version FROM releases WHERE plane=? AND app_id=? AND channel='prod' AND (visibility='public' OR ?)",
     )
     .bind(&c.plane)
     .bind(id)
+    .bind(include_private)
     .fetch_all(&s.db)
     .await?;
     Ok(versions
@@ -590,7 +617,13 @@ async fn search(
         .map(|(_, a)| a)
         .collect();
     for a in &mut items {
-        a.latest_version = latest_version(&s, &c, &a.app_id).await?;
+        a.latest_version = latest_version(
+            &s,
+            &c,
+            &a.app_id,
+            q.managed || private_release_access(&s, &c, a).await?,
+        )
+        .await?;
     }
     Ok(Json(Page {
         items,
@@ -643,6 +676,7 @@ async fn existing_operation(
             .fetch_optional(&s.db)
             .await?;
     if let Some(row) = row {
+        Error::require_unheld(&row.get::<String, _>("state"))?;
         if row.get::<String, _>("request_hash") != request_hash {
             return Err(Error::conflict(
                 "Idempotency key was already used for a different request",
@@ -741,6 +775,9 @@ async fn save_app(
         None
     };
     if let Some(a) = &current {
+        if a.org_id != input.org_id {
+            return Err(Error::conflict("Application ownership cannot change"));
+        }
         if Some(a.revision) != expected {
             return Err(Error::conflict("Application revision has changed"));
         }
@@ -794,10 +831,10 @@ async fn save_app(
             ));
         }
     }
-    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate') AND state='pending')").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
+    let rotating:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind IN ('secret.rotate','publication.activate','webhook.approve','webhook.rotate','release') AND state IN ('pending','held_identifier_migration'))").bind(&c.plane).bind(&app_id).fetch_one(&mut *tx).await?;
     if rotating {
         return Err(Error::conflict(
-            "Finish or retry the pending credential, webhook or publication operation before changing application configuration",
+            "Finish or retry the pending release, credential, webhook or publication operation before changing application configuration",
         ));
     }
     if let Some(expected) = expected {
@@ -806,6 +843,16 @@ async fn save_app(
             return Err(Error::conflict("Application revision has changed"));
         }
     } else {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM applications WHERE plane=? AND app_id=?)",
+        )
+        .bind(&c.plane)
+        .bind(&app_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            return Err(Error::conflict("Application ID is already registered"));
+        }
         if c.plane != "production" {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM applications WHERE plane='production' AND app_id=?)",
@@ -832,6 +879,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
         .bind(&c.plane)
         .fetch_one(&s.db)
         .await?;
+    Error::require_unheld(&op.get::<String, _>("state"))?;
     let app_id: String = op.get("resource");
     let app = find_app(s, c, &app_id, true).await?;
     if app.revision != op.get::<i64, _>("revision") {
@@ -883,7 +931,7 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
                 .filter(|value| value.is_object())
                 .ok_or_else(|| Error::unavailable("IAM omitted its accepted configuration"))?;
             if effective["org_id"] != app.config["org_id"]
-                || effective["local_app_id"] != app.config["local_app_id"]
+                || effective["app_id"] != app.config["app_id"]
             {
                 return Err(Error::unavailable(
                     "IAM returned a configuration for another application",
@@ -993,6 +1041,8 @@ async fn validate_archive(
 #[derive(Deserialize)]
 struct ReleaseQuery {
     channel: Option<ReleaseChannel>,
+    #[serde(default)]
+    include_private: bool,
 }
 // The original v1 mutation remains a production upload without a channel field.
 async fn upload_release_v1(
@@ -1106,9 +1156,32 @@ async fn store_release(
         result["size"] = json!(size);
         result["promoted_from"] = json!(promoted_from);
         result["publication"] = automatic_publication(&s, &c, &id).await;
+        result["release"] = release_receipt(&s, &c, &id, channel, &version).await?;
         return Ok((StatusCode::OK, Json(result)));
     }
     let mut operation_tx = s.db.begin().await?;
+    let reconciling: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM application_reconciliation WHERE plane=? AND app_id=? AND state='pending')")
+        .bind(&c.plane).bind(&id).fetch_one(&mut *operation_tx).await?;
+    if reconciling {
+        return Err(Error::conflict(
+            "Wait for IAM reconciliation before uploading a release",
+        ));
+    }
+    let stable: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM applications WHERE plane=? AND app_id=? AND revision=? AND iam_revision=? AND effective_revision=? AND visibility=?)")
+        .bind(&c.plane).bind(&id).bind(app.revision).bind(app.iam_revision).bind(app.effective_revision).bind(&app.visibility).fetch_one(&mut *operation_tx).await?;
+    if !stable {
+        return Err(Error::conflict(
+            "Application changed before release upload; refresh and retry",
+        ));
+    }
+    let review_pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM publication_requests WHERE plane=? AND app_id=? AND revision=? AND state!='published')")
+        .bind(&c.plane).bind(&id).bind(app.revision).fetch_one(&mut *operation_tx).await?;
+    let permission_approval_required =
+        requested_scope_additions(&app.config, &app.effective_config);
+    let release_public = app.visibility == "public"
+        && app.effective_revision == app.revision
+        && !review_pending
+        && !permission_approval_required;
     let publishing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND kind='publication.activate' AND state='pending')").bind(&c.plane).bind(&id).fetch_one(&mut *operation_tx).await?;
     if publishing {
         return Err(Error::conflict(
@@ -1149,6 +1222,7 @@ async fn store_release(
     let mut reference = s
         .storage
         .put(
+            &app.org_id,
             &id,
             &if legacy {
                 version.clone()
@@ -1161,7 +1235,7 @@ async fn store_release(
             &op,
         )
         .await?;
-    if app.visibility == "public" {
+    if release_public {
         reference = s
             .storage
             .publish(
@@ -1174,7 +1248,7 @@ async fn store_release(
             .await?;
     }
     let mut tx = s.db.begin().await?;
-    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(plane,app_id,channel,version) DO NOTHING").bind(&c.plane).bind(&id).bind(channel.as_str()).bind(&version).bind(&sha).bind(size).bind(reference).bind(now()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO releases(plane,app_id,channel,version,sha256,size,storage_ref,created_at,visibility,configuration_revision,permission_approval_required) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(plane,app_id,channel,version) DO NOTHING").bind(&c.plane).bind(&id).bind(channel.as_str()).bind(&version).bind(&sha).bind(size).bind(reference).bind(now()).bind(if release_public { "public" } else { "private" }).bind(app.revision).bind(permission_approval_required).execute(&mut *tx).await?;
     let checksum: String = sqlx::query_scalar(
         "SELECT sha256 FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?",
     )
@@ -1213,7 +1287,7 @@ async fn store_release(
     Ok((
         StatusCode::CREATED,
         Json(
-            json!({"id":op,"state":"accepted","app_id":id,"channel":channel,"version":version,"promoted_from":promoted_from,"sha256":sha,"size":size,"publication":automatic_publication(&s, &c, &id).await}),
+            json!({"id":op,"state":"accepted","app_id":id,"channel":channel,"version":version,"promoted_from":promoted_from,"sha256":sha,"size":size,"publication":automatic_publication(&s, &c, &id).await,"release":release_receipt(&s, &c, &id, channel, &version).await?}),
         ),
     ))
 }
@@ -1239,8 +1313,15 @@ async fn promote_release(
         return Err(Error::conflict("Application revision changed"));
     }
     key(&h)?;
-    let row = sqlx::query("SELECT storage_ref,sha256 FROM releases WHERE plane=? AND app_id=? AND channel='dev' AND version=?")
+    let row = sqlx::query("SELECT r.storage_ref,r.sha256,r.visibility,r.configuration_revision,m.legacy_app_id FROM releases r LEFT JOIN migrated_release_identities m ON m.plane=r.plane AND m.app_id=r.app_id AND m.channel=r.channel AND m.version=r.version WHERE r.plane=? AND r.app_id=? AND r.channel='dev' AND r.version=?")
         .bind(&c.plane).bind(&id).bind(&source_version).fetch_optional(&s.db).await?.ok_or_else(Error::missing)?;
+    if row.get::<String, _>("visibility") == "private"
+        && row.get::<i64, _>("configuration_revision") != app.revision
+    {
+        return Err(Error::conflict(
+            "This private release belongs to another configuration revision; upload a new release against the current configuration",
+        ));
+    }
     let bytes = s
         .storage
         .read(
@@ -1255,12 +1336,19 @@ async fn promote_release(
             "Source dev release checksum does not match",
         ));
     }
+    let legacy: Option<String> = row.get("legacy_app_id");
+    let canonical = id.clone();
     let promoted = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("source.tar.gz");
         let output = directory.path().join("promoted.tar.gz");
         std::fs::write(&source, bytes)?;
-        honeycomb_core::package::repack_version(&source, &input.version, &output)?;
+        honeycomb_core::package::repack_catalog_release(
+            &source,
+            &input.version,
+            &output,
+            Some((&canonical, legacy.as_deref())),
+        )?;
         Ok(std::fs::read(output)?)
     })
     .await
@@ -1276,8 +1364,40 @@ async fn promote_release(
     )
     .await
 }
+fn requested_scope_additions(requested: &Value, effective: &Value) -> bool {
+    ["iam", "external"].iter().any(|kind| {
+        requested["app_scope"][kind]
+            .as_array()
+            .is_some_and(|scopes| {
+                scopes.iter().any(|scope| {
+                    !effective["app_scope"][kind]
+                        .as_array()
+                        .is_some_and(|approved| approved.contains(scope))
+                })
+            })
+    })
+}
+async fn release_receipt(
+    s: &State,
+    c: &Context,
+    id: &str,
+    channel: ReleaseChannel,
+    version: &str,
+) -> Result<Value> {
+    let row = sqlx::query("SELECT visibility,configuration_revision,permission_approval_required FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?")
+        .bind(&c.plane).bind(id).bind(channel.as_str()).bind(version).fetch_one(&s.db).await?;
+    Ok(
+        json!({"visibility":row.get::<String,_>("visibility"),"configuration_revision":row.get::<i64,_>("configuration_revision"),"permission_approval_required":row.get::<bool,_>("permission_approval_required") && row.get::<String,_>("visibility") != "public"}),
+    )
+}
 fn release_from(r: &SqliteRow) -> Release {
     Release {
+        visibility: r.get("visibility"),
+        configuration_revision: r.get("configuration_revision"),
+        permission_approval_required: r.get::<bool, _>("permission_approval_required")
+            && r.get::<String, _>("visibility") != "public",
+        approval_status: r.try_get("approval_status").ok().flatten(),
+        legacy_manifest_app_id: r.try_get("legacy_manifest_app_id").ok().flatten(),
         app_id: r.get("app_id"),
         channel: r
             .get::<String, _>("channel")
@@ -1300,6 +1420,7 @@ async fn releases_v1(
         id,
         Query(ReleaseQuery {
             channel: Some(ReleaseChannel::Prod),
+            include_private: false,
         }),
     )
     .await
@@ -1311,12 +1432,14 @@ async fn releases(
     Query(q): Query<ReleaseQuery>,
 ) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
-    find_app(&s, &c, &id, false).await?;
+    let app = find_app(&s, &c, &id, q.include_private).await?;
+    let include_private = q.include_private || private_release_access(&s, &c, &app).await?;
     let mut items: Vec<Release> =
-        sqlx::query("SELECT * FROM releases WHERE plane=? AND app_id=? AND channel=?")
+        sqlx::query("SELECT r.*,m.legacy_app_id AS legacy_manifest_app_id,CASE WHEN r.visibility='public' THEN 'published' WHEN r.configuration_revision!=0 AND r.configuration_revision!=a.revision THEN 'superseded' ELSE p.state END AS approval_status FROM releases r JOIN applications a ON a.plane=r.plane AND a.app_id=r.app_id LEFT JOIN publication_requests p ON p.plane=r.plane AND p.app_id=r.app_id AND p.revision=r.configuration_revision LEFT JOIN migrated_release_identities m ON m.plane=r.plane AND m.app_id=r.app_id AND m.channel=r.channel AND m.version=r.version WHERE r.plane=? AND r.app_id=? AND r.channel=? AND (r.visibility='public' OR ?)")
             .bind(&c.plane)
             .bind(id)
             .bind(q.channel.unwrap_or_default().as_str())
+            .bind(include_private)
             .fetch_all(&s.db)
             .await?
             .iter()
@@ -1369,15 +1492,17 @@ async fn download(
             "Application is awaiting IAM activation or is disabled",
         ));
     }
+    let private_access = private_release_access(&s, &c, &app).await?;
     let version = if let Some(version) = q.version {
         version
     } else {
         let versions: Vec<String> = sqlx::query_scalar(
-            "SELECT version FROM releases WHERE plane=? AND app_id=? AND channel=?",
+            "SELECT version FROM releases WHERE plane=? AND app_id=? AND channel=? AND (visibility='public' OR ?)",
         )
         .bind(&c.plane)
         .bind(&id)
         .bind(q.channel.as_str())
+        .bind(private_access)
         .fetch_all(&s.db)
         .await?;
         versions
@@ -1388,7 +1513,7 @@ async fn download(
             .ok_or_else(Error::missing)?
     };
     let row = sqlx::query(
-        "SELECT * FROM releases WHERE plane=? AND app_id=? AND channel=? AND version=?",
+        "SELECT r.*,m.legacy_app_id AS legacy_manifest_app_id FROM releases r LEFT JOIN migrated_release_identities m ON m.plane=r.plane AND m.app_id=r.app_id AND m.channel=r.channel AND m.version=r.version WHERE r.plane=? AND r.app_id=? AND r.channel=? AND r.version=?",
     )
     .bind(&c.plane)
     .bind(&id)
@@ -1397,6 +1522,9 @@ async fn download(
     .fetch_optional(&s.db)
     .await?
     .ok_or_else(Error::missing)?;
+    if !private_access && row.get::<String, _>("visibility") != "public" {
+        return Err(Error::missing());
+    }
     let bytes = s
         .storage
         .read(

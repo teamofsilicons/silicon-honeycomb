@@ -64,10 +64,7 @@ impl IamManagement {
             .await
             .map_err(map_error)?;
         if identity.app_id != app
-            || identity
-                .app_id
-                .split_once('>')
-                .is_none_or(|(org, _)| org != identity.org_id)
+            || !honeycomb_core::valid_org_id(&identity.org_id)
             || identity.iam_revision <= 0
             || identity.application_id != app
             || identity.organization_id.is_nil()
@@ -255,14 +252,18 @@ impl IamManagement {
         )
     }
     async fn testing_configuration(&self, app: &str, plane: Uuid, record: &Value) -> Result<Value> {
-        let (org, local) = app
-            .split_once('>')
-            .ok_or_else(|| Error::bad("Invalid app ID"))?;
-        if record["app_id"] != app || record["org_id"] != org {
+        if !honeycomb_core::valid_app_id(app) {
+            return Err(Error::bad("Invalid app ID"));
+        }
+        let org = record["org_id"]
+            .as_str()
+            .filter(|org| honeycomb_core::valid_org_id(org))
+            .ok_or_else(|| Error::unavailable("IAM omitted the owning organization"))?;
+        if record["app_id"] != app {
             return Err(Error::unavailable("IAM returned another test application"));
         }
         let row = sqlx::query(
-            "SELECT revision,config,effective_config FROM applications WHERE plane=? AND app_id=?",
+            "SELECT org_id,revision,config,effective_config FROM applications WHERE plane=? AND app_id=?",
         )
         .bind(plane.to_string())
         .bind(app)
@@ -276,8 +277,13 @@ impl IamManagement {
                 .ok_or_else(|| Error::unavailable("No matching accepted test metadata exists"))?
         };
         let mut config: Value = serde_json::from_str(&base).map_err(|e| anyhow::anyhow!(e))?;
+        if row.get::<String, _>("org_id") != org {
+            return Err(Error::unavailable(
+                "IAM returned another owning organization",
+            ));
+        }
         config["org_id"] = json!(org);
-        config["local_app_id"] = json!(local);
+        config["app_id"] = json!(app);
         for (to, from) in [
             ("name", "app_name"),
             ("logo_url", "app_logo"),

@@ -56,6 +56,7 @@ struct Storage;
 impl ArchiveStorage for Storage {
     async fn put(
         &self,
+        _org: &str,
         _: &str,
         _: &str,
         _: &std::path::Path,
@@ -93,7 +94,7 @@ impl Management for BlockingManager {
     }
 }
 fn input(app: &str) -> Value {
-    json!({"org_id":"alpha","local_app_id":app,"name":"Testing Application","description":"A useful application for the Silicon ecosystem. ".repeat(8),"webhook_url":"https://example.com/webhook","webhook_secret":"fixture-webhook-secret-long-enough","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]}})
+    json!({"org_id":"alpha","app_id":app,"name":"Testing Application","description":"A useful application for the Silicon ecosystem. ".repeat(8),"webhook_url":"https://example.com/webhook","webhook_secret":"fixture-webhook-secret-long-enough","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]}})
 }
 async fn request(
     s: &State,
@@ -105,7 +106,7 @@ async fn request(
     let mut request = Request::builder()
         .method(if update { "PUT" } else { "POST" })
         .uri(if update {
-            format!("/api/v1/apps/alpha%3E{app}")
+            format!("/api/v1/apps/{app}")
         } else {
             "/api/v1/apps".into()
         })
@@ -141,8 +142,8 @@ async fn pending_configuration_serializes_the_entire_test_environment_without_bl
         identity: Arc::new(Users),
         management: manager.clone(),
         storage: Arc::new(Storage),
-        app_id: "platform>catalog".into(),
-        iam_app_id: "platform>identity".into(),
+        app_id: "catalog".into(),
+        iam_app_id: "identity".into(),
         iam_login_url: "https://iam.invalid".into(),
         encryption_key: [7; 32],
         webhook_secret: "fixture".into(),
@@ -182,21 +183,19 @@ async fn pending_configuration_serializes_the_entire_test_environment_without_bl
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(manager.calls.load(Ordering::SeqCst), 1);
-    let revision: i64 = sqlx::query_scalar(
-        "SELECT revision FROM applications WHERE plane=? AND app_id='alpha>first'",
-    )
-    .bind(FIRST)
-    .fetch_one(&s.db)
-    .await
-    .unwrap();
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM applications WHERE plane=? AND app_id='first'")
+            .bind(FIRST)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
     assert_eq!(revision, 1);
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM applications WHERE plane=? AND app_id='alpha>second'",
-    )
-    .bind(FIRST)
-    .fetch_one(&s.db)
-    .await
-    .unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM applications WHERE plane=? AND app_id='second'")
+            .bind(FIRST)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
     assert_eq!(count, 0);
     // The guard is per environment, not a global production lock.
     assert_eq!(

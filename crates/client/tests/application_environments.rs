@@ -48,7 +48,7 @@ async fn application_setup_uses_production_basic_auth_and_body_attachment_key() 
     });
     let client = Client::new(&origin)
         .unwrap()
-        .with_application("alpha>app", "production-secret")
+        .with_application("app", "production-secret")
         .unwrap();
     assert!(client.with_environment(&key).is_err());
     assert!(
@@ -56,7 +56,7 @@ async fn application_setup_uses_production_basic_auth_and_body_attachment_key() 
             .unwrap()
             .with_environment(&key)
             .unwrap()
-            .with_application("alpha>app", "production-secret")
+            .with_application("app", "production-secret")
             .is_err()
     );
     client

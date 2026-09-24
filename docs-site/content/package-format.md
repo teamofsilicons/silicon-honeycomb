@@ -14,7 +14,7 @@ my-app/
 ## Complete manifest
 ```yaml
 format_version: 1
-# app_id: my-org>my-app  # Optional
+# app_id: my-app  # Optional
 version: 1.0.0
 bin:
   my-app: main
@@ -50,7 +50,7 @@ targets:
 | Field | Meaning |
 | --- | --- |
 | `format_version` | Must be `1`. |
-| `app_id` | Optional permanent `org>app` identity. If present, it must match the application selected for upload or installation. If omitted, the selected application and its release record provide the identity. |
+| `app_id` | Optional permanent `app` identity. If present, it must match the application selected for upload or installation. If omitted, the selected application and its release record provide the identity. |
 | `version` | Semantic release version, for example `1.0.0`. |
 | `bin` | Public command name → logical executable identifier. At least one command is required. |
 | `targets` | Target ID → root directory and executable mappings. |

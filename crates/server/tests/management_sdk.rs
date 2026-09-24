@@ -10,11 +10,11 @@ async fn setup(server: &MockServer) -> (IamManagement, sqlx::SqlitePool, Value, 
     let db = silicon_honeycomb_server::database("sqlite::memory:")
         .await
         .unwrap();
-    let config = json!({"org_id":"tos","local_app_id":"sdk-test","name":"SDK test","description":"Catalog-owned description","webhook_url":"https://example.com/webhook/","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read","directory.carbons.read"],"external":[]},"obo_endpoints":[],"testing_idle_days":30});
-    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES('production','tos>sdk-test','tos','SDK test','Catalog-owned description',?,'unused',1,1)")
+    let config = json!({"org_id":"tos","app_id":"sdk-test","name":"SDK test","description":"Catalog-owned description","webhook_url":"https://example.com/webhook/","webhook_scope":["membership"],"app_scope":{"iam":["self.identity.read","directory.carbons.read"],"external":[]},"obo_endpoints":[],"testing_idle_days":30});
+    sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES('production','sdk-test','tos','SDK test','Catalog-owned description',?,'unused',1,1)")
         .bind(config.to_string()).execute(&db).await.unwrap();
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,'configure','tos>sdk-test','test',1,1)")
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,'configure','sdk-test','test',1,1)")
         .bind(&id).bind(&id).execute(&db).await.unwrap();
     let adapter = IamManagement::new(
         &server.uri(),
@@ -26,18 +26,18 @@ async fn setup(server: &MockServer) -> (IamManagement, sqlx::SqlitePool, Value, 
     (adapter, db, config, id)
 }
 fn record() -> Value {
-    json!({"app_id":"tos>sdk-test","org_id":"tos","app_name":"Accepted name","app_logo":null,"base_url":null,"configuration_revision":1,"iam_revision":2,"visibility":"private","availability":"verified","app_scope":{"iam":["self.identity.read","directory.carbons.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read","basis":"policy"}],"obo_endpoints":[],"webhook_scope":["membership"],"testing_idle_days":30})
+    json!({"app_id":"sdk-test","org_id":"tos","app_name":"Accepted name","app_logo":null,"base_url":null,"configuration_revision":1,"iam_revision":2,"visibility":"private","availability":"verified","app_scope":{"iam":["self.identity.read","directory.carbons.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read","basis":"policy"}],"obo_endpoints":[],"webhook_scope":["membership"],"testing_idle_days":30})
 }
 #[tokio::test]
 async fn configuration_uses_service_and_actor_authority_and_replays_identical_encrypted_body() {
     let server = MockServer::start().await;
     let (adapter, db, config, id) = setup(&server).await;
-    Mock::given(method("PUT")).and(path("/api/v1/honeycomb/applications/tos%3Esdk-test/configuration"))
+    Mock::given(method("PUT")).and(path("/api/v1/honeycomb/applications/sdk-test/configuration"))
         .and(header("authorization",format!("Bearer hck_{}","a".repeat(43))))
         .and(header("x-honeycomb-actor-token","oat_actor")).and(header("idempotency-key",id.as_str()))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"operation_id":id,"state":"accepted","configuration_revision":1,"iam_revision":2,"effective_configuration":record(),"app_secret":"one-time-result"})))
         .expect(2).mount(&server).await;
-    let mut operation = json!({"operation_id":id,"app_id":"tos>sdk-test","configuration_revision":1,"expected_iam_revision":0,"configuration":config,"webhook_secret":"webhook-secret-only-inside-encryption","visibility":"private"});
+    let mut operation = json!({"operation_id":id,"app_id":"sdk-test","configuration_revision":1,"expected_iam_revision":0,"configuration":config,"webhook_secret":"webhook-secret-only-inside-encryption","visibility":"private"});
     let result = adapter
         .configure(&operation, "oat_actor", None)
         .await
@@ -82,10 +82,10 @@ async fn rotation_passes_transient_step_up_and_recovers_by_exact_mutation_replay
     let server = MockServer::start().await;
     let (adapter, db, _, _) = setup(&server).await;
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,'secret.rotate','tos>sdk-test','test',1,1)").bind(&id).bind(&id).execute(&db).await.unwrap();
-    Mock::given(method("POST")).and(path("/api/v1/honeycomb/applications/tos%3Esdk-test/secret-rotations"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"operation_id":id,"state":"accepted","iam_revision":3,"app_id":"tos>sdk-test","credential_version":2,"app_secret":"replacement-secret"}))).expect(2).mount(&server).await;
-    let operation = json!({"operation_id":id,"app_id":"tos>sdk-test","configuration_revision":1,"expected_iam_revision":2});
+    sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,'secret.rotate','sdk-test','test',1,1)").bind(&id).bind(&id).execute(&db).await.unwrap();
+    Mock::given(method("POST")).and(path("/api/v1/honeycomb/applications/sdk-test/secret-rotations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"operation_id":id,"state":"accepted","iam_revision":3,"app_id":"sdk-test","credential_version":2,"app_secret":"replacement-secret"}))).expect(2).mount(&server).await;
+    let operation = json!({"operation_id":id,"app_id":"sdk-test","configuration_revision":1,"expected_iam_revision":2});
     let rotated = adapter
         .rotate_secret(&operation, "oat_actor", Some("step-up-proof"), None)
         .await
@@ -123,12 +123,12 @@ async fn snapshot_reads_effective_scopes_and_maps_iam_availability() {
         .await
         .unwrap();
     Mock::given(method("GET"))
-        .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test"))
+        .and(path("/api/v1/honeycomb/applications/sdk-test"))
         .respond_with(ResponseTemplate::new(200).set_body_json(record()))
         .mount(&server)
         .await;
     let current = adapter
-        .application_snapshot("tos>sdk-test", None)
+        .application_snapshot("sdk-test", None)
         .await
         .unwrap();
     assert_eq!(current["availability"], "active");
@@ -151,11 +151,11 @@ async fn webhook_uses_official_routes_actor_step_up_and_exact_replay_without_lea
     current["pending_webhook_endpoint_id"] = json!(pending);
     current["unrelated_secret"] = json!("must-not-return");
     Mock::given(method("GET"))
-        .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test"))
+        .and(path("/api/v1/honeycomb/applications/sdk-test"))
         .respond_with(ResponseTemplate::new(200).set_body_json(current))
         .mount(&server)
         .await;
-    let status = adapter.webhook_state("tos>sdk-test", None).await.unwrap();
+    let status = adapter.webhook_state("sdk-test", None).await.unwrap();
     assert_eq!(status["pending_endpoint_id"], json!(pending));
     assert!(!status.to_string().contains("must-not-return"));
     for (kind, suffix, extra) in [
@@ -171,16 +171,16 @@ async fn webhook_uses_official_routes_actor_step_up_and_exact_replay_without_lea
         ),
     ] {
         let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,?,'tos>sdk-test','test',1,1)").bind(&id).bind(&id).bind(kind).execute(&db).await.unwrap();
+        sqlx::query("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,created_at) VALUES(?,'production','actor',?,?,'sdk-test','test',1,1)").bind(&id).bind(&id).bind(kind).execute(&db).await.unwrap();
         let mut receipt =
-            json!({"operation_id":id,"state":"accepted","iam_revision":3,"app_id":"tos>sdk-test"});
+            json!({"operation_id":id,"state":"accepted","iam_revision":3,"app_id":"sdk-test"});
         receipt
             .as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         Mock::given(method("POST"))
             .and(path(format!(
-                "/api/v1/honeycomb/applications/tos%3Esdk-test/{suffix}"
+                "/api/v1/honeycomb/applications/sdk-test/{suffix}"
             )))
             .and(header(
                 "authorization",
@@ -191,7 +191,7 @@ async fn webhook_uses_official_routes_actor_step_up_and_exact_replay_without_lea
             .expect(2)
             .mount(&server)
             .await;
-        let mut operation = json!({"operation_id":id,"kind":kind,"app_id":"tos>sdk-test","expected_iam_revision":2,"pending_endpoint_id":pending,"webhook_secret":"new-signing-material-that-must-be-encrypted"});
+        let mut operation = json!({"operation_id":id,"kind":kind,"app_id":"sdk-test","expected_iam_revision":2,"pending_endpoint_id":pending,"webhook_secret":"new-signing-material-that-must-be-encrypted"});
         adapter
             .webhook_mutation(&operation, "oat_actor", Some("transient-proof"), None)
             .await
@@ -236,18 +236,18 @@ async fn snapshot_requires_current_iam_confirmation_of_the_local_publication() {
     for confirmed in [Value::Null, json!(uuid::Uuid::new_v4()), json!(local)] {
         let server = MockServer::start().await;
         let (adapter, db, _, _) = setup(&server).await;
-        sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at) VALUES(?,'production','tos>sdk-test',1,'published','actor',1)")
+        sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at) VALUES(?,'production','sdk-test',1,'published','actor',1)")
             .bind(&local).execute(&db).await.unwrap();
         let mut authoritative = record();
         authoritative["visibility"] = json!("public");
         authoritative["publication_request_id"] = confirmed.clone();
         Mock::given(method("GET"))
-            .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test"))
+            .and(path("/api/v1/honeycomb/applications/sdk-test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(authoritative))
             .mount(&server)
             .await;
         let snapshot = adapter
-            .application_snapshot("tos>sdk-test", None)
+            .application_snapshot("sdk-test", None)
             .await
             .unwrap();
         assert_eq!(
@@ -266,10 +266,10 @@ async fn validation_failures_explain_correction_without_leaking_upstream_details
     let server = MockServer::start().await;
     let (adapter, _, config, id) = setup(&server).await;
     Mock::given(method("PUT"))
-        .and(path("/api/v1/honeycomb/applications/tos%3Esdk-test/configuration"))
+        .and(path("/api/v1/honeycomb/applications/sdk-test/configuration"))
         .respond_with(ResponseTemplate::new(422).set_body_json(json!({"error":{"code":"validation_failed","message":"private upstream diagnostic","request_id":"01a0a943-b40b-703c-92df-9f7017037f56","details":{"fields":[{"field":"webhook_scope","message":"private webhook secret"}]}}})))
         .mount(&server).await;
-    let operation = json!({"operation_id":id,"app_id":"tos>sdk-test","configuration_revision":1,"expected_iam_revision":0,"configuration":config,"webhook_secret":"secret-test","visibility":"private"});
+    let operation = json!({"operation_id":id,"app_id":"sdk-test","configuration_revision":1,"expected_iam_revision":0,"configuration":config,"webhook_secret":"secret-test","visibility":"private"});
     let error = adapter
         .configure(&operation, "oat_actor", None)
         .await

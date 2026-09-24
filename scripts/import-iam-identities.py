@@ -35,13 +35,13 @@ def import_identities(database, exported):
         reverse[canonical_key] = key[1]
         mapping[key] = value
         if key[0] == 'production' and row.get('kind') == 'application':
-            if not re.fullmatch(r'[a-z0-9_-]+>[a-z0-9_-]+', value):
+            if not re.fullmatch(r'(?:[a-z0-9_-]+>)?[a-z][a-z0-9_-]{0,79}', value):
                 raise ValueError('Invalid canonical production application identity')
             application_mapping[key[1]] = value
 
     def canonical_application(value, app_id=None):
         replacement = application_mapping.get(value, value)
-        if not isinstance(replacement, str) or not re.fullmatch(r'[a-z0-9_-]+>[a-z0-9_-]+', replacement):
+        if not isinstance(replacement, str) or not re.fullmatch(r'(?:[a-z0-9_-]+>)?[a-z][a-z0-9_-]{0,79}', replacement):
             raise ValueError('Export does not cover retained production application identity')
         if app_id is not None and replacement != app_id:
             raise ValueError('Application identity does not match its retained application handle')

@@ -268,6 +268,7 @@ impl Briefcase {
 impl ArchiveStorage for Briefcase {
     async fn put(
         &self,
+        _org: &str,
         app_id: &str,
         version: &str,
         path: &std::path::Path,
@@ -275,10 +276,10 @@ impl ArchiveStorage for Briefcase {
         environment: Option<&str>,
         operation_id: &str,
     ) -> Result<String> {
-        let org = app_id
-            .split_once('>')
-            .ok_or_else(|| Error::bad("Invalid app ID"))?
-            .0;
+        if !honeycomb_core::valid_org_id(_org) || !honeycomb_core::valid_app_id(app_id) {
+            return Err(Error::bad("Invalid application ID or owning organization"));
+        }
+        let org = _org;
         let name = format!("{}-{version}.tar.gz", app_id.replace('>', "--"));
         self.put_file(
             UploadFile {
@@ -485,10 +486,10 @@ mod tests {
     use super::*;
     #[test]
     fn public_download_uses_configured_backend_and_preserves_encoded_segments() {
-        let value:Value = serde_json::from_str(&public_reference("entry", &json!({"effective":true,"url":"https://briefcase.teamofsilicons.com/org/tos/apps/tos%3Ehoneycomb/public/package.tar.gz"}), false).unwrap()).unwrap();
+        let value:Value = serde_json::from_str(&public_reference("entry", &json!({"effective":true,"url":"https://briefcase.teamofsilicons.com/org/tos/apps/honeycomb/public/package.tar.gz"}), false).unwrap()).unwrap();
         assert_eq!(
             value["public_path"],
-            "/api/v1/public/tos/apps/tos%3Ehoneycomb/public/package.tar.gz?view=attachment"
+            "/api/v1/public/tos/apps/honeycomb/public/package.tar.gz?view=attachment"
         );
         assert!(!value.to_string().contains("https:"));
     }

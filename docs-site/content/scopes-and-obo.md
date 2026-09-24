@@ -7,12 +7,12 @@
   "app_scope": {
     "iam": ["self.identity.read", "self.membership.read", "self.tags.read"],
     "external": [
-      {"app_id": "tos>briefcase", "endpoint_id": "briefcase.files.read"}
+      {"app_id": "briefcase", "endpoint_id": "briefcase.files.read"}
     ]
   }
 }
 ```
-This is a configuration fragment, not a full creation document. Choose only what your app needs. External endpoint IDs come from the provider's registered catalog. For Briefcase, the delegated effective scope is represented as `obo:tos>briefcase:briefcase.files.read`.
+This is a configuration fragment, not a full creation document. Choose only what your app needs. External endpoint IDs come from the provider's registered catalog. For Briefcase, the delegated effective scope is represented as `obo:briefcase:briefcase.files.read`.
 
 OBO means **on behalf of**: a service calls a provider for a particular user and selected organization. It does not turn an application credential into unrestricted user authority. Both service configuration and current user authorization matter.
 
@@ -48,7 +48,7 @@ Applications from other organizations are excluded, even when public.
 Declare access through Honeycomb:
 
 ```json
-{"app_scope":{"external":[{"app_id":"tos>honeycomb","endpoint_id":"honeycomb.apps.list"}]}}
+{"app_scope":{"external":[{"app_id":"honeycomb","endpoint_id":"honeycomb.apps.list"}]}}
 ```
 
 Public callers need the provider's critical-scope approval; private callers follow
@@ -56,7 +56,7 @@ IAM's private-app exemption. Both require effective declared access, current use
 consent, and current membership in the requested organization. Application
 credentials alone cannot authorize an organization inventory.
 
-Use IAM's endpoint catalog and signed OBO exchange with audience `tos>honeycomb`,
+Use IAM's endpoint catalog and signed OBO exchange with audience `honeycomb`,
 endpoint ID `honeycomb.apps.list`, metadata `{}`, and method `POST`. Hash the exact
 JSON bytes that will be sent. For example:
 
@@ -71,7 +71,7 @@ X-IAM-OBO-Access-Proof: <single-use proof>
 The response is deliberately limited to catalog identity and status:
 
 ```json
-{"org_id":"tos","items":[{"app_id":"tos>internal","org_id":"tos","name":"Internal","description":"Organization application","visibility":"private","state":"active"}],"next_cursor":null}
+{"org_id":"tos","items":[{"app_id":"internal","org_id":"tos","name":"Internal","description":"Organization application","visibility":"private","state":"active"}],"next_cursor":null}
 ```
 
 `limit` defaults to 100 and accepts 1–100. If `next_cursor` is present, send its

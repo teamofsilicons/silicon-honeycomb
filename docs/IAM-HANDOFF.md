@@ -22,7 +22,7 @@ configuration, scope decisions, secrets, OBO and test identity data.
 
 Add a protected management API and expose it in the official Rust client.
 Provision a dedicated integration identity for Honeycomb, separate from its
-ordinary `tos>honeycomb` application secret.
+ordinary `honeycomb` application secret.
 
 Every user mutation must authenticate BOTH:
 
@@ -57,7 +57,7 @@ Mutations carry `Idempotency-Key`, and a body such as:
   "operation_id": "uuid",
   "configuration_revision": 1,
   "expected_iam_revision": 0,
-  "app_id": "tos>example",
+  "app_id": "example",
   "org_id": "tos",
   "name": "Example",
   "logo_url": null,

@@ -14,7 +14,7 @@ fn fixture(root: &Path) {
         }
         targets.insert(target.into(),serde_json::json!({"root":format!("targets/{target}"),"executables":{"app":"bin/hello"}}));
     }
-    let manifest = serde_json::json!({"format_version":1,"app_id":"tos>hello","version":"1.0.0","bin":{"hello":"app","hi":"app"},"targets":targets});
+    let manifest = serde_json::json!({"format_version":1,"app_id":"hello","version":"1.0.0","bin":{"hello":"app","hi":"app"},"targets":targets});
     fs::write(
         root.join("honeycomb.yaml"),
         serde_yaml::to_string(&manifest).unwrap(),
@@ -53,7 +53,7 @@ fn optional_identity_round_trips_and_uses_command_filename() {
         fs::read(&path).unwrap(),
         fs::read(unpacked.path().join("honeycomb.yaml")).unwrap()
     );
-    for invalid in ["", "not-qualified", "../unsafe"] {
+    for invalid in ["", "org>legacy", "../unsafe"] {
         manifest["app_id"] = invalid.into();
         fs::write(&path, manifest.to_string()).unwrap();
         assert!(!validate_dir(root.path()).valid);
@@ -64,7 +64,7 @@ fn aggregates_missing_targets_and_invalid_metadata() {
     let d = tempfile::tempdir().unwrap();
     fs::write(
         d.path().join("honeycomb.yaml"),
-        "format_version: 3\napp_id: nope\nversion: bad\nbin: {}\ntargets: {}\n",
+        "format_version: 3\napp_id: invalid:id\nversion: bad\nbin: {}\ntargets: {}\n",
     )
     .unwrap();
     let result = validate_dir(d.path());
@@ -180,7 +180,7 @@ fn promotion_rewrites_manifest_and_preserves_payload_with_repeatable_checksum() 
     let extracted = tempfile::tempdir().unwrap();
     let manifest = unpack(&promoted, extracted.path()).unwrap();
     assert_eq!(manifest.version, "4.2.0");
-    assert_eq!(manifest.app_id.as_deref(), Some("tos>hello"));
+    assert_eq!(manifest.app_id.as_deref(), Some("hello"));
     for target in REQUIRED_TARGETS {
         let binary = format!("targets/{target}/bin/hello");
         assert_eq!(
@@ -193,6 +193,9 @@ fn promotion_rewrites_manifest_and_preserves_payload_with_repeatable_checksum() 
         assert!(!silicon_honeycomb_core::valid_release_version(bad));
         assert!(repack_version(&archive, bad, &source.path().join("bad.tar.gz")).is_err());
     }
-    let legacy: silicon_honeycomb_core::Release = serde_json::from_value(serde_json::json!({"app_id":"tos>hello","version":"1.0.0","sha256":"","size":0,"created_at":1})).unwrap();
+    let legacy: silicon_honeycomb_core::Release = serde_json::from_value(
+        serde_json::json!({"app_id":"hello","version":"1.0.0","sha256":"","size":0,"created_at":1}),
+    )
+    .unwrap();
     assert_eq!(legacy.channel, silicon_honeycomb_core::ReleaseChannel::Prod);
 }

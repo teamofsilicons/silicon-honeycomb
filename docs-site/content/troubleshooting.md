@@ -6,7 +6,7 @@ honeycomb --version
 ```
 Cargo installations need Cargo's bin directory on PATH. Custom homes need the path printed by the installer. Check `honeycomb config env` after changing home or backend. Re-running the native installer does not duplicate its shell entry.
 
-If Honeycomb works but an installed app reports `command not found`, run `honeycomb install 'org>app'` again. App installs now repair persistent PATH setup even when the package is already present. Open a new terminal or run the activation command printed at completion. A `path_setup.status` of `manual` means startup-file configuration failed; its message identifies the error. `HONEYCOMB_NO_MODIFY_PATH=1` and testing environments intentionally skip persistent setup.
+If Honeycomb works but an installed app reports `command not found`, run `honeycomb install 'app'` again. App installs now repair persistent PATH setup even when the package is already present. Open a new terminal or run the activation command printed at completion. A `path_setup.status` of `manual` means startup-file configuration failed; its message identifies the error. `HONEYCOMB_NO_MODIFY_PATH=1` and testing environments intentionally skip persistent setup.
 
 ## The install command is quiet
 The install command prints a starting message before fetching `install.sh`, and curl shows transfer progress. The fetch has a 20-second connection timeout and a two-minute overall timeout. The script then reports preparation, binary download, verification, activation, and setup. If the initial fetch fails, check access to GitHub/raw.githubusercontent.com and retry.

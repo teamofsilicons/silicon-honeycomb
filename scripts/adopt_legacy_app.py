@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -47,7 +48,9 @@ def preserved_visibility(record, preserve_public):
 
 
 def projection(record, app, expected_identity, metadata, preserve_public=False):
-    org, local = app.split(">")
+    org = metadata["org_id"]
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", app) or not re.fullmatch(r"[a-z0-9_-]{3,50}", org):
+        raise ValueError("Supply a bare app ID and explicit metadata org_id")
     if record.get("app_id") != app or record.get("org_id") != org:
         raise ValueError("IAM identity or owning organization mismatch")
     if record.get("application_id") != expected_identity:
@@ -62,7 +65,7 @@ def projection(record, app, expected_identity, metadata, preserve_public=False):
         raise ValueError("Catalog description must contain 50–1000 words")
     granted = {item["scope"] for item in record["effective_scopes"]}
     config = {
-        "org_id": org, "local_app_id": local, "name": record["app_name"],
+        "org_id": org, "app_id": app, "name": record["app_name"],
         "description": description,
         "app_scope": {
             "iam": [scope for scope in record["app_scope"]["iam"] if scope in granted],

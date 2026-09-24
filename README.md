@@ -125,9 +125,9 @@ six-target CLI release, provider approvals, Honeycomb validation and IAM accepta
 
 ```sh
 honeycomb search briefcase
-honeycomb install 'tos>briefcase'
-honeycomb update 'tos>briefcase'
-honeycomb uninstall 'tos>briefcase'
+honeycomb install 'briefcase'
+honeycomb update 'briefcase'
+honeycomb uninstall 'briefcase'
 honeycomb logout
 honeycomb report "What happened and how to reproduce it" --pr https://github.com/teamofsilicons/silicon-honeycomb/pull/123
 ```
@@ -162,7 +162,7 @@ npm run test:e2e
 ```
 
 Tests cover the real backend/CLI/web implementation with explicit service fixtures.
-`crates/server/tests/iam_sdk.rs` also exercises the published IAM SDK over HTTP.
+`crates/server/tests/iam_sdk.rs` also exercises the pinned IAM SDK snapshot over HTTP.
 Cross-service production acceptance is separate and requires the IAM handoff.
 
 See [deployment and release instructions](deploy/README.md) for container builds,
@@ -172,9 +172,9 @@ requested domains and six-platform release candidates.
 
 ```sh
 honeycomb environments get ENVIRONMENT_ID
-honeycomb environments import ENVIRONMENT_ID 'tos>example' --revision 1
+honeycomb environments import ENVIRONMENT_ID 'example' --revision 1
 # Explicitly refresh existing pins; use the current environment revision.
-honeycomb environments import ENVIRONMENT_ID 'tos>example' --revision 2 --refresh
+honeycomb environments import ENVIRONMENT_ID 'example' --revision 2 --refresh
 ```
 
 Imports recursively include external-scope dependencies, preserve organizations,
@@ -186,9 +186,9 @@ The console exposes the same workflow under Testing environments → Manage.
 ## Rotate or recover an application secret
 
 ```sh
-honeycomb apps rotate-secret 'tos>example' --revision 1
+honeycomb apps rotate-secret 'example' --revision 1
 # If IAM requires fresh verification, retry with the ORIGINAL idempotency key.
-honeycomb --idempotency-key ORIGINAL_KEY apps rotate-secret 'tos>example' --revision 1 --step-up-file /secure/path/assertion
+honeycomb --idempotency-key ORIGINAL_KEY apps rotate-secret 'example' --revision 1 --step-up-file /secure/path/assertion
 honeycomb operations recover-secret OPERATION_ID
 ```
 
@@ -201,9 +201,9 @@ configuration operations, with retry and recovery controls.
 
 ```sh
 honeycomb publication inbox
-honeycomb publication review REQUEST_ID 'tos>provider'
-honeycomb publication review-reply REQUEST_ID 'tos>provider' --message 'Please explain this scope.'
-honeycomb publication decide REQUEST_ID 'tos>provider' approve --revision 1 --reason 'Access reviewed.'
+honeycomb publication review REQUEST_ID 'provider'
+honeycomb publication review-reply REQUEST_ID 'provider' --message 'Please explain this scope.'
+honeycomb publication decide REQUEST_ID 'provider' approve --revision 1 --reason 'Access reviewed.'
 ```
 
 Provider administrators review their own critical scopes. IAM reviewers require
@@ -223,9 +223,9 @@ Use the console's **Access & secrets → Webhook management**, or the same workf
 from the CLI. You must be a current owner/admin of the application's organization.
 
 ```sh
-honeycomb apps webhook status 'tos>example'
-honeycomb apps webhook approve 'tos>example' --endpoint PENDING_ENDPOINT_UUID --revision 1 --step-up-file /secure/path/assertion
-honeycomb apps webhook rotate-secret 'tos>example' --revision 1 --secret-file /secure/path/new-signing-secret --step-up-file /secure/path/assertion
+honeycomb apps webhook status 'example'
+honeycomb apps webhook approve 'example' --endpoint PENDING_ENDPOINT_UUID --revision 1 --step-up-file /secure/path/assertion
+honeycomb apps webhook rotate-secret 'example' --revision 1 --secret-file /secure/path/new-signing-secret --step-up-file /secure/path/assertion
 honeycomb apps webhook retry OPERATION_ID --step-up-file /secure/path/fresh-assertion
 ```
 
@@ -255,7 +255,7 @@ its URL as requested and never presents it as verified active state.
 ```sh
 honeycomb environments retention ENVIRONMENT_ID
 honeycomb environments set-retention ENVIRONMENT_ID --days 60 --revision 1
-honeycomb environments activity ENVIRONMENT_ID 'tos>example' --generation 1 --key-version 1
+honeycomb environments activity ENVIRONMENT_ID 'example' --generation 1 --key-version 1
 ```
 
 Application integrations can report with the current environment root key through

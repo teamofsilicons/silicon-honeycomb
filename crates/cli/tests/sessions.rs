@@ -222,7 +222,7 @@ fn respond(mut stream: TcpStream, provider: Arc<Mutex<Provider>>) {
     } else if headers.starts_with("post /api/v1/auth/login ") {
         json!({"access_token":"access-login", "refresh_token":"refresh-login", "expires_in":1800})
     } else if headers.starts_with("get /api/v1/iam ") {
-        json!({"app_id":"fixture>honeycomb"})
+        json!({"app_id":"honeycomb"})
     } else {
         status = 404;
         json!({"error":{"code":"not_found", "message":"fixture has no packages"}})
@@ -260,8 +260,8 @@ fn concurrent_commands_and_daemon_rotate_only_once() {
     .unwrap();
     fs::write(
         directory.join("installed.json"),
-        serde_json::to_vec(&json!({"fixture>app":{
-            "app_id":"fixture>app", "version":"1.0.0", "target":"fixture", "directory":directory,
+        serde_json::to_vec(&json!({"app":{
+            "app_id":"app", "version":"1.0.0", "target":"fixture", "directory":directory,
             "commands":{}, "aliases":{}, "sha256":"fixture"
         }}))
         .unwrap(),

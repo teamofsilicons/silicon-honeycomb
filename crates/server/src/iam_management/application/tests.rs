@@ -3,11 +3,11 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{header, method, path, query_param},
 };
-const APP: &str = "alpha>app";
+const APP: &str = "app";
 const SOURCE: &str = APP;
 const ENV: &str = "00000000-0000-4000-8000-000000000002";
 fn authorization() -> String {
-    format!("Basic {}", STANDARD.encode("alpha>app:ask_fixture_secret"))
+    format!("Basic {}", STANDARD.encode("app:ask_fixture_secret"))
 }
 fn identity() -> Value {
     json!({"application_id":SOURCE,"app_id":APP,"organization_id":"00000000-0000-4000-8000-000000000003","org_id":"alpha","iam_revision":7})
@@ -30,8 +30,8 @@ fn basic_application_parser_rejects_test_or_malformed_credentials_without_echoin
     for auth in [
         "Bearer secret".to_owned(),
         "Basic !!!!!secret".into(),
-        format!("Basic {}", STANDARD.encode("alpha>app:test_secret")),
-        format!("Basic {}", STANDARD.encode("alpha>app:ask_\nsecret")),
+        format!("Basic {}", STANDARD.encode("app:test_secret")),
+        format!("Basic {}", STANDARD.encode("app:ask_\nsecret")),
     ] {
         let error = credentials(&auth).err().unwrap();
         assert!(!error.1.message.contains("secret"));
@@ -63,7 +63,7 @@ async fn production_identity_uses_official_protected_credentials_and_rejects_wro
     assert_eq!(found.application_id, SOURCE);
     server.reset().await;
     let mut wrong = identity();
-    wrong["app_id"] = json!("other>app");
+    wrong["app_id"] = json!("another-app");
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(wrong))
         .mount(&server)
@@ -141,7 +141,7 @@ async fn recovery_binds_current_identity_environment_and_versions_without_persis
         .mount(&server)
         .await;
     Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}"))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"environment_id":ENV,"state":"active","generation":2,"key_version":3,"iam_revision":8}))).expect(1).mount(&server).await;
-    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/credential-recovery"))).and(header("x-honeycomb-application-authorization",authorization())).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(|r:&wiremock::Request| {
+    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/credential-recovery"))).and(header("x-honeycomb-application-authorization",authorization())).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(|r:&wiremock::Request| {
         let body:Value=serde_json::from_slice(&r.body).unwrap();
         assert_eq!(body["generation"],2);assert_eq!(body["key_version"],3);assert_eq!(body["expected_environment_revision"],8);
         ResponseTemplate::new(200).set_body_json(json!({"operation_id":body["operation_id"],"state":"accepted","environment_id":ENV,"app_id":APP,"application_id":"00000000-0000-4000-8000-000000000005","iam_revision":3,"configuration_revision":1,"app_secret":"test_secret_fixture","credential_version":2}))
@@ -162,10 +162,10 @@ async fn snapshot_keeps_test_scope_and_public_visibility_without_production_fall
     let server = MockServer::start().await;
     let adapter = setup(&server).await;
     seed(&adapter).await;
-    let config=json!({"name":"Test","description":"test","org_id":"alpha","local_app_id":"app","app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]}}).to_string();
+    let config=json!({"name":"Test","description":"test","org_id":"alpha","app_id":"app","app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]}}).to_string();
     sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,effective_config,webhook_secret,created_at,updated_at) VALUES(? ,?,'alpha','Test','test',?,?,'',1,1)").bind(ENV).bind(APP).bind(&config).bind(&config).execute(&adapter.db).await.unwrap();
     Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}"))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"environment_id":ENV,"state":"active","generation":2,"key_version":3,"iam_revision":8}))).expect(1).mount(&server).await;
-    Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp"))).and(query_param("generation","2")).and(query_param("key_version","3")).and(query_param("expected_environment_revision","8")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"app_id":APP,"org_id":"alpha","configuration_revision":1,"iam_revision":3,"app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"public","availability":"verified","ready":true,"credential_version":1}))).expect(1).mount(&server).await;
+    Mock::given(method("GET")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app"))).and(query_param("generation","2")).and(query_param("key_version","3")).and(query_param("expected_environment_revision","8")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"app_id":APP,"org_id":"alpha","configuration_revision":1,"iam_revision":3,"app_scope":{"iam":["self.identity.read","self.email.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"public","availability":"verified","ready":true,"credential_version":1}))).expect(1).mount(&server).await;
     let snapshot = adapter.testing_snapshot(APP, &"K".repeat(32)).await;
     let snapshot = snapshot.unwrap();
     assert_eq!(snapshot["visibility"], "public");
@@ -195,7 +195,7 @@ async fn isolated_rotation_replays_same_request_and_stops_after_generation_chang
     environment_mock(&server).await;
     Mock::given(method("GET"))
         .and(path(format!(
-            "/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp"
+            "/api/v1/honeycomb/testing-environments/{ENV}/applications/app"
         )))
         .respond_with(
             ResponseTemplate::new(200)
@@ -206,7 +206,7 @@ async fn isolated_rotation_replays_same_request_and_stops_after_generation_chang
         .await;
     let id = Uuid::new_v4();
     operation(&adapter, id, "secret.rotate").await;
-    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/secret-rotations"))).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(move |r:&wiremock::Request|{
+    Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/secret-rotations"))).and(header("x-honeycomb-testing-key","K".repeat(32))).respond_with(move |r:&wiremock::Request|{
         assert!(!r.headers.contains_key("x-honeycomb-actor-token"));
         assert!(!r.headers.contains_key("x-honeycomb-application-authorization"));
         assert_eq!(r.headers.get("x-honeycomb-testing-key").unwrap(), "K".repeat(32).as_str());
@@ -260,9 +260,9 @@ async fn configured_app_waits_for_participant_and_reserves_revision_only_once() 
     environment_mock(&server).await;
     let id = Uuid::new_v4();
     operation(&adapter, id, "configure").await;
-    let config = json!({"org_id":"alpha","local_app_id":"app","name":"Application","description":"Test application","base_url":"https://app.invalid","webhook_url":"https://app.invalid/webhook","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"obo_review_message":"","testing_idle_days":30});
+    let config = json!({"org_id":"alpha","app_id":"app","name":"Application","description":"Test application","base_url":"https://app.invalid","webhook_url":"https://app.invalid/webhook","webhook_scope":["full"],"app_scope":{"iam":["self.identity.read"],"external":[]},"obo_endpoints":[],"obo_review_message":"","testing_idle_days":30});
     sqlx::query("INSERT INTO applications(plane,app_id,org_id,name,description,config,webhook_secret,created_at,updated_at) VALUES(?,?,'alpha','Application','Test',?,'',1,1)").bind(ENV).bind(APP).bind(config.to_string()).execute(&adapter.db).await.unwrap();
-    Mock::given(method("PUT")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/configuration"))).respond_with(move |r:&wiremock::Request| {
+    Mock::given(method("PUT")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/configuration"))).respond_with(move |r:&wiremock::Request| {
         assert!(!r.headers.contains_key("x-honeycomb-actor-token"));
         assert!(!r.headers.contains_key("x-honeycomb-application-authorization"));
         assert_eq!(r.headers.get("x-honeycomb-testing-key").unwrap(), "K".repeat(32).as_str());
@@ -388,7 +388,7 @@ async fn imported_configuration_revision_is_translated_once_for_rotation_and_rep
             .unwrap();
         Mock::given(method("GET"))
             .and(path(format!(
-                "/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp"
+                "/api/v1/honeycomb/testing-environments/{ENV}/applications/app"
             )))
             .respond_with(ResponseTemplate::new(200).set_body_json(
                 json!({"app_id":APP,"configuration_revision":wire,"iam_revision":3}),
@@ -396,7 +396,7 @@ async fn imported_configuration_revision_is_translated_once_for_rotation_and_rep
             .expect(1)
             .mount(&server)
             .await;
-        Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp/secret-rotations")))
+        Mock::given(method("POST")).and(path(format!("/api/v1/honeycomb/testing-environments/{ENV}/applications/app/secret-rotations")))
             .respond_with(move |request: &wiremock::Request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
                 assert_eq!(body["configuration_revision"], wire);
@@ -433,7 +433,7 @@ async fn imported_zero_snapshot_requires_accepted_import_and_preserves_projectio
     let record = json!({"app_id":APP,"org_id":"alpha","configuration_revision":0,"iam_revision":4,"app_scope":{"iam":["self.identity.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read"}],"visibility":"private","availability":"verified","ready":true,"credential_version":2});
     Mock::given(method("GET"))
         .and(path(format!(
-            "/api/v1/honeycomb/testing-environments/{ENV}/applications/alpha%3Eapp"
+            "/api/v1/honeycomb/testing-environments/{ENV}/applications/app"
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(record.clone()))
         .mount(&server)

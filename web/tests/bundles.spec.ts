@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 test("bundle editor preserves existing members and retries an uncertain save", async ({ page }) => {
-  const app_ids = ["tos>iam", "tos>dm", "tos>briefcase", "tos>commit", "tos>remind", "tos>waveform", "tos>browser", "tos>starter"];
+  const app_ids = ["iam", "dm", "briefcase", "commit", "remind", "waveform", "browser", "starter"];
   const bundle = { bundle_id: "tos>interface", app_name: "Silicon Interface", app_ids, iam_revision: 1 };
   const writes: { key: string; revision: string; body: unknown }[] = [];
   await page.route("**/api/session", route => route.fulfill({json: {authenticated: true, identity: {principal_id:"fixture-owner", organizations:{tos:"org_owner"}}}}));

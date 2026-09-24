@@ -33,7 +33,7 @@
 //! use silicon_iam_client::{Client, Credential, Mutation};
 //!
 //! # async fn run() -> silicon_iam_client::Result<()> {
-//! let app_id = "acme>checkout";
+//! let app_id = "checkout";
 //! let application = Client::new("https://backend.iam.teamofsilicons.com")?
 //!     .with_credential(Credential::application(app_id, "ask_example"));
 //! let tokens = application
@@ -47,8 +47,10 @@
 //!
 //! # Idempotency
 //!
-//! Every mutating route requires an idempotency key, and this crate makes that
-//! explicit: mutations take a [`Mutation`], which carries one.
+//! Ordinary mutating routes require an idempotency key, and this crate makes that
+//! explicit: those mutations take a [`Mutation`], which carries one. Application
+//! identity key issuance through [`Client::app_verification`] creates a fresh key
+//! each time and deliberately has no idempotent replay.
 //!
 //! The service binds the key to the caller, the route and the exact request
 //! body, then replays the original response for a repeat of the same request.

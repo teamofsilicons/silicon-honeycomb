@@ -3,7 +3,7 @@ Save the following as a protected JSON file. Replace the example organization, r
 ```json
 {
   "org_id": "my-org",
-  "local_app_id": "my-app",
+  "app_id": "my-app",
   "name": "My application",
   "description": "My application helps members of our organization prepare, inspect, and share project work from a consistent command line interface. It provides native builds for supported desktop and server platforms, uses IAM for identity and permissions, and keeps organization data separated. This application is maintained by our team and is intended for authorized members working on shared projects.",
   "webhook_url": "https://api.example.com/webhook/",
@@ -20,13 +20,13 @@ Generate a random signing secret with a secure generator such as `openssl rand -
 | Field | Rules |
 | --- | --- |
 | `org_id` | Existing shared organization; caller must be a current owner/admin. |
-| `local_app_id` | Permanent local handle. Handles use 1–64 lowercase letters, digits, or hyphens; begin with a letter or digit. |
+| `app_id` | Permanent local handle. Handles use 1–64 lowercase letters, digits, or hyphens; begin with a letter or digit. |
 | `name` | Nonempty display name, at most 100 bytes under the current validator. |
 | `description` | 50–1,000 whitespace-separated words. |
 | `webhook_url` | HTTPS destination without embedded credentials. |
 | `webhook_secret` | At least 32 characters for creation; protect it like a credential. |
 
-The resulting ID is `org_id>local_app_id`. Updating configuration does not rename the application's identity.
+The resulting ID is the bare `app_id`; `org_id` separately identifies its owner. Updating configuration does not rename the application's identity.
 
 ## Optional fields
 | Field | Default / purpose |
@@ -48,8 +48,8 @@ Unknown input fields are rejected. Requested and effective configuration are dis
 
 ## Update safely
 ```sh
-honeycomb apps get 'my-org>my-app' --json
-honeycomb --idempotency-key my-app-config-0002 apps update 'my-org>my-app' application.json --revision 2
+honeycomb apps get 'my-app' --json
+honeycomb --idempotency-key my-app-config-0002 apps update 'my-app' application.json --revision 2
 ```
 Use the actual current revision and a complete configuration document. On updates, an empty or omitted signing secret retains the existing stored secret when available. Existing legacy apps without stored configuration need a supported adoption workflow; do not recreate their identity to work around this.
 

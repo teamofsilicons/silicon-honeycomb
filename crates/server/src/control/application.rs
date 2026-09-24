@@ -25,10 +25,7 @@ pub(crate) async fn authenticate(s: &State, h: &HeaderMap) -> Result<TestingAppl
             .ok()
             .is_none_or(|id| id.is_nil())
         || !honeycomb_core::valid_app_id(&identity.app_id)
-        || identity
-            .app_id
-            .split_once('>')
-            .is_none_or(|(org, _)| org != identity.org_id)
+        || !honeycomb_core::valid_org_id(&identity.org_id)
         || identity.iam_revision <= 0
     {
         return Err(Error::unavailable(

@@ -19,6 +19,16 @@ impl Error {
             },
         )
     }
+    pub fn require_unheld(state: &str) -> Result<()> {
+        if state == "held_identifier_migration" {
+            return Err(Self::new(
+                StatusCode::CONFLICT,
+                "identifier_migration_hold",
+                "This historical operation is preserved on hold. Operator reconciliation is required before retrying; no action was replayed.",
+            ));
+        }
+        Ok(())
+    }
     pub fn bad(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid_request", message)
     }

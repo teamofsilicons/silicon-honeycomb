@@ -21,7 +21,10 @@ pub async fn receive(s: &State, plane: &str, event: &Value) -> Result<bool> {
         aggregate["id"].as_str().unwrap_or("iam")
     };
     let revision = aggregate["version"].as_i64().unwrap_or(0);
-    if management && (aggregate["type"] != "application" || !resource.contains('>') || revision < 1)
+    if management
+        && (aggregate["type"] != "application"
+            || !honeycomb_core::valid_app_id(resource)
+            || revision < 1)
     {
         return Err(Error::bad(
             "Management event requires an application and positive IAM revision",
@@ -113,7 +116,7 @@ pub async fn reconcile(s: &State, plane: &str, app_id: &str) -> Result<()> {
         .cloned()
         .ok_or_else(|| Error::unavailable("IAM omitted its effective configuration"))?;
     if effective.get("org_id") != desired.get("org_id")
-        || effective.get("local_app_id") != desired.get("local_app_id")
+        || effective.get("app_id") != desired.get("app_id")
     {
         return Err(Error::unavailable(
             "IAM returned a different configuration identity",

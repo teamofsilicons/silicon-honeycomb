@@ -445,9 +445,25 @@ impl Client {
         id: &str,
         channel: ReleaseChannel,
     ) -> Result<Vec<Release>> {
+        self.release_list(id, channel, false).await
+    }
+    /// Manager-only history, including private releases awaiting approval.
+    /// Never use this list to select automatic updates.
+    pub async fn release_history(&self, id: &str, channel: ReleaseChannel) -> Result<Vec<Release>> {
+        self.release_list(id, channel, true).await
+    }
+    async fn release_list(
+        &self,
+        id: &str,
+        channel: ReleaseChannel,
+        include_private: bool,
+    ) -> Result<Vec<Release>> {
         let mut url = self.release_url(&["apps", id, "releases"])?;
         url.query_pairs_mut()
             .append_pair("channel", channel.as_str());
+        if include_private {
+            url.query_pairs_mut().append_pair("include_private", "true");
+        }
         let response = Self::check(self.request(Method::GET, url, None).send().await?).await?;
         let value: Value =
             serde_json::from_slice(&Self::bounded(response, 4 * 1024 * 1024).await?)?;

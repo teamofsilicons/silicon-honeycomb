@@ -1,9 +1,8 @@
 //! Changes that need approval, and the history they leave behind.
 //!
-//! Role and tag changes come in two shapes. An owner or admin with the right
-//! capability applies one directly, against the member's current version. Any
-//! other requester raises an approval request, which the eligible approvers
-//! then decide.
+//! Sensitive actions use configurable policies. Submit the direct mutation;
+//! a 428 `approval_required` response identifies any required approval. Once
+//! approved, retry the exact mutation with the original request key.
 
 use uuid::Uuid;
 
@@ -49,6 +48,72 @@ impl ApprovalFilter {
 }
 
 impl Governance<'_> {
+    /// Lists effective sensitive-action rules and whether the caller can configure them.
+    /// # Errors
+    /// Returns an error when the caller is not an active member.
+    pub async fn action_policies(&self, org_id: &str) -> Result<models::ActionPolicyList> {
+        self.0
+            .get(&["organizations", org_id, "action-policies"])
+            .await
+    }
+
+    /// Configures a sensitive-action rule using its current version (zero for defaults).
+    /// # Errors
+    /// Returns an error when authority, selectors or version are invalid.
+    pub async fn configure_action_policy(
+        &self,
+        org_id: &str,
+        action: &str,
+        version: i64,
+        input: &models::ActionPolicyUpdate,
+        mutation: &Mutation,
+    ) -> Result<models::ActionPolicy> {
+        self.0
+            .put(
+                &["organizations", org_id, "action-policies", action],
+                version,
+                input,
+                mutation,
+            )
+            .await
+    }
+
+    /// Lists sensitive-action requests visible to this member.
+    /// # Errors
+    /// Returns an error when the caller is not an active member.
+    pub async fn action_approvals(&self, org_id: &str) -> Result<models::ActionApprovalList> {
+        self.0
+            .get(&["organizations", org_id, "action-approvals"])
+            .await
+    }
+
+    /// Approves or rejects the exact proposed sensitive action.
+    /// # Errors
+    /// Returns an error for stale, expired, unauthorized or no longer pending requests.
+    pub async fn decide_action(
+        &self,
+        org_id: &str,
+        request_id: Uuid,
+        version: i64,
+        input: &models::ActionApprovalDecision,
+        mutation: &Mutation,
+    ) -> Result<models::ActionApproval> {
+        self.0
+            .post_versioned(
+                &[
+                    "organizations",
+                    org_id,
+                    "action-approvals",
+                    &request_id.to_string(),
+                    "decisions",
+                ],
+                version,
+                input,
+                mutation,
+            )
+            .await
+    }
+
     /// Approval requests in an organization.
     ///
     /// # Errors
@@ -148,7 +213,7 @@ impl Governance<'_> {
     pub async fn request_tag_change(
         &self,
         org_id: &str,
-        membership_id: Uuid,
+        membership_id: &str,
         request: &models::TagChangeRequestCreate,
         mutation: &Mutation,
     ) -> Result<models::ApprovalRequest> {
@@ -158,7 +223,7 @@ impl Governance<'_> {
                     "organizations",
                     org_id,
                     "members",
-                    &membership_id.to_string(),
+                    membership_id,
                     "tag-change-requests",
                 ],
                 request,
@@ -176,7 +241,7 @@ impl Governance<'_> {
     pub async fn replace_job_role(
         &self,
         org_id: &str,
-        membership_id: Uuid,
+        membership_id: &str,
         version: i64,
         job_role: &models::DirectJobRoleReplace,
         mutation: &Mutation,
@@ -187,7 +252,7 @@ impl Governance<'_> {
                     "organizations",
                     org_id,
                     "members",
-                    &membership_id.to_string(),
+                    membership_id,
                     "job-role",
                 ],
                 version,
@@ -209,20 +274,14 @@ impl Governance<'_> {
     pub async fn replace_tags(
         &self,
         org_id: &str,
-        membership_id: Uuid,
+        membership_id: &str,
         version: i64,
         tags: &models::DirectTagSetReplace,
         mutation: &Mutation,
     ) -> Result<models::Membership> {
         self.0
             .put(
-                &[
-                    "organizations",
-                    org_id,
-                    "members",
-                    &membership_id.to_string(),
-                    "tags",
-                ],
+                &["organizations", org_id, "members", membership_id, "tags"],
                 version,
                 tags,
                 mutation,
@@ -238,7 +297,7 @@ impl Governance<'_> {
     pub async fn job_role_history(
         &self,
         org_id: &str,
-        membership_id: Uuid,
+        membership_id: &str,
         paging: &Paging,
     ) -> Result<models::RoleHistoryPage> {
         self.0
@@ -247,7 +306,7 @@ impl Governance<'_> {
                     "organizations",
                     org_id,
                     "members",
-                    &membership_id.to_string(),
+                    membership_id,
                     "job-role-history",
                 ],
                 &paging.query(),
@@ -263,7 +322,7 @@ impl Governance<'_> {
     pub async fn tag_history(
         &self,
         org_id: &str,
-        membership_id: Uuid,
+        membership_id: &str,
         paging: &Paging,
     ) -> Result<models::TagHistoryPage> {
         self.0
@@ -272,7 +331,7 @@ impl Governance<'_> {
                     "organizations",
                     org_id,
                     "members",
-                    &membership_id.to_string(),
+                    membership_id,
                     "tag-history",
                 ],
                 &paging.query(),

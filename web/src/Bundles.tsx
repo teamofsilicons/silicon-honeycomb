@@ -45,7 +45,7 @@ export default function Bundles(props: { organizations: string[] }) {
       <label>Bundle application ID<input required disabled={busy() || editing()} value={id()} onInput={e => setId(e.currentTarget.value)} placeholder="tos>interface" /></label>
       <label>Name<input required maxlength={200} disabled={busy()} value={name()} onInput={e => setName(e.currentTarget.value)} /></label>
       <label>Logo URL (optional)<input type="url" disabled={busy()} value={logo()} onInput={e => setLogo(e.currentTarget.value)} /></label>
-      <label>Application IDs<textarea required rows={8} disabled={busy()} value={members()} onInput={e => setMembers(e.currentTarget.value)} placeholder={"tos>iam\ntos>starter"} /><small>One per line. Select 1–100 applications owned by the same organization.</small></label>
+      <label>Application IDs<textarea required rows={8} disabled={busy()} value={members()} onInput={e => setMembers(e.currentTarget.value)} placeholder={"iam\nstarter"} /><small>One per line. Select 1–100 applications owned by the same organization.</small></label>
       <p class="muted">Only a current organization owner or admin may save changes. IAM checks organization eligibility and member availability before accepting them.</p>
       <button class="button primary" disabled={busy()}>{busy() ? "Saving bundle…" : "Save bundle"}</button>
     </form></Show>

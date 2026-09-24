@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-cli"
-version = "0.3.3"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-client"
-version = "0.3.3"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-core"
-version = "0.3.3"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2464,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-honeycomb-server"
-version = "0.3.3"
+version = "0.4.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2503,9 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-iam-client"
-version = "3.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c8f68324e84abcbc2afdab9c8dfce554057a89aa876a02134f318881f0f9d0a"
+version = "4.0.0"
 dependencies = [
  "base64 0.22.1",
  "hex",

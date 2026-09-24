@@ -11,7 +11,7 @@ are `silicon-honeycomb-library` and `silicon-honeycomb-console`. The requested
 three DNS records are configured. Deployment alone does not prove live IAM or
 Briefcase acceptance; Briefcase setup is deferred until the base is ready.
 
-IAM's management API and `tos>honeycomb` authentication app are deployed.
+IAM's management API and `honeycomb` authentication app are deployed.
 Protected service reads pass. The IAM handoff is outside Git at
 `/Users/codanium/.config/silicon/honeycomb/iam-production.env`; complete runtime
 settings are in the AWS Secrets Manager runtime secret. Keep IAM's legacy-writer

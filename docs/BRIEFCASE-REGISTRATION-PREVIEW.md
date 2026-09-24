@@ -7,7 +7,7 @@ The user explicitly authorized direct database creation and public approval beca
 ## Application
 
 - Organization: `tos`
-- Application ID: `tos>briefcase`
+- Application ID: `briefcase`
 - Display name: Silicon Briefcase
 - Visibility: public
 - Testing idle limit: 30 days
@@ -66,10 +66,10 @@ Describe why your application needs to invite organization members or make entri
 
 ## Planned archive link
 
-- [Briefcase archive — planned, not uploaded](https://briefcase.teamofsilicons.com/org/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz)
+- [Briefcase archive — planned, not uploaded](https://briefcase.teamofsilicons.com/org/tos/apps/honeycomb/public/tos--briefcase-1.1.0.tar.gz)
 - Briefcase organization: `tos`
-- Exact storage path: `apps/tos>honeycomb/public/tos--briefcase-1.1.0.tar.gz`
-- [Direct public download — available after upload and link sharing](https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/tos%3Ehoneycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment)
+- Exact storage path: `apps/honeycomb/public/tos--briefcase-1.1.0.tar.gz`
+- [Direct public download — available after upload and link sharing](https://backend.briefcase.teamofsilicons.com/api/v1/public/tos/apps/honeycomb/public/tos--briefcase-1.1.0.tar.gz?view=attachment)
 
 This matches Honeycomb's existing upload folder and filename. The URL can remain
 unchanged when the archive is uploaded at that exact path. It does not currently

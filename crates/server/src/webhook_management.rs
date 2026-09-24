@@ -116,7 +116,7 @@ pub async fn mutate(
             "The pending webhook destination changed. Refresh before approving.",
         ));
     }
-    let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state='pending' AND kind IN ('configure','secret.rotate','publication.activate','webhook.approve','webhook.rotate'))")
+    let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE plane=? AND resource=? AND state IN ('pending','held_identifier_migration') AND kind IN ('configure','secret.rotate','publication.activate','webhook.approve','webhook.rotate'))")
         .bind(&c.plane).bind(&app).fetch_one(&mut *tx).await?;
     if pending {
         return Err(Error::conflict(

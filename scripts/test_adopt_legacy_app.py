@@ -12,17 +12,17 @@ class AdoptionTests(unittest.TestCase):
         self.db = sqlite3.connect(":memory:")
         for migration in sorted((Path(__file__).resolve().parents[1] / "crates/server/migrations").glob("*.sql")):
             self.db.executescript(migration.read_text())
-        self.record = dict(app_id="tos>briefcase", org_id="tos", application_id="existing-id",
+        self.record = dict(app_id="briefcase", org_id="tos", application_id="existing-id",
                            app_name="Silicon Briefcase", app_logo=None, base_url="https://example.com",
                            configuration_revision=0, iam_revision=9, credential_version=1,
                            availability="verified", visibility="public", testing_idle_days=30,
                            app_scope={"iam": ["granted", "pending"], "external": []},
                            effective_scopes=[{"scope": "granted"}], obo_endpoints=[],
                            obo_review_message=None, webhook_scope=["full"], app_secret="MUST-NOT-COPY")
-        self.metadata = {"description": " ".join(["description"] * 50), "website_url": "https://example.com"}
+        self.metadata = {"org_id": "tos", "description": " ".join(["description"] * 50), "website_url": "https://example.com"}
 
     def config(self):
-        return projection(self.record, "tos>briefcase", "existing-id", self.metadata)
+        return projection(self.record, "briefcase", "existing-id", self.metadata)
 
     def test_import_preserves_identity_and_filters_secrets_pending_grants_and_publication(self):
         config = self.config()
@@ -43,24 +43,24 @@ class AdoptionTests(unittest.TestCase):
 
     def test_mismatched_or_unaccepted_record_is_rejected(self):
         for field, value in [("org_id", "other"), ("application_id", "other-id"),
-                             ("app_id", "tos>other"), ("configuration_revision", 1),
+                             ("app_id", "other"), ("configuration_revision", 1),
                              ("iam_revision", 0), ("availability", "disabled"), ("credential_version", 0)]:
             with self.subTest(field=field):
                 record = dict(self.record, **{field: value})
                 with self.assertRaises(ValueError):
-                    projection(record, "tos>briefcase", "existing-id", self.metadata)
+                    projection(record, "briefcase", "existing-id", self.metadata)
 
     def test_explicit_public_adoption_preserves_declarations_but_not_pending_grants(self):
-        self.record["application_id"] = "tos>briefcase"
+        self.record["application_id"] = "briefcase"
         endpoint = {"id": "files.read", "critical": True, "enabled": True,
                     "metadata": {"existing": True}, "access_proof_ttl_seconds": 60}
         self.record["obo_endpoints"] = [endpoint]
         self.record["app_scope"]["external"] = [
-            {"app_id": "tos>provider", "endpoint_id": "granted"},
-            {"app_id": "tos>provider", "endpoint_id": "pending"},
+            {"app_id": "provider", "endpoint_id": "granted"},
+            {"app_id": "provider", "endpoint_id": "pending"},
         ]
-        self.record["effective_scopes"].append({"scope": "obo:tos>provider:granted"})
-        config = projection(self.record, "tos>briefcase", "tos>briefcase", self.metadata, True)
+        self.record["effective_scopes"].append({"scope": "obo:provider:granted"})
+        config = projection(self.record, "briefcase", "briefcase", self.metadata, True)
         with self.db:
             receipt = insert(self.db, self.record, config, "operator:test", True)
         app = self.db.execute("SELECT visibility,config,effective_config,webhook_secret FROM applications").fetchone()
@@ -87,7 +87,7 @@ class AdoptionTests(unittest.TestCase):
             with self.subTest(field=field, value=value):
                 record = dict(self.record, **{field: value})
                 with self.assertRaises(ValueError):
-                    projection(record, "tos>briefcase", "existing-id", self.metadata, True)
+                    projection(record, "briefcase", "existing-id", self.metadata, True)
                 with self.assertRaises(ValueError):
                     insert(self.db, record, self.config(), "operator:test", True)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM applications").fetchone()[0], 0)
