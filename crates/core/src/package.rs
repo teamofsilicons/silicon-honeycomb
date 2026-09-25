@@ -38,7 +38,13 @@ pub struct Manifest {
 pub struct Target {
     pub root: String,
     pub executables: BTreeMap<String, String>,
+    /// Run once after `honeycomb install` completes for this target. Relative to `root`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_script: Option<String>,
 }
+
+/// Windows has no shebang, so the installer picks the interpreter from the extension.
+pub const WINDOWS_INSTALL_SCRIPT_EXTENSIONS: [&str; 4] = ["cmd", "bat", "ps1", "exe"];
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Validation {
     pub valid: bool,
@@ -229,6 +235,9 @@ fn validate_dir_with_legacy(root: &Path, legacy: Option<&str>) -> Validation {
                 )),
             }
         }
+        if let Some(script) = &t.install_script {
+            validate_install_script(root, id, t, script, &mut errors);
+        }
         for entry in walkdir::WalkDir::new(root.join(&t.root)).follow_links(false) {
             match entry {
                 Ok(e)
@@ -249,6 +258,50 @@ fn validate_dir_with_legacy(root: &Path, legacy: Option<&str>) -> Validation {
         valid: errors.is_empty(),
         errors,
         manifest: Some(m),
+    }
+}
+
+fn validate_install_script(
+    root: &Path,
+    id: &str,
+    target: &Target,
+    script: &str,
+    errors: &mut Vec<String>,
+) {
+    if !safe_relative(script) {
+        errors.push(format!("targets.{id}.install_script: unsafe path"));
+        return;
+    }
+    if id.starts_with("windows")
+        && !Path::new(script)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| {
+                WINDOWS_INSTALL_SCRIPT_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str())
+            })
+    {
+        errors.push(format!(
+            "targets.{id}.install_script: Windows scripts must end in .cmd, .bat, .ps1 or .exe"
+        ));
+    }
+    let path = root.join(&target.root).join(script);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if !id.starts_with("windows") && metadata.permissions().mode() & 0o111 == 0 {
+                    errors.push(format!("{}: not executable; run chmod +x", path.display()));
+                }
+            }
+            if metadata.len() == 0 {
+                errors.push(format!("{}: install script is empty", path.display()));
+            }
+        }
+        _ => errors.push(format!(
+            "targets.{id}.install_script: {} is not a regular file",
+            path.display()
+        )),
     }
 }
 

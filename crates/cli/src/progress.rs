@@ -147,7 +147,16 @@ impl Progress {
                         .unwrap_or("Done.")
                 );
             } else {
-                eprintln!("Installation/update failed.");
+                // A completion recorded before the failure means the installation itself
+                // finished; only a later step such as the package's install script failed.
+                eprintln!(
+                    "{}",
+                    self.completion
+                        .lock()
+                        .unwrap()
+                        .as_deref()
+                        .unwrap_or("Installation/update failed.")
+                );
             }
         }
     }

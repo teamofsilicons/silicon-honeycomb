@@ -86,6 +86,9 @@ enum Command {
         /// Confirm switching an existing installation between production and dev releases.
         #[arg(long)]
         switch_channel: bool,
+        /// Install without running the package's install script.
+        #[arg(long)]
+        skip_install_script: bool,
     },
     /// Update an installed app to its latest release, preserving aliases.
     Update { app_id: String },
@@ -1187,6 +1190,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             alias,
             rewrite_existing,
             switch_channel,
+            skip_install_script,
         } => {
             install(
                 &client,
@@ -1198,6 +1202,7 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                     updating: false,
                     rewrite_existing: *rewrite_existing,
                     switch_channel: *switch_channel,
+                    run_install_script: !*skip_install_script,
                     persist_path: context.testing_key.is_none(),
                     ensure_worker: automatic_updates_enabled(settings.auto_update),
                 },
@@ -1286,6 +1291,8 @@ struct InstallOptions {
     persist_path: bool,
     switch_channel: bool,
     ensure_worker: bool,
+    /// Only `honeycomb install` runs the package's install script; updates never do.
+    run_install_script: bool,
 }
 async fn install(
     client: &Client,
@@ -1442,6 +1449,30 @@ async fn install(
     records.remove(&previous_key);
     records.insert(key, record.clone());
     write_private(&root.join("installed.json"), &records)?;
+    // The installation is complete and recorded before the script runs, so a failing script
+    // leaves a working installation behind rather than rolling it back.
+    let script = match &record.install_script {
+        Some(path) if options.run_install_script => {
+            if let Some(progress) = progress {
+                progress.pause();
+                eprintln!("Running install script {}", path.display());
+            }
+            let interactive =
+                progress.is_some_and(|p| p.interactive()) && std::io::stdin().is_terminal();
+            let status = installer::run_install_script(&record, &root.join("bin"), interactive)?
+                .context("Install script disappeared from the installation record")?;
+            Some(json!({
+                "path": path,
+                "status": if status.success() { "succeeded" } else { "failed" },
+                "exit_code": status.code(),
+            }))
+        }
+        // Updates never run it, so only an install opted out with --skip-install-script says so.
+        Some(path) if !options.updating => Some(json!({"path": path, "status": "skipped"})),
+        Some(_) => None,
+        None => None,
+    };
+    let script_failed = script.as_ref().is_some_and(|s| s["status"] == "failed");
     if let Some(progress) = progress {
         progress.pause();
         let mut result = json!({"app_id":id,"version":record.version,"status":"installed","bin_directory":root.join("bin"),"help_command":format!("{} --help",first.display())});
@@ -1451,6 +1482,9 @@ async fn install(
         }
         if !record.rewritten.is_empty() {
             result["rewritten"] = json!(record.rewritten);
+        }
+        if let Some(script) = &script {
+            result["install_script"] = script.clone();
         }
         let setup = shell_path::configure(&root.join("bin"), options.persist_path);
         result["path_setup"] = serde_json::to_value(&setup)?;
@@ -1470,6 +1504,18 @@ async fn install(
                 worker_warning(&worker)
             ),
         ));
+    }
+    if script_failed {
+        let script = script.as_ref().expect("a failed script has a result");
+        bail!(
+            "{id} {} is installed, but its install script {} failed{}",
+            record.version,
+            script["path"].as_str().unwrap_or_default(),
+            script["exit_code"]
+                .as_i64()
+                .map(|code| format!(" with exit code {code}"))
+                .unwrap_or_default()
+        );
     }
     Ok(())
 }
@@ -2202,6 +2248,7 @@ mod auto_update_tests {
             sha256: "test".into(),
             resolved: vec![],
             rewritten: BTreeMap::new(),
+            install_script: None,
         };
         write_private(
             &state.join("installed.json"),

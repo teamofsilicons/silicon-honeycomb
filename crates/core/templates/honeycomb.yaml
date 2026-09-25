@@ -16,6 +16,9 @@ targets:
     root: "targets/linux-x86_64"
     executables: &unix_executables
       app: "bin/your-app"
+    # Optional: run once after `honeycomb install` completes on this target.
+    # Unix scripts need a shebang and chmod +x; Windows ones must end in .cmd, .bat, .ps1 or .exe.
+    # install_script: "setup.sh"
 
   linux-aarch64:
     root: "targets/linux-aarch64"

@@ -403,6 +403,11 @@ For updates a daemon would be running which checks if there is a new release (pr
 In this check it would check for the installed version of the user's installed variant (dev or/and prod) is there a new version release if there is - update it. 
 
 
+# Install Script
+
+For each app in honeycomb.yaml it should be possible for the app to be able to put in an install script this script should be run once the install for said app has completed. 
+
+
 # OBO Endpoints
 
 Honeycomb would have an OBO Endpoint which would let other apps and users fetch all the apps that user has in their organisation (including the private ones). This is a critical endpoint. 

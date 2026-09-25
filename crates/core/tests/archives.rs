@@ -199,3 +199,109 @@ fn promotion_rewrites_manifest_and_preserves_payload_with_repeatable_checksum() 
     .unwrap();
     assert_eq!(legacy.channel, silicon_honeycomb_core::ReleaseChannel::Prod);
 }
+
+/// Add an install script to every target of `fixture`, Windows ones as `.cmd`.
+fn with_install_script(root: &Path) {
+    let manifest_path = root.join("honeycomb.yaml");
+    let mut manifest: serde_json::Value =
+        serde_yaml::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for target in REQUIRED_TARGETS {
+        let name = if target.starts_with("windows") {
+            "setup.cmd"
+        } else {
+            "setup.sh"
+        };
+        let script = root.join(format!("targets/{target}/{name}"));
+        fs::write(&script, b"#!/bin/sh\necho setup\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(script, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        manifest["targets"][target]["install_script"] = name.into();
+    }
+    fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+}
+
+#[test]
+fn install_script_round_trips_through_pack_and_promotion() {
+    let source = tempfile::tempdir().unwrap();
+    fixture(source.path());
+    with_install_script(source.path());
+    let archive = pack(source.path(), None).unwrap();
+    let promoted = source.path().join("promoted.tar.gz");
+    repack_version(&archive, "2.0.0", &promoted).unwrap();
+    let extracted = tempfile::tempdir().unwrap();
+    let manifest = unpack(&promoted, extracted.path()).unwrap();
+    assert_eq!(
+        manifest.targets["linux-x86_64"].install_script.as_deref(),
+        Some("setup.sh")
+    );
+    assert_eq!(
+        manifest.targets["windows-x86_64"].install_script.as_deref(),
+        Some("setup.cmd")
+    );
+}
+
+#[test]
+fn rejects_unsafe_missing_and_unrunnable_install_scripts() {
+    let cases: [(&str, &str, &str); 3] = [
+        (
+            "linux-x86_64",
+            "../escape.sh",
+            "targets.linux-x86_64.install_script: unsafe path",
+        ),
+        (
+            "macos-aarch64",
+            "absent.sh",
+            "targets.macos-aarch64.install_script:",
+        ),
+        (
+            "windows-x86_64",
+            "setup.sh",
+            "Windows scripts must end in .cmd, .bat, .ps1 or .exe",
+        ),
+    ];
+    for (target, script, expected) in cases {
+        let source = tempfile::tempdir().unwrap();
+        fixture(source.path());
+        with_install_script(source.path());
+        if script == "setup.sh" {
+            fs::write(
+                source.path().join(format!("targets/{target}/setup.sh")),
+                b"echo\n",
+            )
+            .unwrap();
+        }
+        let manifest_path = source.path().join("honeycomb.yaml");
+        let mut manifest: serde_json::Value =
+            serde_yaml::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["targets"][target]["install_script"] = script.into();
+        fs::write(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+        let validation = validate(source.path());
+        assert!(!validation.valid, "{script} on {target} should be rejected");
+        assert!(
+            validation.errors.iter().any(|e| e.contains(expected)),
+            "{:?} does not mention {expected}",
+            validation.errors
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_a_unix_install_script_without_the_executable_bit() {
+    use std::os::unix::fs::PermissionsExt;
+    let source = tempfile::tempdir().unwrap();
+    fixture(source.path());
+    with_install_script(source.path());
+    let script = source.path().join("targets/linux-aarch64/setup.sh");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+    let validation = validate(source.path());
+    assert!(
+        validation
+            .errors
+            .iter()
+            .any(|e| e.contains("not executable"))
+    );
+}

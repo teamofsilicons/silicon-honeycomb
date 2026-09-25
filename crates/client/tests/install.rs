@@ -548,3 +548,112 @@ fn updating_a_locked_windows_payload_still_commits_the_new_installation() {
     drop(locked);
     installer::uninstall(&after, dest.path()).unwrap();
 }
+
+/// A package whose install script records what it saw, then exits with `exit_code`.
+fn fixture_with_install_script(root: &std::path::Path, exit_code: i32) -> std::path::PathBuf {
+    let archive = fixture_named(
+        root,
+        "1.0.0",
+        "honeycomb-test-setup",
+        "honeycomb-test-setup-alt",
+    );
+    fs::remove_file(&archive).unwrap();
+    let manifest_path = root.join("honeycomb.yaml");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for t in package::REQUIRED_TARGETS {
+        let windows = t.starts_with("windows-");
+        let name = if windows { "setup.cmd" } else { "setup.sh" };
+        let script = if windows {
+            format!("@echo off\r\ncd > \"%HONEYCOMB_BIN_DIR%\\ran\"\r\nexit /b {exit_code}\r\n")
+        } else {
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$HONEYCOMB_APP_ID\" \"$HONEYCOMB_APP_VERSION\" \"$HONEYCOMB_RELEASE_CHANNEL\" \"$HONEYCOMB_PACKAGE_DIR\" > \"$HONEYCOMB_BIN_DIR/ran\"\nexit {exit_code}\n"
+            )
+        };
+        let path = root.join(format!("targets/{t}/{name}"));
+        fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        manifest["targets"][t]["install_script"] = name.into();
+    }
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    package::pack(root, None).unwrap()
+}
+
+#[test]
+fn install_records_and_runs_the_install_script_in_its_package() {
+    let _serial = serial();
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let archive = fixture_with_install_script(src.path(), 0);
+    let installed =
+        installer::install_archive(&archive, dest.path(), &BTreeMap::new(), None).unwrap();
+    let script = installed
+        .install_script
+        .clone()
+        .expect("install script recorded");
+    assert!(script.starts_with(&installed.directory));
+    let observed = tempfile::tempdir().unwrap();
+    let status = installer::run_install_script(&installed, observed.path(), false)
+        .unwrap()
+        .unwrap();
+    assert!(status.success());
+    let ran = fs::read_to_string(observed.path().join("ran")).unwrap();
+    #[cfg(unix)]
+    {
+        let lines: Vec<&str> = ran.lines().collect();
+        let directory = installed.directory.canonicalize().unwrap();
+        assert_eq!(
+            std::path::Path::new(lines[0]).canonicalize().unwrap(),
+            directory
+        );
+        assert_eq!(&lines[1..4], ["hello", "1.0.0", "prod"]);
+        assert_eq!(std::path::Path::new(lines[4]), installed.directory);
+    }
+    #[cfg(windows)]
+    assert!(!ran.trim().is_empty());
+    installer::uninstall(&installed, dest.path()).unwrap();
+}
+
+#[test]
+fn a_failing_install_script_reports_its_exit_code_and_keeps_the_installation() {
+    let _serial = serial();
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let archive = fixture_with_install_script(src.path(), 7);
+    let installed =
+        installer::install_archive(&archive, dest.path(), &BTreeMap::new(), None).unwrap();
+    let observed = tempfile::tempdir().unwrap();
+    let status = installer::run_install_script(&installed, observed.path(), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.code(), Some(7));
+    assert!(
+        installed
+            .commands
+            .values()
+            .all(|c| c.symlink_metadata().is_ok())
+    );
+    installer::uninstall(&installed, dest.path()).unwrap();
+}
+
+#[test]
+fn a_package_without_an_install_script_runs_nothing() {
+    let _serial = serial();
+    let src = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let archive = fixture(src.path(), "1.0.0");
+    let installed =
+        installer::install_archive(&archive, dest.path(), &BTreeMap::new(), None).unwrap();
+    assert!(installed.install_script.is_none());
+    assert!(
+        installer::run_install_script(&installed, dest.path(), false)
+            .unwrap()
+            .is_none()
+    );
+    installer::uninstall(&installed, dest.path()).unwrap();
+}

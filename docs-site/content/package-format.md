@@ -56,6 +56,7 @@ targets:
 | `targets` | Target ID → root directory and executable mappings. |
 | `targets.<id>.root` | Safe relative directory below `targets/`; target roots cannot overlap. |
 | `targets.<id>.executables` | Logical executable identifier → path relative to that target root. |
+| `targets.<id>.install_script` | Optional. Path relative to that target root of a script run once after `honeycomb install` completes on that target. See [Install script](#install-script). |
 
 For example, `bin: { my-app: main }` exposes `my-app` on PATH and resolves `main` separately for each platform. Multiple commands may map to logical executables. Unknown manifest fields are rejected.
 
@@ -79,6 +80,44 @@ chmod +x my-app/targets/linux-*/my-app my-app/targets/macos-*/my-app
 honeycomb validate my-app
 honeycomb pack my-app --output my-app-1.0.0.tar.gz
 ```
-Package runtime assets inside the appropriate target root. Do not include credentials, source working trees, or installer scripts that mutate the host. The installer selects a target, validates and stages its payload, then activates owned commands. It does not run package lifecycle scripts.
+Package runtime assets inside the appropriate target root. Do not include credentials or source working trees. The installer selects a target, validates and stages its payload, activates owned commands, records the installation, and then runs that target's install script if the manifest declares one.
 
 Without `--output`, the archive is named `<app-handle>-<version>.tar.gz` when `app_id` is set. Otherwise Honeycomb uses the alphabetically first command in `bin`, for example `my-app-1.0.0.tar.gz`. The archive bytes are preserved during upload.
+
+## Install script
+Each target can declare an `install_script`, a path relative to its root. Honeycomb runs it once `honeycomb install` has completed on that platform, so every command is already active and recorded when it starts.
+
+```yaml
+targets:
+  linux-x86_64:
+    root: targets/linux-x86_64
+    executables:
+      main: my-app
+    install_script: setup.sh
+  windows-x86_64:
+    root: targets/windows-x86_64
+    executables:
+      main: my-app.exe
+    install_script: setup.ps1
+```
+
+| Platform | How it runs |
+| --- | --- |
+| Linux, macOS | Executed directly. Needs a shebang such as `#!/bin/sh` and the executable bit. |
+| Windows | Chosen by extension: `.cmd` and `.bat` run through `cmd.exe`, `.ps1` through `powershell.exe -ExecutionPolicy Bypass`, `.exe` directly. Other extensions are rejected. |
+
+The script runs in the installed package directory with these environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `HONEYCOMB_APP_ID` | The installed application. |
+| `HONEYCOMB_APP_VERSION` | The installed release version. |
+| `HONEYCOMB_RELEASE_CHANNEL` | `prod` or `dev`. |
+| `HONEYCOMB_PACKAGE_DIR` | The installed package directory. |
+| `HONEYCOMB_BIN_DIR` | Honeycomb's command directory for this context. |
+
+Its output goes to stderr, so `--json` output on stdout stays parseable. It can prompt only when a person is at a terminal; otherwise its stdin is empty, so an unattended install cannot hang waiting for an answer.
+
+The script runs when `honeycomb install` installs a release. It does not run on `honeycomb update`, on automatic updates, or when the requested release is already installed. Write it so a second run is harmless: reinstalling after an uninstall, or switching channels with `honeycomb install`, runs it again.
+
+If the script exits non-zero, the installation is kept and `honeycomb install` exits with status 1, naming the script and its exit code. `honeycomb install <app> --skip-install-script` installs without running it. Both appear in the JSON result as `install_script.status`: `succeeded`, `failed` or `skipped`.

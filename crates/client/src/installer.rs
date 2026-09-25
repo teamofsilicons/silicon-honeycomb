@@ -28,6 +28,9 @@ pub struct Installed {
     /// Commands rewritten outside this bin directory, with the file kept for uninstall.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rewritten: BTreeMap<String, Rewritten>,
+    /// The package's install script for this target, inside `directory`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_script: Option<PathBuf>,
 }
 
 /// A command of the same name already reachable on PATH from another installation.
@@ -411,6 +414,7 @@ fn install_archive_with_identity(
             }
         }
     }
+    let install_script = payload.install_script.as_ref().map(|s| directory.join(s));
     Ok(Installed {
         app_id: app_id.to_owned(),
         channel,
@@ -422,7 +426,81 @@ fn install_archive_with_identity(
         sha256: expected_sha,
         resolved: conflicts.into_iter().filter(|c| c.satisfied).collect(),
         rewritten,
+        install_script,
     })
+}
+
+/// Run the package's install script once its installation is complete. The script works in
+/// its package directory and writes to stderr, keeping stdout for Honeycomb's own result.
+/// Without a person to answer it gets no stdin, so an unattended install cannot hang on a
+/// prompt. Returns `None` when the package has no install script.
+pub fn run_install_script(
+    record: &Installed,
+    bin_dir: &Path,
+    interactive: bool,
+) -> Result<Option<std::process::ExitStatus>> {
+    let Some(script) = &record.install_script else {
+        return Ok(None);
+    };
+    if !script.starts_with(&record.directory) {
+        bail!("Install script points outside its package directory");
+    }
+    let mut command = script_command(script);
+    command
+        .current_dir(&record.directory)
+        .env("HONEYCOMB_APP_ID", &record.app_id)
+        .env("HONEYCOMB_APP_VERSION", &record.version)
+        .env("HONEYCOMB_RELEASE_CHANNEL", record.channel.as_str())
+        .env("HONEYCOMB_PACKAGE_DIR", &record.directory)
+        .env("HONEYCOMB_BIN_DIR", bin_dir)
+        .stdin(if interactive {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .stdout(std::io::stderr())
+        .stderr(Stdio::inherit());
+    let status = command
+        .status()
+        .with_context(|| format!("Cannot run install script {}", script.display()))?;
+    Ok(Some(status))
+}
+
+#[cfg(unix)]
+fn script_command(script: &Path) -> Command {
+    Command::new(script)
+}
+
+/// Windows chooses the interpreter from the extension the manifest validation allowed.
+#[cfg(windows)]
+fn script_command(script: &Path) -> Command {
+    let extension = script
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let path = batch_path(&script.to_string_lossy());
+    match extension.as_str() {
+        "cmd" | "bat" => {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/D", "/C"]).arg(path);
+            command
+        }
+        "ps1" => {
+            let mut command = Command::new("powershell.exe");
+            command
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(path);
+            command
+        }
+        _ => Command::new(script),
+    }
 }
 
 /// Point a command name at a package executable, replacing it in one rename.

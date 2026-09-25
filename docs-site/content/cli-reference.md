@@ -250,6 +250,8 @@ Options:
           Reuse this key to safely retry a mutation after an uncertain response
       --switch-channel
           Confirm switching an existing installation between production and dev releases
+      --skip-install-script
+          Install without running the package's install script
   -h, --help
           Print help
 ```
