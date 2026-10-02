@@ -185,7 +185,7 @@ test("publication progress distinguishes equal versions from both channels", asy
   await page.goto(consoleSite);
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
   await page.getByRole("tab", { name: "Releases & publication" }).click();
-  const publication = page.locator(".review-thread");
+  const publication = page.locator(".publication-summary");
   await expect(publication).toContainText("Production release 1.0.0 · accepted");
   await expect(publication).toContainText("Dev release 1.0.0 · pending");
 });
@@ -205,7 +205,7 @@ test("pending permission releases show private status and retain the public inst
   await page.getByRole("tab", { name: "Releases & publication" }).click();
   const history = page.getByRole("region", { name: "Release history" });
   const pending = history.getByRole("listitem").filter({ hasText: "2.0.0" });
-  await expect(pending).toContainText("Private");
+  await expect(pending).toContainText(/private/i);
   await expect(pending.locator("code")).toHaveCount(0);
   await expect(pending).toContainText("This release requires additional permission approval");
   await expect(pending).toContainText("Existing installations will not update until it becomes public");

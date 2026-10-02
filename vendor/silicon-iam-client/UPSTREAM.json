@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/teamofsilicons/silicon-iam",
-  "commit": "52dd5ea7d48571e29e3b79371dfc27405644fbd9",
+  "commit": "f1e9c4768029aacabe337ca41be52e05023d1631",
   "version": "5.0.0",
   "dirty": false,
   "note": "Official IAM 5.0.0 source pinned to the coordinated identity, OBO and ATA release commit. Standalone Cargo manifest normalization is retained.",
@@ -34,7 +34,7 @@
     "src/honeycomb/contracts.rs": "2374b3f5c0df6f7496cff70fe6183a3fd0ea3cc58217c82562131eb63af32a8e",
     "src/honeycomb.rs": "284691beb858b2d57e1dadb1520fd7950342d57cc8c9bcf37bbf75dfa7ab1a5a",
     "src/lib.rs": "3dc274bcb6f24d871b39f2c6f6d74e56f3d250b6a9ead38b2aae4446848d1963",
-    "src/models.rs": "ae2e809393abfa62da2bb4b3622f82039a0518791900ce6212afecfcbed9817a",
+    "src/models.rs": "70027a04dcf1eb57d8e95b33fca50130ff7cac8f5035c705f2543ee8595b8012",
     "src/models_manual.rs": "4c1a3c50ae7651163dfda0246cc0ba9bbffad3fd8bf241c38a221aa38f5170a7",
     "src/request.rs": "02fd1654392df0823f0db891080d75e6baf11939786f7d26f688ba6ce0bebfa0",
     "src/support.rs": "a5c8b6bf7b94ec7d138244a3303dc2bbab9503b1277c9fef679cd5ce61dd22a6",

@@ -464,7 +464,7 @@ test("provider administrators can discuss and approve their review gate", async 
   await page.getByRole("link", { name: "Continue with IAM" }).click();
   await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: /^Received requests(?: \d+ (?:new updates|pending approvals))?$/ }).click();
+  await page.getByRole("button", { name: /^Received requests(?: \d+ (?:new updates?|pending approvals?))?$/ }).click();
   await page.getByRole("heading", { name: `Review candidate ${info.project.name}`, exact: true }).click();
   const discussion=page.locator(".discussion-page");
   await expect(page).toHaveURL(/\/requests\/received\/[^/]+\/[^/]+$/);
