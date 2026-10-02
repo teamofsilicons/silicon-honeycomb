@@ -17,8 +17,22 @@ pub struct ExternalScope {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OboDownstream {
+    pub audience: String,
+    pub endpoint_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OboEndpoint {
     pub endpoint_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_to_user: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_warnings: Vec<String>,
     pub path: String,
     #[serde(default)]
     pub metadata: Value,
@@ -27,7 +41,44 @@ pub struct OboEndpoint {
     pub ttl_seconds: u64,
     #[serde(default = "enabled")]
     pub enabled: bool,
+    /// Direct calls this endpoint may delegate; IAM validates the complete graph.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub downstream: Vec<OboDownstream>,
 }
+
+/// Application-only delegation. Importing an OBO definition does not import a
+/// user's grant or silently translate the OBO dependency chain.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AtaEndpoint {
+    pub endpoint_id: String,
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub critical: bool,
+    #[serde(default = "empty_metadata")]
+    pub metadata: Value,
+    #[serde(default)]
+    pub note_to_user: Option<String>,
+    #[serde(default)]
+    pub additional_warnings: Vec<String>,
+    #[serde(default)]
+    pub downstream: Vec<OboDownstream>,
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+}
+fn empty_metadata() -> Value {
+    serde_json::json!({})
+}
+
+pub const DELEGATION_WARNINGS: &[&str] = &[
+    "uses_credits",
+    "incurs_cost",
+    "stores_data",
+    "shares_data",
+    "deletes_data",
+    "external_service",
+];
 fn default_ttl() -> u64 {
     300
 }
@@ -67,6 +118,8 @@ pub struct AppInput {
     pub app_scope: AppScope,
     #[serde(default)]
     pub obo_endpoints: Vec<OboEndpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ata_endpoints: Vec<AtaEndpoint>,
     #[serde(default)]
     pub obo_review_message: Option<String>,
 }
@@ -144,8 +197,10 @@ impl AppInput {
                 "webhook_scope: select at least one category, without duplicates: membership, updates, trust or full".into(),
             );
         }
-        if !self.obo_endpoints.is_empty() && self.base_url.is_none() {
-            errors.push("base_url: required when exposing OBO endpoints".into());
+        if (!self.obo_endpoints.is_empty() || !self.ata_endpoints.is_empty())
+            && self.base_url.is_none()
+        {
+            errors.push("base_url: required when exposing OBO or ATA endpoints".into());
         }
         if let Some(base) = &self.base_url
             && url::Url::parse(base).is_ok_and(|u| u.origin().ascii_serialization() != *base)
@@ -156,6 +211,14 @@ impl AppInput {
         }
         let mut ids = std::collections::HashSet::new();
         for e in &self.obo_endpoints {
+            validate_endpoint_details(
+                &e.name,
+                &e.description,
+                e.note_to_user.as_deref(),
+                &e.additional_warnings,
+                false,
+                &mut errors,
+            );
             if !ids.insert(&e.endpoint_id) {
                 errors.push(format!(
                     "obo_endpoints: duplicate endpoint_id {}",
@@ -186,6 +249,76 @@ impl AppInput {
             if e.ttl_seconds == 0 {
                 errors.push(format!("{}: ttl_seconds must be positive", e.endpoint_id));
             }
+            if e.downstream.len() > 16 {
+                errors.push(format!(
+                    "{}: downstream must contain at most 16 calls",
+                    e.endpoint_id
+                ));
+            }
+            let mut calls = std::collections::HashSet::new();
+            for call in &e.downstream {
+                if !valid_app_id(&call.audience) || !valid_obo_endpoint_id(&call.endpoint_id) {
+                    errors.push(format!(
+                        "{}: downstream requires a valid audience app ID and lowercase endpoint ID",
+                        e.endpoint_id
+                    ));
+                }
+                if !calls.insert((&call.audience, &call.endpoint_id)) {
+                    errors.push(format!(
+                        "{}: duplicate downstream call {}:{}",
+                        e.endpoint_id, call.audience, call.endpoint_id
+                    ));
+                }
+                if call.audience == self.app_id {
+                    errors.push(format!(
+                        "{}: downstream cannot call the same application",
+                        e.endpoint_id
+                    ));
+                }
+            }
+        }
+        let mut ata_ids = std::collections::HashSet::new();
+        let mut ata_paths = std::collections::HashSet::new();
+        if self.ata_endpoints.len() > 100 {
+            errors.push("ata_endpoints: at most 100 endpoints may be configured".into());
+        }
+        for e in &self.ata_endpoints {
+            validate_endpoint_details(
+                &e.name,
+                &e.description,
+                e.note_to_user.as_deref(),
+                &e.additional_warnings,
+                true,
+                &mut errors,
+            );
+            if !valid_obo_endpoint_id(&e.endpoint_id) || !ata_ids.insert(&e.endpoint_id) {
+                errors.push("ata_endpoints: use unique lowercase local endpoint IDs".into());
+            }
+            if !e.path.starts_with('/')
+                || e.path.starts_with("//")
+                || e.path.len() > 2048
+                || e.path.contains(['?', '#', '\\', '%'])
+                || e.path.chars().any(|c| c.is_control() || c.is_whitespace())
+                || e.path.split('/').any(|part| part == "." || part == "..")
+                || !ata_paths.insert(&e.path)
+            {
+                errors.push("ata_endpoints: use unique absolute endpoint paths without query, fragment or traversal".into());
+            }
+            if !e.metadata.is_object() || e.metadata.to_string().len() > 16384 {
+                errors.push("ata_endpoints.metadata: use a JSON object up to 16 KiB".into());
+            }
+            let mut deps = std::collections::HashSet::new();
+            if e.downstream.len() > 16 {
+                errors.push("ata_endpoints.downstream: at most 16 dependencies".into());
+            }
+            for dep in &e.downstream {
+                if !valid_app_id(&dep.audience)
+                    || !valid_obo_endpoint_id(&dep.endpoint_id)
+                    || !deps.insert((&dep.audience, &dep.endpoint_id))
+                {
+                    errors.push("ata_endpoints.downstream: select distinct application and ATA endpoint IDs".into());
+                }
+            }
         }
         for e in &self.app_scope.external {
             if !valid_app_id(&e.app_id) || e.endpoint_id.is_empty() {
@@ -203,6 +336,38 @@ impl AppInput {
         value.as_object_mut().unwrap().remove("webhook_secret");
         value
     }
+}
+fn validate_endpoint_details(
+    name: &str,
+    description: &str,
+    note: Option<&str>,
+    warnings: &[String],
+    required: bool,
+    errors: &mut Vec<String>,
+) {
+    if name.chars().count() > 160
+        || description.chars().count() > 4000
+        || (required && (name.trim().is_empty() || description.trim().is_empty()))
+        || note.is_some_and(|v| v.chars().count() > 2000)
+    {
+        errors.push("endpoint details: provide a name up to 160 characters, description up to 4000 and note up to 2000".into());
+    }
+    let distinct: std::collections::HashSet<_> = warnings.iter().collect();
+    if distinct.len() != warnings.len()
+        || distinct
+            .iter()
+            .any(|w| !DELEGATION_WARNINGS.contains(&w.as_str()))
+    {
+        errors.push(
+            "additional_warnings: select distinct warnings from the IAM warning catalog".into(),
+        );
+    }
+}
+fn valid_obo_endpoint_id(value: &str) -> bool {
+    (1..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
 }
 pub fn valid_handle(s: &str) -> bool {
     !s.is_empty()

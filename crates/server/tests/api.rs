@@ -2483,6 +2483,33 @@ async fn review_authority_discussions_and_provider_before_validator_order_are_en
     )
     .await;
     assert!(detail.to_string().contains("Explain how files"));
+    // The discussion page must display the persisted timestamp and retain the
+    // same chronological order as the authenticated review thread.
+    let created_at: i64 = sqlx::query_scalar("SELECT created_at FROM discussions WHERE id=?")
+        .bind(reply["id"].as_str().unwrap())
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    let messages = detail["messages"].as_array().unwrap();
+    let reply_message = messages
+        .iter()
+        .find(|message| message["id"] == reply["id"])
+        .unwrap();
+    assert_eq!(reply_message["created_at"], created_at);
+    assert!(messages.iter().all(|message| {
+        message["created_at"]
+            .as_i64()
+            .is_some_and(|value| value > 0)
+    }));
+    assert!(messages.windows(2).all(|pair| {
+        (
+            pair[0]["created_at"].as_i64().unwrap(),
+            pair[0]["id"].as_str().unwrap(),
+        ) <= (
+            pair[1]["created_at"].as_i64().unwrap(),
+            pair[1]["id"].as_str().unwrap(),
+        )
+    }));
     assert_eq!(
         call(
             &s,
@@ -6237,4 +6264,364 @@ async fn honeycomb_provided_scopes_are_reviewed_on_the_validator_gate() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["provider"], "honeycomb");
     assert_eq!(sent[0]["scopes"], json!(["obo:honeycomb:apps.list"]));
+}
+
+#[tokio::test]
+async fn request_activity_is_account_scoped_and_does_not_acknowledge_new_replies() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    let get = |path: String, actor: &'static str| {
+        let s = &s;
+        async move {
+            call(
+                s,
+                "GET",
+                &path,
+                Some(actor),
+                Value::Null,
+                "activity-get-0001",
+                None,
+            )
+            .await
+        }
+    };
+    let (status, sent) = get("/api/v1/sent-requests".into(), "admin").await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["items"][0]["id"], id);
+    assert_eq!(sent["items"][0]["unread"], true);
+    let old_version = sent["items"][0]["activity_version"].clone();
+    let read_path = format!("/api/v1/requests/{id}/read");
+    let body = json!({"view":"sent", "activity_version":old_version});
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &read_path,
+            Some("member"),
+            body.clone(),
+            "activity-read-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &read_path,
+            Some("admin"),
+            body.clone(),
+            "activity-read-0002",
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get("/api/v1/sent-requests".into(), "admin").await.1["items"][0]["unread"],
+        false
+    );
+    let detail_path = format!("/api/v1/review-requests/{id}/provider");
+    let (status, detail) = get(detail_path.clone(), "outsider").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["unread"], true);
+    assert_eq!(call(&s,"POST",&read_path,Some("outsider"),json!({"view":"received","provider":"provider","activity_version":detail["activity_version"]}),"activity-read-0003",None).await.0,StatusCode::OK);
+    assert_eq!(
+        get(detail_path.clone(), "outsider").await.1["unread"],
+        false
+    );
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &format!("{detail_path}/messages"),
+            Some("outsider"),
+            json!({"message":"Please clarify this requested access."}),
+            "activity-message-0001",
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    // A delayed acknowledgement of the old content cannot clear the new reply.
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            &read_path,
+            Some("admin"),
+            body,
+            "activity-read-0004",
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, summary) = get("/api/v1/request-activity".into(), "admin").await;
+    assert_eq!(summary["sent_unread"], 1, "{summary}");
+    let (_, latest) = get("/api/v1/sent-requests".into(), "admin").await;
+    assert_ne!(latest["items"][0]["activity_version"], old_version);
+    assert_eq!(latest["items"][0]["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        get("/api/v1/sent-requests".into(), "member").await.1["total"],
+        0
+    );
+    assert_eq!(
+        get("/api/v1/request-activity".into(), "outsider").await.1["received_unread"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn missing_mail_configuration_is_recorded_and_delivery_can_recover() {
+    use silicon_honeycomb_server::notifications::dispatch_once;
+    let (s, _) = setup(true).await;
+    let (_, report) = call(
+        &s,
+        "POST",
+        "/api/v1/reports",
+        None,
+        json!({"message":"Reproduce missing email configuration safely"}),
+        "missing-mail-0001",
+        None,
+    )
+    .await;
+    let id = report["id"].as_str().unwrap();
+    assert!(dispatch_once(&s, None).await.unwrap());
+    let (state, error, attempts): (String, String, i64) =
+        sqlx::query_as("SELECT state,error,attempts FROM outbox WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+    assert!(error.contains("POSTMARK_SERVER_TOKEN"));
+    assert_eq!(attempts, 0);
+    sqlx::query("UPDATE outbox SET next_attempt=0 WHERE id=?")
+        .bind(id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let mailbox = Mailbox::default();
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    let messages = mailbox.0.lock().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].html.contains("HONEYCOMB"));
+}
+
+struct RecoveredMail;
+#[async_trait]
+impl silicon_honeycomb_server::notifications::Mailer for RecoveredMail {
+    async fn send(
+        &self,
+        _: &silicon_honeycomb_server::notifications::Email,
+    ) -> silicon_honeycomb_server::notifications::Delivery {
+        panic!("Receipt recovery must not send another email")
+    }
+    async fn receipt(&self, _id: &str) -> Option<String> {
+        Some("recovered-provider-receipt".into())
+    }
+}
+#[tokio::test]
+async fn uncertain_mail_can_adopt_a_positive_receipt_without_resending() {
+    use silicon_honeycomb_server::notifications::{dispatch_once, reconcile_once};
+    let (s, _) = setup(true).await;
+    let (_, report) = call(
+        &s,
+        "POST",
+        "/api/v1/reports",
+        None,
+        json!({"message":"A safe local receipt recovery regression"}),
+        "receipt-recovery-0001",
+        None,
+    )
+    .await;
+    let id = report["id"].as_str().unwrap();
+    dispatch_once(&s, Some(&LostMail)).await.unwrap();
+    sqlx::query("UPDATE outbox SET next_attempt=0 WHERE id=?")
+        .bind(id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    assert!(reconcile_once(&s, &RecoveredMail).await.unwrap());
+    let (state, receipt): (String, String) =
+        sqlx::query_as("SELECT state,provider_id FROM outbox WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(state, "sent");
+    assert_eq!(receipt, "recovered-provider-receipt");
+    assert!(!dispatch_once(&s, Some(&RecoveredMail)).await.unwrap());
+}
+
+#[tokio::test]
+async fn historical_request_replies_stay_on_the_selected_app_revision() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let original = review_application(&s).await;
+    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,created_at,config_snapshot,requested_by) SELECT 'newer-review','production',app_id,revision+1,'awaiting_review_plan',created_at+1,config_snapshot,requested_by FROM publication_requests WHERE id=?")
+        .bind(&original).execute(&s.db).await.unwrap();
+    let path = "/api/v1/apps/review-app/publication/messages";
+    let body = json!({"request_id":original,"message":"A clarification for the earlier release."});
+    let (status, reply) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        body.clone(),
+        "historical-reply-0001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let saved: String = sqlx::query_scalar("SELECT request_id FROM discussions WHERE id=?")
+        .bind(reply["id"].as_str().unwrap())
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(saved, original);
+    let replay = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        body,
+        "historical-reply-0001",
+        None,
+    )
+    .await;
+    assert_eq!(replay.1["id"], reply["id"]);
+    assert_eq!(
+        call(
+            &s,
+            "POST",
+            path,
+            Some("admin"),
+            json!({"request_id":"unknown-request","message":"Must not fall back to latest."}),
+            "historical-reply-0002",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, latest) = call(
+        &s,
+        "POST",
+        path,
+        Some("admin"),
+        json!({"message":"Default still targets latest."}),
+        "historical-reply-0003",
+        None,
+    )
+    .await;
+    let saved: String = sqlx::query_scalar("SELECT request_id FROM discussions WHERE id=?")
+        .bind(latest["id"].as_str().unwrap())
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(saved, "newer-review");
+}
+
+#[tokio::test]
+async fn completed_received_requests_remain_visible_without_offering_stale_decisions() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    sqlx::query("UPDATE review_gates SET state='approved' WHERE request_id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE publication_requests SET state='published' WHERE id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (_, current) = call(
+        &s,
+        "GET",
+        "/api/v1/review-requests",
+        Some("outsider"),
+        Value::Null,
+        "history-read-0001",
+        None,
+    )
+    .await;
+    assert!(current["items"].as_array().unwrap().is_empty());
+    let (status, history) = call(
+        &s,
+        "GET",
+        "/api/v1/review-requests?include_completed=true",
+        Some("outsider"),
+        Value::Null,
+        "history-read-0002",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history["items"][0]["request_state"], "published");
+    assert_eq!(history["items"][0]["can_decide"], false);
+    let (_, detail) = call(
+        &s,
+        "GET",
+        &format!("/api/v1/review-requests/{id}/provider"),
+        Some("outsider"),
+        Value::Null,
+        "history-read-0003",
+        None,
+    )
+    .await;
+    assert_eq!(detail["can_decide"], false);
+    let (_, counts) = call(
+        &s,
+        "GET",
+        "/api/v1/request-activity",
+        Some("outsider"),
+        Value::Null,
+        "history-read-0004",
+        None,
+    )
+    .await;
+    assert_eq!(counts["received_pending"], 0);
+    assert_eq!(counts["received_unread"], 1);
+}
+
+#[tokio::test]
+async fn stale_review_emails_do_not_ask_for_completed_or_superseded_approvals() {
+    use silicon_honeycomb_server::notifications::dispatch_once;
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    sqlx::query("DELETE FROM outbox")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE review_gates SET state='approved' WHERE request_id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE publication_requests SET state='published' WHERE id=?")
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES('stale-review','production','stale-review','publication.review',?,1)")
+        .bind(json!({"request_id":id,"app_id":"review-app","review_provider":"provider"}).to_string()).execute(&s.db).await.unwrap();
+    let mailbox = Mailbox::default();
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    assert!(mailbox.0.lock().unwrap().is_empty());
+    let state: String = sqlx::query_scalar("SELECT state FROM outbox WHERE id='stale-review'")
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "superseded");
 }

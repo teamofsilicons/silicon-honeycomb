@@ -12,6 +12,7 @@ import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/source-serif-4/400.css";
 import "./styles.css";
+import "./guide.css";
 type Page = {
   title: string;
   group: string;
@@ -20,6 +21,7 @@ type Page = {
   url: string;
 };
 function Tools() {
+  const hasSidebar = document.getElementById("sidebar") !== null;
   const [query, setQuery] = createSignal("");
   const [pages, setPages] = createSignal<Page[]>([]);
   const [error, setError] = createSignal(false);
@@ -129,6 +131,7 @@ function Tools() {
   });
   return (
     <>
+      <Show when={hasSidebar}>
       <button
         type="button"
         class="menu-button"
@@ -139,6 +142,7 @@ function Tools() {
       >
         ☰
       </button>
+      </Show>
       <button
         type="button"
         class="search-button"

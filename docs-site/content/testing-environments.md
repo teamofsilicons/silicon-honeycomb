@@ -19,7 +19,7 @@ The CLI accepts a saved ID or the raw key. Prefer saved IDs so the root key is n
 
 ## Import an existing application
 ```sh
-honeycomb environments import ENVIRONMENT_ID 'my-org>my-app' --revision 1 --release 1.0.0
+honeycomb environments import ENVIRONMENT_ID 'my-app' --revision 1 --release 1.0.0
 honeycomb environments get ENVIRONMENT_ID
 ```
 Imports recursively include external-scope dependencies, preserve owning organizations, and pin accepted configurations and selected releases. Production access is required for private dependencies. The selected release can be omitted to use the workflow's current selection rules.
@@ -38,5 +38,5 @@ These revision numbers are illustrative; read current state before each action. 
 
 A `purge` action also exists and is irreversible. Use it only for an explicitly intended permanent removal under the environment's policy. Recoverable deletion has a 30-day recovery window after every participant confirms disabled access.
 
-## App-owned testing and bundles
-The product design assigns application/test lifecycle and bundle definitions to Honeycomb. Current app-owned testing credentials, legacy environment adoption, bundle UI/API, and some protected service coordination are not complete. Do not invent bundle commands or use production credentials to bypass missing test contracts.
+## Testing and bundles
+Honeycomb manages application imports and shared testing lifecycle. Use the environment’s current state and participant receipts to confirm readiness before running an integration. Bundle management is a separate workflow exposed by `honeycomb bundles --help`; a bundle does not replace the environment key or select a testing context. Never substitute production credentials when a testing operation is unavailable.

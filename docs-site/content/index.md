@@ -1,6 +1,13 @@
 ## What is Honeycomb?
 Honeycomb brings your application catalog, portable CLI releases, configuration reviews, and shared testing workflows into one place. Browse applications in the **library**, manage your organization's applications in the **console**, or use the same workflows from the Rust CLI and client SDK.
 
+<a class="guide-entry" href="/guides/team-of-silicons-ready-applications/">
+<span class="guide-entry-label">Practical guide</span>
+<strong>Building a Team of Silicons-ready application</strong>
+<p>Build around IAM, account and organization context, delegated permissions, and a clear path to publication.</p>
+<span class="guide-entry-action">Read the guide <span aria-hidden="true">↗</span></span>
+</a>
+
 <div class="cards">
 <a class="card" href="/quickstart/"><span>01 · GET STARTED</span><strong>Install your first application</strong><p>Set up the CLI, sign in, and discover packages.</p></a>
 <a class="card" href="/upload-an-app/"><span>02 · PUBLISH</span><strong>Bring your app to Honeycomb</strong><p>Build six native targets, pack an archive, and upload a release.</p></a>

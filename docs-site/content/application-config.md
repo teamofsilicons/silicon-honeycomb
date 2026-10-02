@@ -19,8 +19,8 @@ Generate a random signing secret with a secure generator such as `openssl rand -
 ## Required fields
 | Field | Rules |
 | --- | --- |
-| `org_id` | Existing shared organization; caller must be a current owner/admin. |
-| `app_id` | Permanent local handle. Handles use 1–64 lowercase letters, digits, or hyphens; begin with a letter or digit. |
+| `org_id` | Existing organization selected for this session; caller must be a current owner/admin. Organization IDs use 3–50 lowercase letters, digits, underscores, or hyphens. |
+| `app_id` | Permanent, globally unique application ID. Use 1–80 lowercase letters, digits, underscores, or hyphens, beginning with a letter. |
 | `name` | Nonempty display name, at most 100 bytes under the current validator. |
 | `description` | 50–1,000 whitespace-separated words. |
 | `webhook_url` | HTTPS destination without embedded credentials. |
@@ -34,15 +34,17 @@ The resulting ID is the bare `app_id`; `org_id` separately identifies its owner.
 | `visibility` | New production apps default to `public`: automatically request approval once configuration and the first valid release are ready. Set `private` to opt out. On updates, omission preserves the existing choice; older apps retain their existing visibility preference. Effective public access still requires every approval. |
 | `logo_url` | Optional HTTPS logo. Uploaded logo links are public. |
 | `website_url`, `docs_url` | Optional HTTPS links. |
-| `base_url` | Backend origin for exposed OBO endpoints; no path, query, or trailing slash. |
+| `base_url` | Backend origin for exposed OBO or ATA endpoints; no path, query, or trailing slash. |
 | `webhook_scope` | Categories from `membership`, `updates`, `trust`, `full`. |
 | `app_scope.iam` | Requested IAM scope names. |
 | `app_scope.external` | Provider application and endpoint pairs. |
 | `obo_endpoints` | Endpoints your application exposes for delegated access. |
+| `obo_endpoints[].downstream` | Optional direct dependencies as `{ "audience": "briefcase", "endpoint_id": "briefcase.files.read" }` pairs. At most 16 unique calls per endpoint; the audience must be another application. IAM validates the complete dependency graph and requires separate user OBO consent. |
+| `ata_endpoints` | Endpoints exposed for application-only delegation. ATA dependencies remain ATA and do not inherit user OBO grants. |
 | `obo_review_message` | Context for permission reviewers. |
 | `testing_idle_days` | 30 by default; range 1–36500. |
 
-The `visibility` input is available in the deployed console and HTTP API and in CLI builds containing this change. The public 0.2.2 CLI predates that input; use the console to select private until upgrading to a supporting CLI build.
+The console, HTTP API, and current CLI creation/update input support `visibility`. Use `honeycomb apps create --help` and the current configuration reference when upgrading older CLI installations.
 
 Unknown input fields are rejected. Requested and effective configuration are displayed separately because IAM must accept changes before they apply at runtime.
 

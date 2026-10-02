@@ -1,4 +1,5 @@
 import express from "express";
+import { loginReturnPath } from "./login-return.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import packageInfo from "../package.json" with { type: "json" };
 import { DatabaseSync } from "node:sqlite";
@@ -162,7 +163,7 @@ app.get("/api/session", async (req, res) => {
     fail(res, e);
   }
 });
-app.get("/auth/login", async (_req, res) => {
+app.get("/auth/login", async (req, res) => {
   try {
     const response = await api("iam");
     if (!response.ok)
@@ -173,6 +174,7 @@ app.get("/auth/login", async (_req, res) => {
     };
     const state = randomBytes(32).toString("hex");
     setCookie(res, stateCookie, state, 600, "/auth");
+    setCookie(res, `${stateCookie}_return`, `${state}.${Buffer.from(loginReturnPath(req.query.next)).toString("base64url")}`, 600, "/auth");
     const callback = new URL("/auth/callback", origin);
     callback.searchParams.set("state", state);
     const login = new URL("/login", iam.login_url);
@@ -201,6 +203,9 @@ app.get("/auth/callback", async (req, res) => {
         );
       return;
     }
+    const savedReturn=cookie(req,`${stateCookie}_return`) || "";
+    const returnPath=savedReturn.startsWith(`${expected}.`) ? loginReturnPath(Buffer.from(savedReturn.slice(expected.length+1),"base64url").toString("utf8")) : "/";
+    setCookie(res, `${stateCookie}_return`, "", 0, "/auth");
     setCookie(res, stateCookie, "", 0, "/auth");
     const startedAt = Date.now();
     const response = await api("auth/login", {
@@ -218,7 +223,7 @@ app.get("/auth/callback", async (req, res) => {
     const id = randomBytes(32).toString("hex");
     sessions.create(createHash("sha256").update(id).digest("hex"), await response.json(), startedAt, Date.now() + 30 * 86400000);
     setCookie(res, sessionCookie, id, 30 * 86400);
-    res.redirect("/");
+    res.redirect(returnPath);
   } catch (e) {
     fail(res, e);
   }

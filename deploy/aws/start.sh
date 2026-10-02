@@ -10,6 +10,8 @@ import json, os
 from pathlib import Path
 root=Path('/etc/silicon-honeycomb')
 settings=json.loads((root/'runtime.json').read_text())
+if not settings.get('backend',{}).get('POSTMARK_SERVER_TOKEN','').strip():
+    raise SystemExit('Honeycomb production email is not configured: add POSTMARK_SERVER_TOKEN to the protected backend runtime settings before deployment. Review the existing outbox before enabling delivery.')
 for service in ['backend','library','console']:
     values=settings[service]
     assert all('\n' not in value and '\r' not in value for value in values.values())

@@ -1,8 +1,8 @@
 ## Upload a release
 ```sh
-honeycomb apps get 'my-org>my-app' --json
-honeycomb --idempotency-key my-release-upload-0001 releases upload 'my-org>my-app' my-app-1.0.0.tar.gz --channel prod --revision 1
-honeycomb releases list 'my-org>my-app'
+honeycomb apps get 'my-app' --json
+honeycomb --idempotency-key my-release-upload-0001 releases upload 'my-app' my-app-1.0.0.tar.gz --channel prod --revision 1
+honeycomb releases list 'my-app'
 ```
 Use the application's current configuration revision. Run `honeycomb validate ARCHIVE` for local validation before uploading. The upload uses the authenticated server validator, which retains validation failures for publication troubleshooting. It uses the selected application's identity; an optional manifest `app_id` must match it. Briefcase stores the bytes, while Honeycomb records version, SHA-256, size, and creation time.
 
@@ -12,10 +12,10 @@ The current CLI, Rust client, and console use `/api/v2/apps/{app_id}/releases` f
 
 ## Development releases and promotion
 ```sh
-honeycomb releases list 'my-org>my-app' --channel dev
-honeycomb releases promote 'my-org>my-app' 1.0.0 --version 2.0.0 --revision 1
-honeycomb install 'my-org>my-app>test@1.0.0'
-honeycomb install 'my-org>my-app@2.0.0' --switch-channel
+honeycomb releases list 'my-app' --channel dev
+honeycomb releases promote 'my-app' 1.0.0 --version 2.0.0 --revision 1
+honeycomb install 'my-app>test@1.0.0'
+honeycomb install 'my-app@2.0.0' --switch-channel
 ```
 Promotion creates a new production release with the selected version while preserving the original dev release. The manifest version and archive checksum are updated; packaged executable bytes are preserved. Production listings and normal installation defaults never select a dev release. Switching an existing install prompts for confirmation; unattended calls require `--switch-channel`. Use distinct `--alias` values to keep both installed. Automatic updates follow each installed channel independently.
 
@@ -33,7 +33,7 @@ Use the returned `logo_url` in your application configuration. PNG, JPEG, and We
 **Uploaded logos have publicly viewable links, including logos for private applications.** Use a suitable non-sensitive image. Archive access remains governed separately by application visibility and publication state.
 
 ## Storage authorization
-Private reads, uploads, and publication access changes select the resource's owning organization when calling Briefcase on the user's behalf. The identity provider, service issuer, and resource organization can differ. Missing platform OBO grants or missing current consent stop storage operations; they must not silently fall back to another organization or production testing context.
+Private reads, uploads, and publication access changes require separate Briefcase OBO permission. Start the consent flow for the Honeycomb organization's context, then review the account and organization selected for Briefcase in IAM. Honeycomb sends the approved provider organization from the resulting storage credentials with its Briefcase requests. Missing or expired permission stops the operation; it does not fall back to another organization or production testing context. See [Authentication and storage permission](/authentication/#briefcase-storage-permission) for the console and CLI steps.
 
 ## Release visibility and permission approval
 
@@ -62,3 +62,7 @@ Approval is bound to the release's configuration revision. A superseded private
 release is not published by approval of a later revision; upload a new version
 against the configuration being reviewed. Previously distributed releases retain
 their visibility when the release-visibility migration is applied.
+
+## Application and version pages
+
+The library base page `/apps/my-app` shows the application’s current production release. Each version has its own page: `/apps/my-app/releases/prod/1.0.0` or `/apps/my-app/releases/dev/1.0.0`. Use **Open version page** in release history to share the exact channel and version. Page links follow the same visibility rules as the release.

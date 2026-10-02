@@ -1,0 +1,542 @@
+/* Arc UI card and tabs surfaces, adapted for Solid and Honeycomb's blue palette.
+   https://uiarc.dev/components/card · https://uiarc.dev/components/tabs */
+.application-page {
+  max-width: 1240px;
+  margin: 0 auto;
+  color: var(--ink);
+}
+.application-page .application-back {
+  display: inline-flex;
+  margin-bottom: 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.application-page .application-hero {
+  padding: 30px;
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: 0 2px 4px #17191d03;
+}
+.application-page .application-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.application-page .application-brand {
+  min-width: 0;
+  gap: 22px;
+}
+.application-page .application-brand > div:last-child {
+  min-width: 0;
+}
+.application-page .application-brand .package-icon {
+  width: 82px;
+  height: 82px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--blue);
+}
+.application-page .application-brand .package-icon img {
+  border-radius: 10px;
+}
+.application-page .application-brand h1 {
+  margin: 7px 0 6px;
+  font:
+    600 clamp(26px, 3vw, 36px) / 1.18 "IBM Plex Sans",
+    sans-serif;
+  letter-spacing: -1px;
+  overflow-wrap: anywhere;
+}
+.application-page .application-brand .app-id {
+  font: 12px/1.6 var(--mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.application-page .eyebrow {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.1px;
+  line-height: 1.5;
+}
+.application-page .application-star {
+  flex-shrink: 0;
+  gap: 8px;
+}
+.application-page .application-star > span {
+  padding-left: 9px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.application-page .detail-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 24px;
+  margin: 26px 0 0;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.application-page .detail-stats > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.application-page .application-current-link {
+  margin: 0 0 4px;
+}
+.application-page .application-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(290px, 350px);
+  gap: 24px;
+  margin-top: 24px;
+  align-items: start;
+}
+.application-page .application-main {
+  min-width: 0;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: 0 2px 4px #17191d03;
+}
+/* Arc's contained tab strip preserves native tab and keyboard semantics. */
+.application-page .application-section-tabs {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.application-page .application-section-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 104px;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+.application-page .application-section-tabs button[aria-selected="true"] {
+  border-color: var(--line);
+  background: var(--paper);
+  box-shadow: 0 1px 3px #17191d08;
+  color: var(--blue);
+}
+.application-page .application-section-tabs button > span {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 5px;
+  background: #e9edf3;
+  color: var(--muted);
+  font-size: 10px;
+}
+.application-page .application-tab-panel {
+  margin-top: 28px;
+  border-radius: 8px;
+}
+.application-page .application-tab-panel h2 {
+  font:
+    600 16px/1.4 "IBM Plex Sans",
+    sans-serif;
+  letter-spacing: -0.25px;
+}
+.application-page .application-description {
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.application-page .detail-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 20px;
+}
+.application-page .detail-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.application-page .detail-links a > svg:last-child {
+  color: var(--muted);
+}
+.application-page .public-release-history {
+  margin-top: 30px;
+  padding-top: 26px;
+  border-top: 1px solid var(--line);
+}
+.application-page .public-release-history .delegation-heading {
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+.application-page .public-release-history .delegation-heading p,
+.application-page .application-reviews-heading p {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.application-page .compact-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  gap: 7px;
+}
+.application-page .compact-label select {
+  border-radius: 7px;
+  background: var(--paper);
+  font-size: 12px;
+}
+.application-page .public-release-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 15px;
+  align-items: center;
+  gap: 12px;
+  padding: 19px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  transition: color 160ms ease;
+}
+.application-page .public-release-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.application-page .public-release-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.application-page .public-release-row strong {
+  margin-right: 3px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.application-page .public-release-row > span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.application-page .public-release-row > svg {
+  color: var(--muted);
+}
+.application-page .application-install {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: 0 2px 4px #17191d03;
+}
+.application-page .application-install-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 6px;
+}
+.application-page .application-terminal-icon {
+  display: grid;
+  width: 35px;
+  height: 35px;
+  place-items: center;
+  border: 1px solid #dce6f4;
+  border-radius: 9px;
+  color: var(--blue);
+  background: #f0f5fc;
+}
+.application-page .application-install-heading h2 {
+  font:
+    600 15px/1.4 "IBM Plex Sans",
+    sans-serif;
+  letter-spacing: -0.2px;
+}
+.application-page .application-release-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.application-page .application-release-heading h3 {
+  font:
+    500 25px/1.2 "IBM Plex Sans",
+    sans-serif;
+  letter-spacing: -0.6px;
+  overflow-wrap: anywhere;
+}
+.application-page .application-install p {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.application-page .application-release-channel {
+  margin-top: -7px;
+}
+.application-page .application-install .release-date {
+  font-size: 11px;
+}
+.application-page .application-install .code-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  margin: 1px 0 0;
+  border: 1px solid #dce3ec;
+  border-radius: 9px;
+  background: #f5f7fa;
+}
+.application-page .application-install .code-line code {
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+  line-height: 1.9;
+  color: var(--ink);
+}
+.application-page .application-install .code-line button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--muted);
+}
+.application-page .application-install .text-link {
+  font-size: 12px;
+  font-weight: 500;
+}
+.application-page .application-install-help {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.application-page .application-install-help h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.application-page .release-facts {
+  padding-top: 3px;
+  border-top: 1px solid var(--line);
+}
+.application-page .release-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+.application-page .release-facts dd {
+  font-size: 12px;
+}
+.application-page .release-facts .checksum {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+.application-page .application-reviews-empty {
+  display: grid;
+  justify-items: center;
+  gap: 11px;
+  padding: 30px 20px;
+  margin: 22px 0;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: center;
+  color: var(--muted);
+}
+.application-page .application-reviews-empty h3 {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.application-page .application-reviews-empty p {
+  max-width: 36ch;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.application-page .review {
+  margin-top: 20px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.application-page .review > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 500;
+}
+.application-page .review p {
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.application-page .review-form {
+  display: grid;
+  gap: 18px;
+  padding-top: 24px;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.application-page .review-form h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.application-page .review-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.application-page .review-form input {
+  max-width: 110px;
+}
+.application-page .review-form input,
+.application-page .review-form textarea {
+  border-radius: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+.application-page .review-form textarea {
+  resize: vertical;
+}
+.application-page .review-form button {
+  justify-self: start;
+}
+@media (hover: hover) and (pointer: fine) {
+  .application-page .detail-links a:hover,
+  .application-page .application-install .code-line button:hover {
+    border-color: #b7c5d8;
+    background: var(--surface);
+    color: var(--blue);
+  }
+  .application-page .application-section-tabs button:hover {
+    color: var(--ink);
+  }
+  .application-page .public-release-row:hover {
+    color: var(--blue);
+  }
+}
+@media (max-width: 1100px) {
+  .application-page .application-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .application-page .application-install {
+    position: static;
+    order: -1;
+  }
+  .application-page .application-install .code-line code {
+    font-size: 12px;
+  }
+}
+@media (max-width: 600px) {
+  .application-page .application-back {
+    margin-bottom: 18px;
+  }
+  .application-page .application-hero {
+    padding: 20px;
+    border-radius: 12px;
+  }
+  .application-page .application-hero-top {
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+  .application-page .application-brand {
+    gap: 14px;
+  }
+  .application-page .application-brand .package-icon {
+    width: 58px;
+    height: 58px;
+    padding: 10px;
+    border-radius: 13px;
+  }
+  .application-page .application-brand h1 {
+    font-size: 25px;
+    letter-spacing: -0.6px;
+  }
+  .application-page .application-brand .app-id {
+    font-size: 10px;
+  }
+  .application-page .detail-stats {
+    gap: 13px 18px;
+    margin-top: 20px;
+    padding-top: 18px;
+  }
+  .application-page .application-main,
+  .application-page .application-install {
+    padding: 20px;
+    border-radius: 12px;
+  }
+  .application-page .public-release-history .delegation-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .application-page .public-release-row {
+    grid-template-columns: minmax(0, 1fr) 15px;
+    gap: 10px;
+  }
+  .application-page .public-release-row > div {
+    grid-column: 1 / -1;
+  }
+  .application-page .public-release-row > span {
+    font-size: 10px;
+  }
+  .application-page .application-section-tabs {
+    display: flex;
+  }
+  .application-page .application-section-tabs button {
+    min-width: 0;
+    flex: 1;
+    padding: 0 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .application-page .application-section-tabs button,
+  .application-page .public-release-row {
+    transition: none;
+  }
+}

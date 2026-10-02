@@ -7,9 +7,9 @@ To keep an application private, choose private in the console or set `"visibilit
 
 For an application previously kept private, you can explicitly request publication:
 ```sh
-honeycomb apps get 'my-org>my-app'
-honeycomb publication request 'my-org>my-app' --revision 1 --message 'Describe the application and why its requested access is needed.'
-honeycomb publication get 'my-org>my-app'
+honeycomb apps get 'my-app'
+honeycomb publication request 'my-app' --revision 1 --message 'Describe the application and why its requested access is needed.'
+honeycomb publication get 'my-app'
 ```
 Replace the revision with current state. Submission creates durable review work, not immediate public access.
 
@@ -24,15 +24,15 @@ Requested access, approval, effective permissions, and public archive access are
 ## Participate as a reviewer
 ```sh
 honeycomb publication inbox
-honeycomb publication review REQUEST_ID 'provider-org>provider-app'
-honeycomb publication review-reply REQUEST_ID 'provider-org>provider-app' --message 'Please explain why this endpoint is needed.'
-honeycomb publication decide REQUEST_ID 'provider-org>provider-app' approve --revision 1 --reason 'Access reviewed.'
+honeycomb publication review REQUEST_ID 'provider-app'
+honeycomb publication review-reply REQUEST_ID 'provider-app' --message 'Please explain why this endpoint is needed.'
+honeycomb publication decide REQUEST_ID 'provider-app' approve --revision 1 --reason 'Access reviewed.'
 ```
 A denial requires a reason. Being an organization admin does not grant global validation rights. Use current review state/revisions, not an application's release version.
 
 ## Reply or resume
 ```sh
-honeycomb publication reply 'my-org>my-app' --message 'Additional justification for the requested access.'
+honeycomb publication reply 'my-app' --message 'Additional justification for the requested access.'
 honeycomb publication retry-plan REQUEST_ID --revision 1
 honeycomb publication activate REQUEST_ID --revision 1
 ```

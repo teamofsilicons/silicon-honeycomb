@@ -402,6 +402,8 @@ async fn apply_local(
     sqlx::query("DELETE FROM discussions WHERE request_id IN (SELECT id FROM publication_requests WHERE plane=?)").bind(id).execute(&mut *tx).await?;
     // Fixed SQL literals keep destructive work explicitly limited to one test plane.
     for query in [
+        "DELETE FROM storage_grants WHERE plane=?",
+        "DELETE FROM storage_authorizations WHERE plane=?",
         "DELETE FROM publication_requests WHERE plane=?",
         "DELETE FROM releases WHERE plane=?",
         "DELETE FROM reviews WHERE plane=?",

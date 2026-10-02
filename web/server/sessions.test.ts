@@ -126,3 +126,9 @@ test("expiry is measured from the saved request start, including response-loss r
     assert.ok(result!.tokens.expires_at <= Date.now() + 1800000);
   } finally { Date.now = savedNow; }
 });
+
+import { loginReturnPath } from "./login-return.ts";
+test("email and release destinations survive login without permitting external redirects",()=>{
+  for(const path of ["/requests?request=one&app=briefcase","/requests/received?request=one&provider=iam","/apps/briefcase/releases/dev/2.1.0"]){assert.equal(loginReturnPath(path),path);}
+  for(const path of ["https://evil.example","//evil.example","/\\evil.example","/auth/logout","/api/v1/apps","/%2f%2fevil.example",null])assert.equal(loginReturnPath(path),"/");
+});

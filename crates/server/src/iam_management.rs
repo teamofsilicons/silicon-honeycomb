@@ -197,6 +197,7 @@ impl IamManagement {
             ("logo_url", "app_logo"),
             ("base_url", "base_url"),
             ("obo_endpoints", "obo_endpoints"),
+            ("ata_endpoints", "ata_endpoints"),
             ("obo_review_message", "obo_review_message"),
             ("testing_idle_days", "testing_idle_days"),
             ("webhook_scope", "webhook_scope"),
@@ -302,6 +303,55 @@ fn map_error(error: silicon_iam_client::Error) -> Error {
 }
 #[async_trait]
 impl Management for IamManagement {
+    async fn ata_verification(
+        &self,
+        app: &str,
+        action: &str,
+        id: Option<uuid::Uuid>,
+        body: &Value,
+        actor: &str,
+        operation: Option<uuid::Uuid>,
+    ) -> Result<Value> {
+        let actor = SecretString::from(actor.to_owned());
+        match action {
+            "list" => self
+                .client
+                .ata_verifications(app, &actor)
+                .await
+                .map_err(map_error),
+            "preview" => self
+                .client
+                .preview_ata_verification(app, &actor, body)
+                .await
+                .map_err(map_error),
+            "create" | "revoke" => {
+                let operation =
+                    operation.ok_or_else(|| Error::bad("Missing operation identity"))?;
+                let mutation = Mutation::with_key(
+                    IdempotencyKey::parse(operation.to_string())
+                        .map_err(|_| Error::bad("Invalid operation identity"))?,
+                );
+                if action == "create" {
+                    self.client
+                        .create_ata_verification(app, &actor, body, &mutation)
+                        .await
+                        .map_err(map_error)
+                } else {
+                    self.client
+                        .revoke_ata_verification(
+                            app,
+                            id.ok_or_else(|| Error::bad("Missing verification ID"))?,
+                            &actor,
+                            operation,
+                            &mutation,
+                        )
+                        .await
+                        .map_err(map_error)
+                }
+            }
+            _ => Err(Error::bad("Invalid ATA management action")),
+        }
+    }
     async fn bundle(&self, id: &str) -> Result<Value> {
         self.client.bundle(id).await.map_err(|error| match error {
             silicon_iam_client::Error::Api(api) if api.status == 404 => Error::missing(),
@@ -436,7 +486,7 @@ impl Management for IamManagement {
             .as_str()
             .ok_or_else(|| Error::bad("Missing app ID"))?;
         let c = &o["configuration"];
-        let body = json!({"operation_id":id,"configuration_revision":o["configuration_revision"],"expected_iam_revision":o["expected_iam_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":o["visibility"],"availability":"active","publication_approved":false,"webhook":{"url":c["webhook_url"],"secret":o["webhook_secret"],"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_u64().unwrap_or(30)});
+        let body = json!({"operation_id":id,"configuration_revision":o["configuration_revision"],"expected_iam_revision":o["expected_iam_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":o["visibility"],"availability":"active","publication_approved":false,"webhook":{"url":c["webhook_url"],"secret":o["webhook_secret"],"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"ata_endpoints":c.get("ata_endpoints").cloned().unwrap_or_else(||json!([])),"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_u64().unwrap_or(30)});
         let body = self.saved(id, "configure", app, body).await?;
         self.execute(id, "configure", app, body, actor, None).await
     }

@@ -18,7 +18,7 @@ For Windows or a Cargo-based installation, see [Install the CLI](/installation/)
 ```sh
 honeycomb iam --json
 ```
-Open the returned IAM login URL. Review Honeycomb's permissions and choose the organizations you want to share. Supply the one-use, short-lived token to Honeycomb:
+Open the returned IAM login URL and choose one Carbon or Silicon account together with one organization. IAM asks for consent when Honeycomb requests critical IAM permissions. Briefcase storage access is approved separately when you need it. Supply the one-use, short-lived login token to Honeycomb:
 ```sh
 honeycomb login '<IAM short-lived token>'
 honeycomb login status --json
@@ -29,17 +29,17 @@ Replace the placeholder; do not literally paste it. A token can be exchanged onc
 ```sh
 honeycomb search
 honeycomb search briefcase
-honeycomb apps get 'my-org>my-app'
-honeycomb releases list 'my-org>my-app'
-honeycomb install 'my-org>my-app'
+honeycomb apps get 'my-app'
+honeycomb releases list 'my-app'
+honeycomb install 'my-app'
 honeycomb installed
 ```
-Replace `my-org>my-app` with an application shown in your catalog that has a release. An empty search result does not mean your CLI installation failed. Always quote application identifiers: an unquoted `>` is shell redirection.
+Replace `my-app` with the bare application ID shown in your catalog. The owning organization is separate from the app ID. An empty search result does not mean your CLI installation failed. Quote development selectors such as `'my-app>test'`: an unquoted `>` is shell redirection.
 
 ## 4. Keep it current
 ```sh
-honeycomb update 'my-org>my-app'
-honeycomb uninstall 'my-org>my-app'
+honeycomb update 'my-app'
+honeycomb uninstall 'my-app'
 honeycomb logout
 ```
 Ready to distribute your own app? Continue to [Upload an application](/upload-an-app/).

@@ -7,7 +7,7 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Path, State as S},
+    extract::{Path, Query, State as S},
     http::{HeaderMap, StatusCode},
 };
 use serde::Deserialize;
@@ -176,7 +176,12 @@ pub(crate) async fn plan(s: &State, c: &Context, id: &str) -> Result<Value> {
     tx.commit().await?;
     Ok(json!({"id":id,"state":state,"plan_id":plan_id}))
 }
-async fn can_review(s: &State, c: &Context, request: &SqliteRow, provider: &str) -> Result<bool> {
+pub(crate) async fn can_review(
+    s: &State,
+    c: &Context,
+    request: &SqliteRow,
+    provider: &str,
+) -> Result<bool> {
     c.identity()?;
     let Some(plan) = request.get::<Option<String>, _>("plan_id") else {
         return Ok(false);
@@ -190,11 +195,29 @@ async fn can_review(s: &State, c: &Context, request: &SqliteRow, provider: &str)
         )
         .await
 }
-pub async fn inbox(S(s): S<State>, h: HeaderMap) -> Result<Json<Value>> {
+#[derive(Deserialize)]
+pub struct InboxQuery {
+    #[serde(default)]
+    include_completed: bool,
+}
+pub async fn inbox(
+    S(s): S<State>,
+    h: HeaderMap,
+    Query(q): Query<InboxQuery>,
+) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
     c.identity()?;
-    let rows=sqlx::query("SELECT p.*,g.provider,g.scopes,g.state AS gate_state FROM publication_requests p JOIN review_gates g ON g.request_id=p.id JOIN applications a ON a.plane=p.plane AND a.app_id=p.app_id AND a.revision=p.revision WHERE p.plane=? AND p.state NOT IN ('published','denied') ORDER BY p.created_at,p.id,g.provider")
-        .bind(&c.plane).fetch_all(&s.db).await?;
+    let (items, partial) = inbox_items(&s, &c, q.include_completed).await?;
+    Ok(Json(json!({"items":items,"partial":partial})))
+}
+pub(crate) async fn inbox_items(
+    s: &State,
+    c: &Context,
+    include_completed: bool,
+) -> Result<(Vec<Value>, bool)> {
+    let mut partial = false;
+    let rows=sqlx::query("SELECT p.*,g.provider,g.scopes,g.state AS gate_state,a.revision AS current_revision FROM publication_requests p JOIN publication_activity activity ON activity.request_id=p.id JOIN review_gates g ON g.request_id=p.id JOIN applications a ON a.plane=p.plane AND a.app_id=p.app_id WHERE p.plane=? AND (? OR (a.revision=p.revision AND p.state NOT IN ('published','denied'))) ORDER BY activity.updated_at DESC,p.id,g.provider")
+        .bind(&c.plane).bind(include_completed).fetch_all(&s.db).await?;
     let mut items = Vec::new();
     let mut authority = BTreeMap::new();
     for row in rows {
@@ -204,21 +227,42 @@ pub async fn inbox(S(s): S<State>, h: HeaderMap) -> Result<Json<Value>> {
         {
             *value
         } else {
-            let value = can_review(&s, &c, &row, &provider).await?;
+            let value = match can_review(s, c, &row, &provider).await {
+                Ok(value) => value,
+                Err(_) => {
+                    partial = true;
+                    continue;
+                }
+            };
             authority.insert(
                 (row.get::<Option<String>, _>("plan_id"), provider.clone()),
                 value,
             );
             value
         };
-        if !authorized
-            || (provider == "honeycomb" && row.get::<String, _>("state") != "awaiting_validator")
-        {
+        let providers_ready:bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM review_gates WHERE request_id=? AND provider!='honeycomb' AND state!='approved')")
+            .bind(row.get::<String,_>("id")).fetch_one(&s.db).await?;
+        if !authorized || (provider == "honeycomb" && !providers_ready) {
             continue;
         }
-        items.push(json!({"id":row.get::<String,_>("id"),"app_id":row.get::<String,_>("app_id"),"revision":row.get::<i64,_>("revision"),"provider":provider,"scopes":serde_json::from_str::<Value>(&row.get::<String,_>("scopes")).unwrap_or(Value::Null),"state":row.get::<String,_>("gate_state"),"configuration":serde_json::from_str::<Value>(&row.get::<String,_>("config_snapshot")).unwrap_or(Value::Null)}));
+        let current = row.get::<i64, _>("revision") == row.get::<i64, _>("current_revision");
+        let stage = row.get::<String, _>("state");
+        let can_decide = current
+            && row.get::<String, _>("gate_state") == "pending"
+            && ((provider == "honeycomb" && stage == "awaiting_validator")
+                || (provider != "honeycomb" && stage == "awaiting_scope_review"));
+        let request_state = if !current && !matches!(stage.as_str(), "published" | "denied") {
+            "superseded"
+        } else {
+            &stage
+        };
+        items.push(json!({"id":row.get::<String,_>("id"),"app_id":row.get::<String,_>("app_id"),"revision":row.get::<i64,_>("revision"),"provider":provider,"can_decide":can_decide,"request_state":request_state,"scopes":serde_json::from_str::<Value>(&row.get::<String,_>("scopes")).unwrap_or(Value::Null),"state":row.get::<String,_>("gate_state"),"configuration":serde_json::from_str::<Value>(&row.get::<String,_>("config_snapshot")).unwrap_or(Value::Null)}));
     }
-    Ok(Json(json!({"items":items})))
+    for item in &mut items {
+        let provider = item["provider"].as_str().unwrap_or("").to_owned();
+        crate::request_activity::decorate(s, c, item, "received", &provider).await?;
+    }
+    Ok((items, partial))
 }
 #[derive(Deserialize)]
 pub struct Decision {
@@ -455,6 +499,10 @@ pub async fn detail(
 ) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
     let row = discussion_access(&s, &c, &id, &provider).await?;
+    // Capture the read marker before loading content: concurrent newer activity
+    // can remain unread, but unseen content must never be marked as read.
+    let mut activity = json!({"id":id});
+    crate::request_activity::decorate(&s, &c, &mut activity, "received", &provider).await?;
     let messages=sqlx::query("SELECT id,actor,message,created_at FROM discussions WHERE request_id=? AND (provider=? OR provider IS NULL) ORDER BY created_at,id").bind(&id).bind(&provider).fetch_all(&s.db).await?;
     let gate = sqlx::query(
         "SELECT scopes,state,decision_id FROM review_gates WHERE request_id=? AND provider=?",
@@ -463,11 +511,29 @@ pub async fn detail(
     .bind(&provider)
     .fetch_one(&s.db)
     .await?;
-    let messages:Vec<Value>=messages.iter().map(|m|json!({"id":m.get::<String,_>("id"),"actor":m.get::<String,_>("actor"),"message":m.get::<String,_>("message")})).collect();
+    let messages:Vec<Value>=messages.iter().map(|m|json!({"id":m.get::<String,_>("id"),"actor":m.get::<String,_>("actor"),"message":m.get::<String,_>("message"),"created_at":m.get::<i64,_>("created_at")})).collect();
     let mut result = json!({"id":id,"provider":provider,"app_id":row.get::<String,_>("app_id"),"revision":row.get::<i64,_>("revision"),"configuration":serde_json::from_str::<Value>(&row.get::<String,_>("config_snapshot")).unwrap_or(Value::Null),"state":gate.get::<String,_>("state"),"scopes":serde_json::from_str::<Value>(&gate.get::<String,_>("scopes")).unwrap_or(Value::Null),"messages":messages});
+    let current_revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM applications WHERE plane=? AND app_id=?")
+            .bind(&c.plane)
+            .bind(row.get::<String, _>("app_id"))
+            .fetch_one(&s.db)
+            .await?;
+    let current = current_revision == row.get::<i64, _>("revision");
+    let stage = row.get::<String, _>("state");
+    result["request_state"] = json!(
+        if !current && !matches!(stage.as_str(), "published" | "denied") {
+            "superseded"
+        } else {
+            &stage
+        }
+    );
     result["can_decide"] = json!(
-        can_review(&s, &c, &row, &provider).await?
-            && (provider != "honeycomb" || row.get::<String, _>("state") == "awaiting_validator")
+        current
+            && gate.get::<String, _>("state") == "pending"
+            && ((provider == "honeycomb" && stage == "awaiting_validator")
+                || (provider != "honeycomb" && stage == "awaiting_scope_review"))
+            && can_review(&s, &c, &row, &provider).await?
     );
     if let Some(decision_id) = gate.get::<Option<String>, _>("decision_id") {
         let decision=sqlx::query("SELECT d.decision,d.reason,d.state,o.idempotency_key,d.actor FROM decisions d JOIN operations o ON o.id=d.id WHERE d.id=?").bind(decision_id).fetch_one(&s.db).await?;
@@ -476,6 +542,15 @@ pub async fn detail(
             result["decision"]["idempotency_key"] =
                 json!(decision.get::<String, _>("idempotency_key"));
         }
+    }
+    for field in [
+        "activity_version",
+        "unread",
+        "created_at",
+        "updated_at",
+        "message_count",
+    ] {
+        result[field] = activity[field].clone();
     }
     Ok(Json(result))
 }

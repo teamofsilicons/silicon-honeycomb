@@ -1,4 +1,16 @@
+import StorageCallback from "./StorageCallback";
+import { authorizeStorage } from "./storage-authorization";
 import Bundles from "./Bundles";
+import RequestLink from "./RequestLink";
+import PublicApplication from "./PublicApplication";
+import ConsoleApplication, { InstallPanel } from "./ConsoleApplication";
+import ReviewDiscussion from "./ReviewDiscussion";
+import { consoleApplicationPath, parseConsoleApplicationRoute, discussionPath, parseDiscussionRoute, consoleViews, viewForPath } from "./console-route";
+import ReceivedRequests from "./ReceivedRequests";
+import { applicationPath, parseApplicationRoute } from "./application-route";
+import { markRequestRead, type SentRequest } from "./sent-requests";
+import DelegationEndpoints from "./DelegationEndpoints";
+import AtaVerifications from "./AtaVerifications";
 import Releases, { type ReleaseChannel } from "./Releases";
 import { LogoField } from "./LogoField";
 import { telemetryEnabled, setTelemetry, setTelemetrySource, setTelemetryAuthenticated, diagnostic } from "./telemetry";
@@ -6,6 +18,7 @@ import EnvironmentRetention from "./EnvironmentRetention";
 import SentRequests, { publicationStatus } from "./SentRequests";
 import WebhookSettings from "./WebhookSettings";
 import ScopePicker from "./ScopePicker";
+import { SegmentedControl, StatusBadge } from "./ui/Arc";
 import {
   createSignal,
   createEffect,
@@ -40,9 +53,15 @@ import {
   BookOpen,
   Upload,
   Menu,
+  List,
+  Bell,
+  UserRound,
+  ShieldCheck,
+  MessageSquare,
 } from "lucide-solid";
 import {
   request,
+  ApiError,
   endpoint,
   releaseEndpoint,
   safeLink,
@@ -107,7 +126,7 @@ function Code(props: { text: string }) {
   );
 }
 function Badge(props: { children: JSX.Element; tone?: string }) {
-  return <span class={`badge ${props.tone || ""}`}>{props.children}</span>;
+  return <StatusBadge tone={props.tone === "private" ? "info" : "neutral"}>{props.children}</StatusBadge>;
 }
 function Empty(props: { title: string; text: string; children?: JSX.Element }) {
   return (
@@ -138,9 +157,11 @@ const blank = () => ({
     external: [],
   },
   obo_endpoints: [],
+  ata_endpoints: [],
 });
 
 export default function App() {
+  if(window.location.pathname==="/storage-authorization")return <StorageCallback/>;
   const [config, setConfig] = createSignal<Config>({
     site: "library",
     libraryOrigin: "/",
@@ -148,19 +169,49 @@ export default function App() {
   });
   const [session, setSession] = createSignal<Session>({ authenticated: false });
   const [sessionReady, setSessionReady] = createSignal(false);
-  const [view, setView] = createSignal("applications");
+  const initialView = () => viewForPath(window.location.pathname);
+  const [view, setView] = createSignal(initialView());
+  const loginHref=()=>`/auth/login?next=${encodeURIComponent(window.location.pathname+window.location.search)}`;
+  const [applicationRoute, setApplicationRoute] = createSignal(parseConsoleApplicationRoute(window.location.pathname) || parseApplicationRoute(window.location.pathname));
+  const [discussionRoute, setDiscussionRoute] = createSignal(parseDiscussionRoute(window.location.pathname));
+  const [reviewLoading, setReviewLoading] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [page, setPage] = createSignal(1);
   const [apps, setApps] = createSignal<AppRecord[]>([]);
   const [total, setTotal] = createSignal(0);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
+  const [storageOrg,setStorageOrg]=createSignal<string>();
+  const [storageConnecting,setStorageConnecting]=createSignal(false);
+  async function connectStorage(){
+    const org=storageOrg();if(!org||storageConnecting())return;
+    setStorageConnecting(true);setError("");
+    try {await authorizeStorage(org);setStorageOrg(undefined);setNotice("Storage permission connected. Retry your upload or publication below.");}
+    catch(error){setError((error as Error).message);}
+    finally{setStorageConnecting(false);}
+  }
   const [notice, setNotice] = createSignal("");
   const [showSettings, setShowSettings] = createSignal(false);
   const [telemetry, setTelemetryPreference] = createSignal(telemetryEnabled());
   const [selected, setSelected] = createSignal<AppRecord>();
   const [detailsTab, setDetailsTab] = createSignal("overview");
-  const [reviewInbox, setReviewInbox] = createSignal<any[]>([]);
+  const [activity, setActivity] = createSignal<{received_pending:number;received_unread:number;sent_unread:number}>();
+  const [activityError,setActivityError]=createSignal("");
+  let activityLoading=false;
+  async function refreshActivity() {
+    if(!session().authenticated || !isConsole() || activityLoading) return;
+    activityLoading=true;
+    try { setActivity(await request("/api/v1/request-activity"));setActivityError(""); }
+    catch {setActivityError("Request activity could not be refreshed.");}
+    finally {activityLoading=false;}
+  }
+  createEffect(()=>{
+    if(!sessionReady() || !session().authenticated || !isConsole()) {setActivity(undefined);return;}
+    void refreshActivity();
+    const refresh=()=>{if(document.visibilityState==="visible")void refreshActivity();};
+    const timer=setInterval(refresh,30000);window.addEventListener("focus",refresh);
+    onCleanup(()=>{clearInterval(timer);window.removeEventListener("focus",refresh);});
+  });
   const [sentRevision, setSentRevision] = createSignal(0);
   const [selectedReview, setSelectedReview] = createSignal<any>();
   const [reviewDecision, setReviewDecision] = createSignal("approve");
@@ -184,6 +235,7 @@ export default function App() {
     JSON.stringify(blank().app_scope, null, 2),
   );
   const [oboText, setOboText] = createSignal("[]");
+  const [ataText, setAtaText] = createSignal("[]");
   const [draftId, setDraftId] = createSignal("");
   const [draftRevision, setDraftRevision] = createSignal(0);
   const [draftStatus, setDraftStatus] = createSignal("");
@@ -201,16 +253,45 @@ export default function App() {
   const [envOrg, setEnvOrg] = createSignal("");
   const [envKey, setEnvKey] = createSignal("");
   const [mobileNav, setMobileNav] = createSignal(false);
+  const [layoutChoice, setLayoutChoice] = createSignal<string>();
+  const catalogLayout = () => layoutChoice() || (isConsole() ? "list" : "grid");
+  let searchInput: HTMLInputElement | undefined;
+  let navToggle: HTMLButtonElement | undefined;
+  let navClose: HTMLButtonElement | undefined;
+  function closeNavigation() { setMobileNav(false); navToggle?.focus(); }
+  onMount(() => {
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && mobileNav()) { event.preventDefault(); closeNavigation(); return; }
+      const target = event.target;
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey
+        && searchInput?.isConnected && !document.querySelector("dialog[open]")
+        && !(target instanceof HTMLElement && (target.isContentEditable || target.closest("input,textarea,select")))) {
+        event.preventDefault(); searchInput.focus();
+      }
+    };
+    const desktop = window.matchMedia("(min-width: 761px)");
+    const resize = () => { if (desktop.matches) setMobileNav(false); };
+    window.addEventListener("keydown", keys);
+    desktop.addEventListener("change", resize);
+    onCleanup(() => { window.removeEventListener("keydown", keys); desktop.removeEventListener("change", resize); });
+  });
+  createEffect(() => { if (mobileNav()) queueMicrotask(() => navClose?.focus()); });
   let searchTimer: ReturnType<typeof setTimeout>;
   let saveTimer: ReturnType<typeof setTimeout>;
   let saveGeneration = 0;
   let saving: Promise<void> = Promise.resolve();
   let fetchRevision = 0;
+  let selectionRevision=0;
+  let reviewRevision=0;
   const isConsole = () => config().site === "console";
   createEffect(() => {
     setTelemetrySource(config().site);
     setTelemetryAuthenticated(session().authenticated);
     if (sessionReady()) diagnostic("page_view", selected() ? "application" : isConsole() ? view() : "catalog", 0, true);
+  });
+  createEffect(() => {
+    if(!isConsole())return;
+    document.title=selected() ? `${selected()!.name} — Honeycomb Console` : view()==="discussion" ? "Review discussion — Honeycomb" : view()==="ata-verifications" ? "App to App verifications — Honeycomb" : "Honeycomb Console";
   });
   const memberships = () =>
     Object.entries(session().identity?.organizations || {});
@@ -253,7 +334,7 @@ export default function App() {
         );
         setDrafts(result.flat());
       }
-      if (view() === "review-requests") setReviewInbox((await request("/api/v1/review-requests")).items);
+
       if (view() === "environments") {
         setEnvs((await request("/api/v1/environments")).items);
       }
@@ -273,7 +354,18 @@ export default function App() {
     } finally {
       setSessionReady(true);
     }
-    if (!isConsole() || session().authenticated) await load();
+    if (!isConsole() || session().authenticated) {
+      await loadLocation();
+      const params=new URLSearchParams(window.location.search);
+      const requestId=params.get("request");
+      if(isConsole() && session().authenticated && requestId) {
+        if(view()==="review-requests" && params.get("provider")) await openReview({id:requestId,provider:params.get("provider")},"received");
+        if(view()==="sent-requests" && params.get("app")) {
+          try {const app=await request<AppRecord>(endpoint(params.get("app")!));await select(app,"release");}
+          catch(error){setError((error as Error).message);}
+        }
+      }
+    }
   });
   onCleanup(() => {
     clearTimeout(searchTimer);
@@ -289,42 +381,131 @@ export default function App() {
       return result;
     } catch (e) {
       setError((e as Error).message);
+      if(e instanceof ApiError && e.code==="storage_authorization_required")setStorageOrg(selected()?.org_id||form().org_id);
     } finally {
       setBusy(false);
     }
   }
   function navigate(next: string) {
+    reviewRevision++;
+    selectionRevision++;
+    setSelected(undefined); setSelectedReview(undefined); setApplicationRoute(undefined); setDiscussionRoute(undefined);
+    setReviewLoading(false); setBusy(false); setNotice("");
+    const path=consoleViews[next] || "/";
+    window.history.pushState({},"",path);
     setView(next);
     setMobileNav(false);
+    focusPageStart();
     setTimeout(() => void loadView(), 0);
   }
-  async function select(app: AppRecord) {
-    setSelected(app);
-    setUploadChannel("");
-    setDetailsTab("overview");
-    setReviews([]);
-    setPublication(undefined);
-    setAppOperations([]);
-    setReconciliation(undefined);
-    setRotationConfirmation("");
-    await act(async () => {
-      setSelected(await request<AppRecord>(endpoint(app.app_id)));
-      setReviews((await request(endpoint(app.app_id) + "/reviews")).items);
-      if (canManage(app)) {
-        setPublication(await request(endpoint(app.app_id) + "/publication"));
-        setAppOperations((await request(endpoint(app.app_id) + "/operations")).items);
-        setReconciliation(await request(endpoint(app.app_id) + "/reconciliation"));
-      }
-    });
+  function focusPageStart() {queueMicrotask(()=>{window.scrollTo(0,0);document.getElementById("honeycomb-main")?.focus({preventScroll:true});});}
+  async function loadLocation() {
+    selectionRevision++; reviewRevision++;
+    setSelected(undefined); setSelectedReview(undefined); setReviewLoading(false); setBusy(false);
+    const path=window.location.pathname;
+    const route=isConsole()?parseConsoleApplicationRoute(path):parseApplicationRoute(path);
+    setApplicationRoute(route); setDiscussionRoute(isConsole()?parseDiscussionRoute(path):undefined); setView(initialView());
+    if(isConsole() && route) {await select(route.appId,"tab" in route ? route.tab as string : "overview",false);return;}
+    const discussion=discussionRoute();
+    if(isConsole() && discussion) {await openReview(discussion,discussion.direction,undefined,false);return;}
+    if(!route) await loadView();
+  }
+  const onPopState=()=>{void loadLocation();};
+  window.addEventListener("popstate",onPopState);onCleanup(()=>window.removeEventListener("popstate",onPopState));
+  function changeDetailsTab(tab: string) {
+    const app=selected(); if(!app)return;
+    setDetailsTab(tab); setError("");
+    const path=consoleApplicationPath(app.app_id,tab);
+    window.history.pushState({},"",path);setApplicationRoute(parseConsoleApplicationRoute(path));
+  }
+  async function select(app: AppRecord | string, tab="overview", push=true) {
+    const appId=typeof app === "string" ? app : app.app_id;
+    if(!isConsole()) {window.location.assign(applicationPath(appId));return;}
+    reviewRevision++;setSelectedReview(undefined);setDiscussionRoute(undefined);setReviewLoading(false);
+    const path=consoleApplicationPath(appId,tab);
+    if(push && window.location.pathname!==path)window.history.pushState({},"",path);
+    setView("applications");setApplicationRoute(parseConsoleApplicationRoute(path));setMobileNav(false);
+    if(push)focusPageStart();
+    const revision=++selectionRevision;
+    const current=()=>revision===selectionRevision && applicationRoute()?.appId===appId;
+    setSelected(typeof app === "string" ? undefined : app);setUploadChannel("");setDetailsTab(tab);setReviews([]);setPublication(undefined);
+    setAppOperations([]);setReconciliation(undefined);setRotationConfirmation("");setBusy(true);setError("");
+    try {
+      const detail=await request<AppRecord>(endpoint(appId));
+      if(!current())return;setSelected(detail);
+      if(!canManage(detail) && ["release","access"].includes(tab)) {setDetailsTab("overview");window.history.replaceState({},"",consoleApplicationPath(appId));}
+      const results=await Promise.allSettled([
+        request(endpoint(appId)+"/reviews"),
+        canManage(detail)?request(endpoint(appId)+"/publication"):Promise.resolve(undefined),
+        canManage(detail)?request(endpoint(appId)+"/operations"):Promise.resolve(undefined),
+        canManage(detail)?request(endpoint(appId)+"/reconciliation"):Promise.resolve(undefined),
+      ]);
+      if(!current())return;
+      const [reviewPage,history,operations,reconcile]=results.map(result=>result.status==="fulfilled"?result.value:undefined);
+      setReviews(reviewPage?.items||[]);setPublication(history);setAppOperations(operations?.items||[]);setReconciliation(reconcile);
+      if(results.some(result=>result.status==="rejected"))setError("Some application details could not be loaded. Refresh the page to try again.");
+    } catch(error) {if(current())setError((error as Error).message);}
+    finally {if(revision===selectionRevision)setBusy(false);}
   }
   const reviewEndpoint=(r:any)=>`/api/v1/review-requests/${encodeURIComponent(r.id)}/${encodeURIComponent(r.provider)}`;
-  async function openReview(item:any) {
-    await act(async()=>{
+  async function openReview(item:any, requestView: "received" | "sent" = "received", sent?: SentRequest, push=true) {
+    const sameDiscussion=selectedReview()?.id===item.id && selectedReview()?.provider===item.provider;
+    selectionRevision++;setSelected(undefined);setApplicationRoute(undefined);setMobileNav(false);setNotice("");
+    const path=discussionPath(item,requestView);
+    if(push && window.location.pathname!==path)window.history.pushState({},"",path);
+    setDiscussionRoute({id:item.id,provider:item.provider,direction:requestView});setView("discussion");if(!sameDiscussion)setSelectedReview(undefined);setReviewLoading(true);
+    if(push)focusPageStart();
+    const revision=++reviewRevision;
+    setBusy(true);setError("");
+    try {
       const detail=await request(reviewEndpoint(item));
+      if(revision!==reviewRevision)return;
       setSelectedReview(detail);
-      setReviewDecision(detail.decision?.decision || "approve");
-      setReviewReason(detail.decision?.reason || "");
-    });
+      if(!sameDiscussion || detail.decision) {setReviewDecision(detail.decision?.decision || "approve");setReviewReason(detail.decision?.reason || "");}
+      try {
+        const activityItem=requestView==="sent" ? sent || (await request(endpoint(detail.app_id)+"/publication")).items.find((value:any)=>value.id===item.id) : detail;
+        if(activityItem)await markRequestRead(activityItem,requestView);
+        if(revision===reviewRevision) {setSentRevision(value=>value+1);void refreshActivity();}
+      } catch {if(revision===reviewRevision)setActivityError("This request opened, but its read status could not be saved.");}
+    } catch(cause) {if(revision===reviewRevision)setError((cause as Error).message);}
+    finally {if(revision===reviewRevision) {setReviewLoading(false);setBusy(false);}}
+  }
+  const discussionRetryKeys = new Map<string,string>();
+  function discussionKey(path: string, body: string) {
+    const signature=path+body;
+    const key=discussionRetryKeys.get(signature)||crypto.randomUUID();
+    discussionRetryKeys.set(signature,key);return key;
+  }
+  async function replyToReview(message: string) {
+    const review=selectedReview(), revision=reviewRevision;
+    if(!review || busy())return false;
+    const path=reviewEndpoint(review)+"/messages",body=JSON.stringify({message});
+    let succeeded=false;
+    setBusy(true);setError("");
+    try {
+      await request(path,{method:"POST",headers:{"Idempotency-Key":discussionKey(path,body)},body});
+      discussionRetryKeys.delete(path+body);succeeded=true;
+      const detail=await request(reviewEndpoint(review));
+      if(revision===reviewRevision)setSelectedReview(detail);
+      setSentRevision(value=>value+1);void refreshActivity();
+    } catch(cause) {if(revision===reviewRevision)setError(succeeded ? "Your reply was sent, but the conversation could not be refreshed. Use Refresh to load it." : (cause as Error).message);}
+    finally {if(revision===reviewRevision)setBusy(false);}
+    return succeeded;
+  }
+  async function decideReview() {
+    const review=selectedReview(), revision=reviewRevision;
+    if(!review || busy() || !review.can_decide)return;
+    setBusy(true);setError("");
+    try {
+      const path=reviewEndpoint(review)+"/decisions",body=JSON.stringify({decision:reviewDecision(),reason:reviewReason()});
+      const headers:Record<string,string>={"If-Match":String(review.revision),"Idempotency-Key":review.decision?.idempotency_key||discussionKey(path,body)};
+      const result=await request(path,{method:"POST",headers,body});
+      const detail=await request(reviewEndpoint(review));
+      if(revision!==reviewRevision)return;
+      setNotice(result.publication_state==="published" ? "Approved and published." : result.publication_error || (result.publication_state==="activating" ? "Approved. Publication is completing automatically." : "Review decision saved."));
+      setSelectedReview(detail);setSentRevision(value=>value+1);void refreshActivity();
+    } catch(cause) {if(revision===reviewRevision)setError((cause as Error).message);}
+    finally {if(revision===reviewRevision)setBusy(false);}
   }
   function beginCreate(draft?: any) {
     setError("");
@@ -342,6 +523,7 @@ export default function App() {
     setOboText(
       value.draft_obo_text ?? JSON.stringify(value.obo_endpoints, null, 2),
     );
+    setAtaText(value.draft_ata_text ?? JSON.stringify(value.ata_endpoints || [], null, 2));
     setDraftStatus(draft ? "Saved draft" : "");
     setShowCreate(true);
   }
@@ -355,7 +537,6 @@ export default function App() {
         draft_edit_revision: app.revision,
       },
     });
-    setSelected(undefined);
   }
   function edit(key: string, value: any) {
     setForm({ ...form(), [key]: value });
@@ -375,6 +556,7 @@ export default function App() {
       ...form(),
       draft_scope_text: scopeText(),
       draft_obo_text: oboText(),
+      draft_ata_text: ataText(),
     };
     delete body.webhook_secret;
     if (!body.org_id) return Promise.resolve();
@@ -418,6 +600,7 @@ export default function App() {
         ...form(),
         app_scope: JSON.parse(scopeText()),
         obo_endpoints: JSON.parse(oboText()),
+        ata_endpoints: JSON.parse(ataText()),
       };
       const archive = editingId ? undefined : firstRelease();
       const channel = form().draft_release_channel as ReleaseChannel | undefined;
@@ -460,6 +643,7 @@ export default function App() {
             : "Application saved. IAM configuration is pending.",
         );
         await load();
+        await select(appId,editingId ? detailsTab() : archive ? "release" : "overview");
         if (archive) {
           setPendingRelease({ appId, file: archive, key: crypto.randomUUID(), channel: channel! });
           setUploadChannel(channel!);
@@ -476,6 +660,7 @@ export default function App() {
             setNotice("Application saved and first CLI release uploaded.");
           } catch (e) {
             setNotice("Application saved. Its first CLI release still needs to be uploaded.");
+            if(e instanceof ApiError && e.code==="storage_authorization_required")setStorageOrg(selected()?.org_id||form().org_id);
             throw new Error(`The application was saved, but the release upload failed. Retry the upload below. ${(e as Error).message}`);
           }
         }
@@ -545,18 +730,22 @@ export default function App() {
     });
   }
   return (
-    <div class="app-shell">
+    <div class={`app-shell ${isConsole() ? "console-shell" : "library-shell"}`}>
+      <a class="skip-link" href="#honeycomb-main">Skip to content</a>
+      <Show when={mobileNav()}><button class="navigation-scrim" aria-label="Close navigation" tabIndex={-1} onClick={closeNavigation} /></Show>
       <aside
         id="honeycomb-navigation"
         class={`sidebar ${mobileNav() ? "open" : ""}`}
+        role={mobileNav() ? "dialog" : undefined}
+        aria-modal={mobileNav() ? true : undefined}
+        aria-label="Honeycomb navigation"
       >
-        <a class="wordmark" href="/">
+        <div class="sidebar-brand"><a class="wordmark" href="/">
           <img src="/brand/honeycomb.svg" alt="" />
           <span>honeycomb</span>
-        </a>
+        </a><button ref={navClose} class="icon-button mobile-nav-close" aria-label="Close navigation" onClick={closeNavigation}><X size={18}/></button></div>
         <div class="workspace-label">
-          <span class="eyebrow">TEAM OF SILICONS</span>
-          <span>
+          <span class="workspace-mark"><Package size={17}/></span><span>
             {isConsole() ? "Developer console" : "Application library"}
           </span>
         </div>
@@ -570,6 +759,7 @@ export default function App() {
           </button>
           <Show when={isConsole()}>
             <button class={view() === "bundles" ? "active" : ""} onClick={() => navigate("bundles")}><Package size={18} />Bundles</button>
+            <button class={view() === "ata-verifications" ? "active" : ""} onClick={() => navigate("ata-verifications")}><ShieldCheck size={18}/>App to App</button>
             <button
               class={view() === "drafts" ? "active" : ""}
               onClick={() => navigate("drafts")}
@@ -584,10 +774,11 @@ export default function App() {
               <FlaskConical size={18} />
               Testing environments
             </button>
-            <button class={view() === "review-requests" ? "active" : ""} onClick={()=>navigate("review-requests")}><Check size={18}/>Review requests</button>
-            <button class={view() === "sent-requests" ? "active" : ""} onClick={()=>navigate("sent-requests")}><ArrowUpRight size={18}/>Sent requests</button>
+            <span class="nav-section-label">Requests</span>
+            <button class={view() === "review-requests" || (view() === "discussion" && discussionRoute()?.direction === "received") ? "active" : ""} onClick={()=>navigate("review-requests")}><Bell size={18}/>Received requests<Show when={activity()?.received_unread}><span class="nav-count" aria-label={`${activity()!.received_unread} new update${activity()!.received_unread === 1 ? "" : "s"}`}>{activity()!.received_unread}</span></Show><Show when={!activity()?.received_unread && activity()?.received_pending}><span class="nav-count pending" aria-label={`${activity()!.received_pending} pending approval${activity()!.received_pending === 1 ? "" : "s"}`}>{activity()!.received_pending}</span></Show></button>
+            <button class={view() === "sent-requests" || (view() === "discussion" && discussionRoute()?.direction === "sent") ? "active" : ""} onClick={()=>navigate("sent-requests")}><ArrowUpRight size={18}/>Sent requests<Show when={activity()?.sent_unread}><span class="nav-count" aria-label={`${activity()!.sent_unread} new update${activity()!.sent_unread === 1 ? "" : "s"}`}>{activity()!.sent_unread}</span></Show></button>
           </Show>
-          <button
+          <span class="nav-section-label">Resources</span><button
             class={view() === "docs" ? "active" : ""}
             onClick={() => navigate("docs")}
           >
@@ -608,16 +799,17 @@ export default function App() {
             <ArrowUpRight size={15} />
           </a>
           <div class="sidebar-footnote">
-            <span class="mini-mark">H</span>
-            <span>A team of silicons space</span>
+            <span class="mini-mark"><img src="/brand/honeycomb.svg" alt=""/></span>
+            <span>Team of Silicons</span>
           </div>
         </div>
       </aside>
-      <div class="workspace">
+      <div class="workspace" inert={mobileNav()}>
         <header class="topbar">
           <div class="breadcrumb">
             <button
               class="icon-button mobile-toggle"
+              ref={navToggle}
               aria-label="Open navigation"
               aria-expanded={mobileNav()}
               aria-controls="honeycomb-navigation"
@@ -627,7 +819,7 @@ export default function App() {
             </button>
             <span>Honeycomb</span>
             <span class="slash">/</span>
-            <span>{isConsole() ? "Console" : "Library"}</span>
+            <span>{applicationRoute() ? (isConsole() ? selected()?.name || "Application" : "Application library") : ({ applications:isConsole() ? "Applications" : "Discover", "review-requests":"Received requests", "sent-requests":"Sent requests", discussion:"Discussion", "ata-verifications":"App to App", drafts:"Drafts", environments:"Testing environments", bundles:"Bundles", docs:"Get started" } as Record<string,string>)[view()] || "Requests"}</span>
           </div>
           <div class="topbar-actions">
             <Show when={!isConsole()}>
@@ -639,17 +831,16 @@ export default function App() {
             <Show
               when={session().authenticated}
               fallback={
-                <a class="button subtle" href="/auth/login">
+                <a class="button subtle" href={loginHref()}>
                   Sign in with IAM
                   <ArrowRight size={16} />
                 </a>
               }
             >
               <span class="account">
-                {session().identity?.actor_type === "silicon"
+                <span class="account-avatar"><UserRound size={15}/></span><span>{session().identity?.principal_id || (session().identity?.actor_type === "silicon"
                   ? "Silicon"
-                  : "Carbon"}{" "}
-                account
+                  : "Carbon") + " account"}</span>
               </span>
               <button
                 class="icon-button"
@@ -661,8 +852,8 @@ export default function App() {
             </Show>
           </div>
         </header>
-        <main>
-          <Show when={error()}>
+        <main id="honeycomb-main" tabIndex={-1}>
+          <Show when={error() && view() !== "discussion"}>
             <div class="banner error" role="alert">
               <span>{error()}</span>
               <button aria-label="Dismiss error" onClick={() => setError("")}>
@@ -695,17 +886,14 @@ export default function App() {
               }
               fallback={
                 <section class="sign-in">
-                  <span class="eyebrow">HONEYCOMB CONSOLE</span>
                   <h1>
-                    Your next application.
-                    <br />
-                    <em>At home in Honeycomb.</em>
+                    A home for your applications
                   </h1>
                   <p>
                     Bring your tools to the Silicon ecosystem. Manage releases,
                     configure access, and publish when you’re ready.
                   </p>
-                  <a href="/auth/login" class="button primary">
+                  <a href={loginHref()} class="button primary">
                     Continue with IAM
                     <ArrowRight size={17} />
                   </a>
@@ -720,556 +908,34 @@ export default function App() {
                 </section>
               }
             >
-              <Show when={!admins().length && isConsole()}>
+              <Show when={!admins().length && isConsole() && view()==="applications" && !applicationRoute()}>
                 <div class="banner notice" id="application-access-help" role="status">
                   <span>
                     {memberships().some(([, role]) => role == null) || !memberships().length
                       ? "IAM hasn’t provided an organization owner or admin role. Honeycomb needs membership access from IAM before you can create applications. After that access is enabled, sign in again and approve it."
                       : "Creating applications requires an organization owner or admin role. Ask an organization owner to update your access, then sign in again."}
                   </span>
-                  <a class="text-link" href="/auth/login">Sign in again <ArrowRight size={16} /></a>
+                  <a class="text-link" href={loginHref()}>Sign in again <ArrowRight size={16} /></a>
                 </div>
               </Show>
-              <Show when={view() === "review-requests"}>
-                <section class="page-heading"><div><span class="eyebrow">APPLICATION ACCESS</span><h1>Review requests.</h1><p>Review applications requesting your critical scopes. Honeycomb validation follows accepted provider decisions.</p></div></section>
-                <Show when={!reviewInbox().length}><p class="muted">There are no requests you can currently review. Provider reviews require current owner/admin access; Honeycomb validation requires explicit reviewer permission.</p></Show>
-                <For each={reviewInbox()}>{(item)=><button class="review-request-row" onClick={()=>void openReview(item)}><div><h2>{item.configuration?.name || item.app_id}</h2><p class="app-id">{item.app_id}</p><p>{item.provider} · {item.scopes.join(", ") || "Publication validation"}</p></div><Badge>{item.state}</Badge><ArrowUpRight size={17}/></button>}</For>
-              </Show>
-              <Show when={view() === "sent-requests" && isConsole()}>
-                <SentRequests revision={sentRevision()} open={app => { void select(app); setDetailsTab("release"); }} discuss={item => void openReview(item)} />
-              </Show>
-              <Show when={view() === "bundles" && isConsole()}><Bundles organizations={admins().map(([org]) => org)} /></Show>
-              <Show when={view() === "applications"}>
-                <section class="page-heading">
-                  <div>
-                    <span class="eyebrow">
-                      {isConsole() ? "YOUR WORKSPACE" : "THE SILICON ECOSYSTEM"}
-                    </span>
-                    <h1>
-                      {isConsole()
-                        ? "Your applications."
-                        : "Tools for what comes next."}
-                    </h1>
-                    <p>
-                      {isConsole()
-                        ? "Build, release, and care for the tools your team uses."
-                        : "Discover applications for you, your team, and your silicons."}
-                    </p>
-                  </div>
-                  <Show when={isConsole()}>
-                    <button
-                      class="button primary"
-                      disabled={!admins().length}
-                      aria-describedby={!admins().length ? "application-access-help" : undefined}
-                      onClick={() => beginCreate()}
-                    >
-                      <Plus size={17} />
-                      Create application
-                    </button>
-                  </Show>
-                </section>
-                <div class="catalog-toolbar">
-                  <label class="search-field">
-                    <Search size={19} />
-                    <input
-                      type="search"
-                      aria-label="Search applications"
-                      placeholder="Search by name, application ID, or description…"
-                      value={query()}
-                      onInput={(e) => {
-                        setQuery(e.currentTarget.value);
-                        setPage(1);
-                        clearTimeout(searchTimer);
-                        searchTimer = setTimeout(() => void load(), 250);
-                      }}
-                    />
-                    <kbd>/</kbd>
-                  </label>
-                  <button
-                    class="icon-button"
-                    aria-label="Refresh applications"
-                    disabled={busy()}
-                    onClick={load}
-                  >
-                    <RefreshCw size={17} class={busy() ? "spinning" : ""} />
-                  </button>
-                </div>
-                <div class="list-caption">
-                  <span>
-                    {query()
-                      ? "SEARCH RESULTS"
-                      : isConsole()
-                        ? "MANAGED APPLICATIONS"
-                        : "APPLICATION LIBRARY"}
-                  </span>
-                  <span>
-                    {total()} {total() === 1 ? "application" : "applications"}
-                  </span>
-                </div>
-                <Show
-                  when={!busy() || apps().length}
-                  fallback={
-                    <div class="loading" role="status">
-                      Finding applications…
-                    </div>
-                  }
-                >
-                  <Show
-                    when={apps().length}
-                    fallback={
-                      <Empty
-                        title={
-                          query()
-                            ? "No matching applications."
-                            : isConsole()
-                              ? "Your first application starts here."
-                              : "A little space for what’s next."
-                        }
-                        text={
-                          query()
-                            ? "Try another name or a shorter search."
-                            : isConsole()
-                              ? admins().length
-                                ? "Create an application or pick up a saved draft."
-                                : "An organization owner or admin can create and manage applications."
-                              : "Published applications will appear here. Sign in to see applications private to your organization."
-                        }
-                      >
-                        <Show when={isConsole() && admins().length}>
-                          <button
-                            class="button outline"
-                            onClick={() => beginCreate()}
-                          >
-                            <Plus size={16} />
-                            Create application
-                          </button>
-                        </Show>
-                      </Empty>
-                    }
-                  >
-                    <div class="package-list">
-                      <For each={apps()}>
-                        {(app) => (
-                          <button
-                            class="package-row"
-                            onClick={() => void select(app)}
-                          >
-                            <div class="package-icon">
-                              <Show
-                                when={safeLink(app.config.logo_url)}
-                                fallback={
-                                  <Package size={25} stroke-width={1.3} />
-                                }
-                              >
-                                <img
-                                  src={safeLink(app.config.logo_url)}
-                                  alt=""
-                                  referrerpolicy="no-referrer"
-                                  loading="lazy"
-                                />
-                              </Show>
-                            </div>
-                            <div class="package-info">
-                              <div class="package-title">
-                                <h2>{app.name}</h2>
-                                <Badge
-                                  tone={
-                                    app.visibility === "private"
-                                      ? "private"
-                                      : ""
-                                  }
-                                >
-                                  {app.visibility === "private" ? (
-                                    <Lock size={11} />
-                                  ) : (
-                                    <Globe size={11} />
-                                  )}{" "}
-                                  {app.visibility}
-                                </Badge>
-                              </div>
-                              <span class="app-id">{app.app_id}</span>
-                              <p>{app.description}</p>
-                            </div>
-                            <div class="package-meta">
-                              <span>
-                                <Star size={14} />
-                                {app.reviews ? app.rating.toFixed(1) : "—"}
-                              </span>
-                              <span class="mono">
-                                {app.latest_version
-                                  ? `v${app.latest_version}`
-                                  : "No production releases"}
-                              </span>
-                              <Show when={app.state !== "active"}>
-                                <Badge>Pending IAM</Badge>
-                              </Show>
-                            </div>
-                            <ArrowUpRight class="row-arrow" size={18} />
-                          </button>
-                        )}
-                      </For>
-                    </div>
-                    <div class="pagination">
-                      <span>
-                        Page {page()} of {Math.max(1, Math.ceil(total() / 20))}
-                      </span>
-                      <div>
-                        <button
-                          aria-label="Previous page"
-                          disabled={page() === 1}
-                          onClick={() => {
-                            setPage(page() - 1);
-                            void load();
-                          }}
-                        >
-                          <ChevronLeft size={17} />
-                        </button>
-                        <button
-                          aria-label="Next page"
-                          disabled={page() * 20 >= total()}
-                          onClick={() => {
-                            setPage(page() + 1);
-                            void load();
-                          }}
-                        >
-                          <ChevronRight size={17} />
-                        </button>
-                      </div>
-                    </div>
-                  </Show>
-                </Show>
-                <Show when={!isConsole()}>
-                  <div class="cli-callout">
-                    <Terminal size={23} stroke-width={1.4} />
-                    <div>
-                      <h3>Make yourself at home in the terminal.</h3>
-                      <p>
-                        Search, install, and update applications with the
-                        Honeycomb CLI.
-                      </p>
-                    </div>
-                    <button class="text-link" onClick={() => navigate("docs")}>
-                      Get the CLI
-                      <ArrowRight size={16} />
-                    </button>
-                  </div>
-                </Show>
-              </Show>
-              <Show when={view() === "drafts"}>
-                <section class="page-heading">
-                  <div>
-                    <span class="eyebrow">PICK UP WHERE YOU LEFT OFF</span>
-                    <h1>Work in progress.</h1>
-                    <p>
-                      Shared drafts for your organization’s next applications.
-                    </p>
-                  </div>
-                  <button
-                    class="button primary"
-                    disabled={!admins().length}
-                    onClick={() => beginCreate()}
-                  >
-                    <Plus size={16} />
-                    New draft
-                  </button>
-                </section>
-                <Show
-                  when={drafts().length}
-                  fallback={
-                    <Empty
-                      title="No drafts yet."
-                      text="Your application details are saved as you work, so another admin can continue."
-                    />
-                  }
-                >
-                  <div class="package-list">
-                    <For each={drafts()}>
-                      {(d) => (
-                        <button
-                          class="package-row"
-                          onClick={() => beginCreate(d)}
-                        >
-                          <FileText size={22} />
-                          <div class="package-info">
-                            <h2>{d.body.name || "Untitled application"}</h2>
-                            <span class="app-id">
-                              {d.org_id} · Revision {d.revision}
-                            </span>
-                          </div>
-                          <ArrowUpRight size={17} />
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </Show>
-              <Show when={view() === "environments"}>
-                <section class="page-heading">
-                  <div>
-                    <span class="eyebrow">ROOM TO EXPERIMENT</span>
-                    <h1>Testing environments.</h1>
-                    <p>
-                      Keep test identities, releases, and application data in
-                      their own space.
-                    </p>
-                  </div>
-                  <button
-                    class="button primary"
-                    onClick={() => {
-                      setEnvOrg(memberships()[0]?.[0] || "");
-                      setShowEnv(true);
-                    }}
-                    disabled={!memberships().length}
-                  >
-                    <Plus size={17} />
-                    Create environment
-                  </button>
-                </section>
-                <Show
-                  when={envs().length}
-                  fallback={
-                    <Empty
-                      title="A fresh start for every experiment."
-                      text="Create an isolated environment for your organization."
-                    />
-                  }
-                >
-                  <div class="environment-list">
-                    <For each={envs()}>
-                      {(env) => (
-                        <article class="environment-row">
-                          <FlaskConical size={23} />
-                          <div>
-                            <h2>{env.name}</h2>
-                            <span class="app-id">
-                              {env.org_id} · {env.environment_id}
-                            </span>
-                            <p>
-                              Generation {env.generation} · Revision{" "}
-                              {env.revision}
-                            </p>
-                          </div>
-                          <Badge>{env.state}</Badge>
-                          <Show when={env.can_manage}>
-                            <button
-                              class="button outline"
-                              onClick={() =>
-                                void act(async () => {
-                                  setSelectedEnv(
-                                    await request(
-                                      `/api/v1/environments/${env.environment_id}`,
-                                    ),
-                                  );
-                                  setEnvironmentAction("");
-                                  setConfirmationName("");
-                                })
-                              }
-                            >
-                              Manage
-                            </button>
-
-                            <button
-                              class="button outline"
-                              onClick={() =>
-                                void act(async () =>
-                                  setEnvKey(
-                                    (
-                                      await request(
-                                        `/api/v1/environments/${env.environment_id}/key`,
-                                        { method: "POST" },
-                                      )
-                                    ).testing_key,
-                                  ),
-                                )
-                              }
-                            >
-                              View key
-                            </button>
-                          </Show>
-                        </article>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </Show>
-              <Show when={view() === "docs"}>
-                <section class="page-heading">
-                  <div>
-                    <span class="eyebrow">A GOOD PLACE TO START</span>
-                    <h1>Honeycomb, from your terminal.</h1>
-                    <p>
-                      One CLI for discovering, installing, and publishing
-                      applications.
-                    </p>
-                  </div>
-                </section>
-                <div class="docs-grid">
-                  <section class="doc-section">
-                    <span class="step-number">01</span>
-                    <h2>Install Honeycomb</h2>
-                    <p>Use the shell installer on macOS or Linux.</p>
-                    <Code
-                      text={
-                        "printf \"Starting Honeycomb installer…\\n\"; /bin/bash -c \"$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)\""
-                      }
-                    />
-                    <p>Or install with Cargo.</p>
-                    <Code text="cargo install silicon-honeycomb-cli --locked" />
-                    <p class="muted">
-                      These distribution commands become available with
-                      Honeycomb’s first published release.
-                    </p>
-                  </section>
-                  <section class="doc-section">
-                    <span class="step-number">02</span>
-                    <h2>Find your next tool</h2>
-                    <Code text="honeycomb search briefcase" />
-                    <Code text="honeycomb install 'briefcase'" />
-                    <p>
-                      Sign in with a short-lived token from IAM to access your
-                      organization’s private applications.
-                    </p>
-                    <Code text="honeycomb login <slt>" />
-                    <Code text="honeycomb login status --json" />
-                  </section>
-                  <section class="doc-section">
-                    <span class="step-number">03</span>
-                    <h2>Publish an application</h2>
-                    <p>
-                      Define your commands and all six required targets in
-                      honeycomb.yaml. Validate before packaging.
-                    </p>
-                    <Code text="honeycomb validate" />
-                    <Code text="honeycomb pack" />
-                    <Code text="honeycomb apps create application.json" />
-                    <p>
-                      Upload a release to request public approval automatically,
-                      or choose to keep your application private.
-                    </p>
-                    <Code text="honeycomb --help" />
-                  </section>
-                </div>
-              </Show>
-            </Show>
-          </Show>
-        </main>
-        <footer>
-          <span>Built for Carbons & Silicons.</span>
-          <span>HONEYCOMB / TEAM OF SILICONS</span>
-        </footer>
-      </div>
-      <Dialog
-        open={!!selected()}
-        title={selected()?.name || "Application"}
-        close={() => { setSelected(undefined); setSentRevision(value => value + 1); }}
-      >
+              <Show when={activityError() && ["review-requests","sent-requests","discussion"].includes(view())}><p class="inline-notice" role="status">{activityError()} <button class="text-button" onClick={()=>void refreshActivity()}>Try again</button></p></Show>
+              <Show when={view()==="request-link"}><RequestLink requestId={new URLSearchParams(window.location.search).get("request")||""} appId={new URLSearchParams(window.location.search).get("app")||""} canManage={canManage} received={item=>void openReview(item,"received")} sent={app=>void select(app,"release")}/></Show>
+              <Show when={view() === "review-requests"}><ReceivedRequests revision={sentRevision()} open={item=>void openReview(item,"received")}/></Show>
+              <Show when={view() === "sent-requests" && isConsole()}><SentRequests revision={sentRevision()} open={item=>void select(item.app,"release")} discuss={(item,sent)=>void openReview(item,"sent",sent)}/></Show>
+              <Show when={view() === "ata-verifications" && isConsole()}><AtaVerifications/></Show>
+              <Show when={view() === "discussion" && isConsole()}><ReviewDiscussion review={selectedReview()} loading={reviewLoading()} busy={busy()} error={error()} currentActor={session().identity?.principal_id} backLabel={discussionRoute()?.direction === "sent" ? "Sent requests" : "Received requests"} decision={reviewDecision()} reason={reviewReason()} onBack={() => navigate(discussionRoute()?.direction === "sent" ? "sent-requests" : "review-requests")} onRefresh={() => {const route=discussionRoute();if(route)void openReview(route,route.direction,undefined,false);}} onReply={replyToReview} onDecision={() => void decideReview()} onDecisionChange={setReviewDecision} onReasonChange={setReviewReason}/></Show>
+              <Show when={isConsole() && applicationRoute()}>
+                <Show when={!selected()}><div class="empty"><Show when={busy()} fallback={<><h2>Application unavailable</h2><p>Refresh its details or return to your applications.</p><button class="button outline" onClick={() => void loadLocation()}>Try again</button><button class="text-link" onClick={() => navigate("applications")}>All applications</button></>}><p role="status">Loading application…</p></Show></div></Show>
         <Show when={selected()}>
           {(app) => (
-            <>
-              <div class="detail-id">
-                <span class="app-id">{app().app_id}</span>
-                <Badge>{app().visibility}</Badge>
-              </div>
-              <div class="tabs">
-                <button
-                  class={detailsTab() === "overview" ? "active" : ""}
-                  onClick={() => setDetailsTab("overview")}
-                >
-                  Overview
-                </button>
-                <button
-                  class={detailsTab() === "reviews" ? "active" : ""}
-                  onClick={() => setDetailsTab("reviews")}
-                >
-                  Reviews ({app().reviews})
-                </button>
-                <Show when={isConsole() && canManage(app())}>
-                  <button
-                    class={detailsTab() === "release" ? "active" : ""}
-                    onClick={() => setDetailsTab("release")}
-                  >
-                    Releases & publication
-                  </button>
-                  <button class={detailsTab() === "access" ? "active" : ""} onClick={() => setDetailsTab("access")}>Access & secrets</button>
-                </Show>
-              </div>
-              <Show when={error()}>
-                <p class="field-error" role="alert">
-                  {error()}
-                </p>
-              </Show>
+            <ConsoleApplication app={app()} tab={detailsTab()} canManage={canManage(app())} libraryUrl={`${config().libraryOrigin}${applicationPath(app().app_id)}`} onTabChange={changeDetailsTab} onBack={() => navigate("applications")} onEdit={() => beginEdit(app())}>
               <Show when={detailsTab() === "overview"}>
-                <div class="detail-stats">
-                  <span>
-                    <Star size={16} />
-                    {app().reviews ? app().rating.toFixed(1) : "Unrated"}
-                  </span>
-                  <span>
-                    <Download size={16} />
-                    {app().installs} downloads
-                  </span>
-                  <span class="mono">
-                    {app().latest_version || "No production releases"}
-                  </span>
-                </div>
-                <p class="description">{app().description}</p>
-                <Show when={config().site === "console" && canManage(app())}>
-                  <button
-                    class="button outline"
-                    onClick={() => beginEdit(app())}
-                  >
-                    Edit configuration
-                  </button>
-                </Show>
-                <Show when={app().latest_version}>
-                  <h3 class="section-label">INSTALL FROM YOUR TERMINAL</h3>
-                  <Code text={`honeycomb install '${app().app_id}'`} />
-                  <p class="muted">Installs the latest official production release and follows production updates.</p>
-                </Show>
-                <details class="experimental-install">
-                  <summary>Experimental development releases</summary>
-                  <p class="muted">If this application offers development releases, use this command to follow experimental updates. Honeycomb asks before switching an installed application between channels.</p>
-                  <Code text={`honeycomb install '${app().app_id}>test'`} />
-                  <p class="muted">For an exact version, append @x.x.x to either application identifier.</p>
-                </details>
-                <div class="detail-links">
-                  <For each={["website_url", "docs_url", "base_url"]}>
-                    {(key) => (
-                      <Show when={safeLink(app().config[key])}>
-                        <a
-                          href={safeLink(app().config[key])}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {key === "website_url"
-                            ? "Website"
-                            : key === "docs_url"
-                              ? "Documentation"
-                              : "Backend"}
-                          <ArrowUpRight size={14} />
-                        </a>
-                      </Show>
-                    )}
-                  </For>
-                </div>
-                <Show when={session().authenticated}>
-                  <button
-                    class="button outline"
-                    disabled={busy()}
-                    onClick={() =>
-                      void act(async () => {
-                        await request(endpoint(app().app_id) + "/star", {
-                          method: "PUT",
-                          body: "{}",
-                        });
-                        setSelected(await request(endpoint(app().app_id)));
-                      }, "Application starred.")
-                    }
-                  >
-                    <Star size={16} />
-                    Star application · {app().stars}
-                  </button>
-                </Show>
+                <div class="console-overview-grid"><section class="console-about-panel">
+                  <div class="detail-stats"><span><Star size={15}/>{app().reviews ? app().rating.toFixed(1) : "Unrated"}</span><span><Download size={15}/>{app().installs.toLocaleString()} downloads</span></div>
+                  <h2>About this application</h2><p class="description">{app().description}</p>
+                  <div class="detail-links"><For each={[["website_url","Website"],["docs_url","Documentation"],["base_url","API"]]}>{([key,label]) => <Show when={safeLink(app().config[key])}>{url => <a href={url()} target="_blank" rel="noopener noreferrer">{label}<ArrowUpRight size={14}/></a>}</Show>}</For></div>
+                  <button class="button outline" disabled={busy()} onClick={() => void act(async () => {await request(endpoint(app().app_id)+"/star",{method:"PUT",body:"{}"});setSelected(await request(endpoint(app().app_id)));},"Application starred.")}><Star size={15}/>Star application · {app().stars}</button>
+                </section><InstallPanel appId={app().app_id} hasRelease={!!app().latest_version}/></div>
               </Show>
               <Show when={detailsTab() === "reviews"}>
                 <For each={reviews()}>
@@ -1291,7 +957,7 @@ export default function App() {
                 <Show
                   when={session().authenticated}
                   fallback={
-                    <a class="button outline" href="/auth/login">
+                    <a class="button outline" href={loginHref()}>
                       Sign in to leave a review
                     </a>
                   }
@@ -1401,6 +1067,7 @@ export default function App() {
                 }} />
               </Show>
               <Show when={detailsTab() === "release"}>
+                <Show when={storageOrg()}><div class="inline-notice"><p>Honeycomb needs your permission to store release archives.</p><button class="button primary" disabled={storageConnecting()} onClick={()=>void connectStorage()}>{storageConnecting()?"Waiting for permission…":"Review storage permissions"}</button></div></Show>
                 <Show when={pendingRelease()?.appId === app().app_id}>
                   <p class="muted">Selected archive: {pendingRelease()?.file.name} · {pendingRelease()?.channel === "dev" ? "Development" : "Production"}</p>
                   <button class="button outline" disabled={busy()} onClick={() => void act(sendRelease, "CLI release uploaded.")}>Retry release upload</button>
@@ -1411,6 +1078,7 @@ export default function App() {
                     Public access remains disabled.
                   </div>
                 </Show>
+                <div class="publishing-guide"><div class="delegation-heading"><span class="eyebrow">PUBLISHING YOUR APPLICATION</span><Show when={publication()?.items?.find((item:any)=>item.revision===app().revision)}>{item=><Badge>{publicationStatus(item().state)}</Badge>}</Show></div><h3>A clear path from upload to update.</h3><ol><li><strong>Upload a release</strong><span>Choose production for your official release, or development for testing.</span></li><li><strong>Complete approvals</strong><span>Public releases wait for any required permission and publication reviews.</span></li><li><strong>Publish & update</strong><span>Once approved, the release appears in the library and reaches installations following that channel.</span></li></ol><a class="text-link" href={`${config().libraryOrigin}${applicationPath(app().app_id)}`} target="_blank" rel="noopener noreferrer">Open application page<ArrowUpRight size={14}/></a></div>
                 <h3>Upload a CLI release</h3>
                 <p class="muted">
                   Package all required targets with honeycomb pack, then upload
@@ -1444,7 +1112,7 @@ export default function App() {
                   />
                 </label>
                 <div class="section-divider" />
-                <Releases app={app()} refresh={releaseRevision()} busy={busy()} setBusy={setBusy} changed={async () => {
+                <Releases app={app()} libraryOrigin={config().libraryOrigin} refresh={releaseRevision()} busy={busy()} setBusy={setBusy} changed={async () => {
                   setSelected(await request(endpoint(app().app_id)));
                   setPublication(await request(endpoint(app().app_id) + "/publication"));
                   setReleaseRevision(value => value + 1);
@@ -1499,12 +1167,14 @@ export default function App() {
                   </button>
                 </form>
                 </Show>
-                <For each={publication()?.items || []}>
+                <h3>Approval conversations</h3><p class="muted">Open a conversation to read updates, reply, or review the requested permissions.</p>
+                <div class="publication-conversations"><For each={publication()?.items || []}>
                   {(p) => (
-                    <section class="review-thread">
-                      <Badge>{publicationStatus(p.state)}</Badge>
+                    <section class="publication-summary">
+                      <div class="publication-summary-header"><h4>Configuration {p.revision}</h4><Badge>{publicationStatus(p.state)}</Badge></div>
                       <Show when={p.state === "awaiting_activation" || p.state === "activating"}><p class="muted">All approvals passed. Honeycomb is completing publication with IAM and release storage.</p></Show>
                       <Show when={p.error}><p class="muted">{p.error}</p></Show>
+                      <Show when={p.error === "storage_authorization_required" || p.activation?.error === "storage_authorization_required"}><button class="button primary" disabled={storageConnecting()} onClick={()=>{setStorageOrg(app().org_id);void connectStorage();}}>Review storage permissions</button></Show>
                       <Show when={p.activation?.error}><p class="field-error">{p.activation.error}</p></Show>
                       <For each={p.activation?.archives || []}>{(archive)=><p>{archive.channel === "dev" ? "Dev" : "Production"} release {archive.version} · {archive.state}{archive.error ? ` · ${archive.error}` : ""}</p>}</For>
                       <Show when={(p.state==="awaiting_activation" || p.state==="activating") && (p.error || p.activation?.error)}><button class="button primary" disabled={busy() || (p.state==="activating" && !p.activation?.idempotency_key)} onClick={()=>void act(async()=>{
@@ -1514,46 +1184,444 @@ export default function App() {
                         setNotice(result.state==="accepted" ? "Application published." : "Publication is pending. Check IAM and archive progress above.");
                       })}>Retry publication</button></Show>
                       <Show when={p.state === "awaiting_review_plan"}><button class="button outline" disabled={busy()} onClick={()=>void act(async()=>{await request(`/api/v1/review-requests/${p.id}/plan`,{method:"POST",headers:{"If-Match":String(p.revision)},body:"{}"});setPublication(await request(endpoint(app().app_id)+"/publication"));})}>Retry review planning</button></Show>
-                      <For each={p.gates || []}>{(gate)=><p>{gate.provider} · {gate.state} <button class="text-button" onClick={()=>void openReview({id:p.id,provider:gate.provider})}>Open discussion</button></p>}</For>
-                      <For each={p.messages}>{(m) => <p>{m.message}</p>}</For>
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const data = new FormData(e.currentTarget);
-                          void act(async () => {
-                            await request(
-                              endpoint(app().app_id) + "/publication/messages",
-                              {
-                                method: "POST",
-                                body: JSON.stringify({
-                                  message: data.get("message"),
-                                }),
-                              },
-                            );
-                            setPublication(
-                              await request(
-                                endpoint(app().app_id) + "/publication",
-                              ),
-                            );
-                          });
-                        }}
-                      >
-                        <label>
-                          Add to the discussion
-                          <textarea name="message" required maxLength={10000} />
-                        </label>
-                        <button class="button outline" disabled={busy()}>
-                          Send reply
-                        </button>
-                      </form>
+                      <div class="publication-provider-list"><For each={p.gates || []}>{gate => <button onClick={() => void openReview({id:p.id,provider:gate.provider},"sent")}><MessageSquare size={16}/><strong>{gate.provider}</strong><span class="provider-status">{publicationStatus(gate.state)}</span><ArrowUpRight size={15}/></button>}</For></div>
+                      <Show when={!p.gates?.length}><p class="muted">Conversations appear once the review is ready.</p></Show>
                     </section>
                   )}
-                </For>
+                </For></div>
               </Show>
-            </>
+            </ConsoleApplication>
           )}
         </Show>
-      </Dialog>
+              </Show>
+              <Show when={!isConsole() && applicationRoute()}>{route=><PublicApplication route={route()} authenticated={session().authenticated}/>}</Show>
+              <Show when={view() === "bundles" && isConsole()}><Bundles organizations={admins().map(([org]) => org)} /></Show>
+              <Show when={view() === "applications" && !applicationRoute()}>
+                <section class={`page-heading catalog-heading ${isConsole() ? "" : "discovery-heading"}`}>
+                  <div>
+                    <h1>
+                      {isConsole()
+                        ? "Your applications"
+                        : "Find your next tool"}
+                    </h1>
+                    <p>
+                      {isConsole()
+                        ? "Manage your apps, publish releases, and keep your team up to date."
+                        : "Explore applications built for you, your team, and your silicons."}
+                    </p>
+                  </div>
+                  <Show when={isConsole()}>
+                    <button
+                      class="button primary"
+                      disabled={!admins().length}
+                      aria-describedby={!admins().length ? "application-access-help" : undefined}
+                      onClick={() => beginCreate()}
+                    >
+                      <Plus size={17} />
+                      Create application
+                    </button>
+                  </Show>
+                </section>
+                <Show when={isConsole() && activity()?.received_pending}>
+                  <button class="review-attention" onClick={() => navigate("review-requests")}>
+                    <span class="review-attention-icon"><Bell size={18}/></span>
+                    <span><strong>{activity()!.received_pending} {activity()!.received_pending === 1 ? "request needs" : "requests need"} your review</strong><span>Review access requests and help applications move forward.</span></span>
+                    <span class="review-attention-action">View requests <ArrowRight size={16}/></span>
+                  </button>
+                </Show>
+                <div class="catalog-toolbar">
+                  <label class="search-field">
+                    <Search size={19} />
+                    <input
+                      ref={searchInput}
+                      type="search"
+                      aria-label="Search applications"
+                      placeholder="Search applications…"
+                      value={query()}
+                      onInput={(e) => {
+                        setQuery(e.currentTarget.value);
+                        setPage(1);
+                        clearTimeout(searchTimer);
+                        searchTimer = setTimeout(() => void load(), 250);
+                      }}
+                    />
+                    <kbd>/</kbd>
+                  </label>
+                  <SegmentedControl label="Application layout" value={catalogLayout()} onChange={setLayoutChoice} options={[
+                    {value:"grid",label:<><LayoutGrid size={16}/><span>Grid</span></>},
+                    {value:"list",label:<><List size={16}/><span>List</span></>},
+                  ]}/>
+                  <button
+                    class="icon-button"
+                    aria-label="Refresh applications"
+                    disabled={busy()}
+                    onClick={load}
+                  >
+                    <RefreshCw size={17} class={busy() ? "spinning" : ""} />
+                  </button>
+                </div>
+                <div class="list-caption">
+                  <span>
+                    {query()
+                      ? "Search results"
+                      : isConsole()
+                        ? "All applications"
+                        : "Explore the library"}
+                  </span>
+                  <span>
+                    {total()} {total() === 1 ? "application" : "applications"}
+                  </span>
+                </div>
+                <Show
+                  when={!busy() || apps().length}
+                  fallback={
+                    <div class="loading" role="status">
+                      Finding applications…
+                    </div>
+                  }
+                >
+                  <Show
+                    when={apps().length}
+                    fallback={
+                      <Empty
+                        title={
+                          query()
+                            ? "No matching applications."
+                            : isConsole()
+                              ? "Your first application starts here."
+                              : "A little space for what’s next."
+                        }
+                        text={
+                          query()
+                            ? "Try another name or a shorter search."
+                            : isConsole()
+                              ? admins().length
+                                ? "Create an application or pick up a saved draft."
+                                : "An organization owner or admin can create and manage applications."
+                              : "Published applications will appear here. Sign in to see applications private to your organization."
+                        }
+                      >
+                        <Show when={isConsole() && admins().length}>
+                          <button
+                            class="button outline"
+                            onClick={() => beginCreate()}
+                          >
+                            <Plus size={16} />
+                            Create application
+                          </button>
+                        </Show>
+                      </Empty>
+                    }
+                  >
+                    <div class={`package-list catalog-list ${catalogLayout() === "grid" ? "catalog-grid" : "catalog-rows"}`}>
+                      <For each={apps()}>
+                        {(app) => (
+                          <button
+                            class="package-row"
+                            onClick={() => void select(app)}
+                            aria-label={`Open ${app.name}`}
+                          >
+                            <div class="package-icon">
+                              <Show
+                                when={safeLink(app.config.logo_url)}
+                                fallback={
+                                  <Package size={25} stroke-width={1.3} />
+                                }
+                              >
+                                <img
+                                  src={safeLink(app.config.logo_url)}
+                                  alt=""
+                                  referrerpolicy="no-referrer"
+                                  loading="lazy"
+                                />
+                              </Show>
+                            </div>
+                            <div class="package-info">
+                              <div class="package-title">
+                                <h2>{app.name}</h2>
+                                <Badge
+                                  tone={
+                                    app.visibility === "private"
+                                      ? "private"
+                                      : ""
+                                  }
+                                >
+                                  {app.visibility === "private" ? (
+                                    <Lock size={11} />
+                                  ) : (
+                                    <Globe size={11} />
+                                  )}{" "}
+                                  {app.visibility === "public" ? "Public" : "Private"}
+                                </Badge>
+                              </div>
+                              <span class="app-id">{app.app_id}</span>
+                              <p>{app.description}</p>
+                            </div>
+                            <div class="package-meta">
+                              <span>
+                                <Star size={14} />
+                                {app.reviews ? app.rating.toFixed(1) : "—"}
+                              </span>
+                              <span class="mono version-label">
+                                {app.latest_version
+                                  ? `v${app.latest_version}`
+                                  : "No release yet"}
+                              </span>
+                              <Show when={app.state !== "active"}>
+                                <Badge>Pending IAM</Badge>
+                              </Show>
+                            </div>
+                            <ArrowUpRight class="row-arrow" size={18} />
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                    <div class="pagination">
+                      <span>
+                        Page {page()} of {Math.max(1, Math.ceil(total() / 20))}
+                      </span>
+                      <div>
+                        <button
+                          aria-label="Previous page"
+                          disabled={page() === 1}
+                          onClick={() => {
+                            setPage(page() - 1);
+                            void load();
+                          }}
+                        >
+                          <ChevronLeft size={17} />
+                        </button>
+                        <button
+                          aria-label="Next page"
+                          disabled={page() * 20 >= total()}
+                          onClick={() => {
+                            setPage(page() + 1);
+                            void load();
+                          }}
+                        >
+                          <ChevronRight size={17} />
+                        </button>
+                      </div>
+                    </div>
+                  </Show>
+                </Show>
+                <Show when={!isConsole()}>
+                  <div class="cli-callout">
+                    <Terminal size={23} stroke-width={1.4} />
+                    <div>
+                      <h3>Your library, in the terminal</h3>
+                      <p>
+                        Search, install, and update applications with the
+                        Honeycomb CLI.
+                      </p>
+                    </div>
+                    <button class="text-link" onClick={() => navigate("docs")}>
+                      Get the CLI
+                      <ArrowRight size={16} />
+                    </button>
+                  </div>
+                </Show>
+              </Show>
+              <Show when={view() === "drafts"}>
+                <section class="page-heading">
+                  <div>
+                    <h1>Drafts</h1>
+                    <p>
+                      Shared drafts for your organization’s next applications.
+                    </p>
+                  </div>
+                  <button
+                    class="button primary"
+                    disabled={!admins().length}
+                    onClick={() => beginCreate()}
+                  >
+                    <Plus size={16} />
+                    New draft
+                  </button>
+                </section>
+                <Show
+                  when={drafts().length}
+                  fallback={
+                    <Empty
+                      title="No drafts yet."
+                      text="Your application details are saved as you work, so another admin can continue."
+                    />
+                  }
+                >
+                  <div class="package-list">
+                    <For each={drafts()}>
+                      {(d) => (
+                        <button
+                          class="package-row"
+                          onClick={() => beginCreate(d)}
+                        >
+                          <FileText size={22} />
+                          <div class="package-info">
+                            <h2>{d.body.name || "Untitled application"}</h2>
+                            <span class="app-id">
+                              {d.org_id} · Revision {d.revision}
+                            </span>
+                          </div>
+                          <ArrowUpRight size={17} />
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </Show>
+              <Show when={view() === "environments"}>
+                <section class="page-heading">
+                  <div>
+                    <h1>Testing environments</h1>
+                    <p>
+                      Keep test identities, releases, and application data in
+                      their own space.
+                    </p>
+                  </div>
+                  <button
+                    class="button primary"
+                    onClick={() => {
+                      setEnvOrg(memberships()[0]?.[0] || "");
+                      setShowEnv(true);
+                    }}
+                    disabled={!memberships().length}
+                  >
+                    <Plus size={17} />
+                    Create environment
+                  </button>
+                </section>
+                <Show
+                  when={envs().length}
+                  fallback={
+                    <Empty
+                      title="A fresh start for every experiment."
+                      text="Create an isolated environment for your organization."
+                    />
+                  }
+                >
+                  <div class="environment-list">
+                    <For each={envs()}>
+                      {(env) => (
+                        <article class="environment-row">
+                          <FlaskConical size={23} />
+                          <div>
+                            <h2>{env.name}</h2>
+                            <span class="app-id">
+                              {env.org_id} · {env.environment_id}
+                            </span>
+                            <p>
+                              Generation {env.generation} · Revision{" "}
+                              {env.revision}
+                            </p>
+                          </div>
+                          <Badge>{env.state}</Badge>
+                          <Show when={env.can_manage}>
+                            <button
+                              class="button outline"
+                              onClick={() =>
+                                void act(async () => {
+                                  setSelectedEnv(
+                                    await request(
+                                      `/api/v1/environments/${env.environment_id}`,
+                                    ),
+                                  );
+                                  setEnvironmentAction("");
+                                  setConfirmationName("");
+                                })
+                              }
+                            >
+                              Manage
+                            </button>
+
+                            <button
+                              class="button outline"
+                              onClick={() =>
+                                void act(async () =>
+                                  setEnvKey(
+                                    (
+                                      await request(
+                                        `/api/v1/environments/${env.environment_id}/key`,
+                                        { method: "POST" },
+                                      )
+                                    ).testing_key,
+                                  ),
+                                )
+                              }
+                            >
+                              View key
+                            </button>
+                          </Show>
+                        </article>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </Show>
+              <Show when={view() === "docs"}>
+                <section class="page-heading">
+                  <div>
+                    <h1>Get started with Honeycomb</h1>
+                    <p>
+                      One CLI for discovering, installing, and publishing
+                      applications.
+                    </p>
+                  </div>
+                </section>
+                <div class="docs-grid">
+                  <section class="doc-section">
+                    <span class="step-number">01</span>
+                    <h2>Install Honeycomb</h2>
+                    <p>Use the shell installer on macOS or Linux.</p>
+                    <Code
+                      text={
+                        "printf \"Starting Honeycomb installer…\\n\"; /bin/bash -c \"$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)\""
+                      }
+                    />
+                    <p>Or install with Cargo.</p>
+                    <Code text="cargo install silicon-honeycomb-cli --locked" />
+                    <p class="muted">
+                      These distribution commands become available with
+                      Honeycomb’s first published release.
+                    </p>
+                  </section>
+                  <section class="doc-section">
+                    <span class="step-number">02</span>
+                    <h2>Find your next tool</h2>
+                    <Code text="honeycomb search briefcase" />
+                    <Code text="honeycomb install 'briefcase'" />
+                    <p>
+                      Sign in with a short-lived token from IAM to access your
+                      organization’s private applications.
+                    </p>
+                    <Code text="honeycomb login <slt>" />
+                    <Code text="honeycomb login status --json" />
+                  </section>
+                  <section class="doc-section">
+                    <span class="step-number">03</span>
+                    <h2>Publish an application</h2>
+                    <p>
+                      Define your commands and all six required targets in
+                      honeycomb.yaml. Validate before packaging.
+                    </p>
+                    <Code text="honeycomb validate" />
+                    <Code text="honeycomb pack" />
+                    <Code text="honeycomb apps create application.json" />
+                    <p>
+                      Upload a release to request public approval automatically,
+                      or choose to keep your application private.
+                    </p>
+                    <Code text="honeycomb --help" />
+                  </section>
+                </div>
+              </Show>
+            </Show>
+          </Show>
+        </main>
+        <footer>
+          <span>Built for Carbons & Silicons.</span>
+          <span>HONEYCOMB / TEAM OF SILICONS</span>
+        </footer>
+      </div>
       <Dialog
         open={showCreate()}
         title={editing() ? "Edit application" : "Create an application"}
@@ -1745,7 +1813,7 @@ export default function App() {
             class="text-link"
             onClick={() => setAdvanced(!advanced())}
           >
-            {advanced() ? "Hide" : "Configure"} scopes & OBO endpoints
+            {advanced() ? "Hide" : "Configure"} scopes & delegation endpoints
             <ArrowRight size={14} />
           </button>
           <Show when={advanced()}>
@@ -1760,7 +1828,7 @@ export default function App() {
                   onInput={(e) => edit("base_url", e.currentTarget.value)}
                 />
                 <small>
-                  Required if you expose OBO endpoints. Use an origin without a
+                  Required if you expose OBO or ATA endpoints. Use an origin without a
                   trailing slash.
                 </small>
               </label>
@@ -1780,18 +1848,8 @@ export default function App() {
                   effect.
                 </small>
               </label>
-              <label>
-                OBO endpoints
-                <textarea
-                  class="json-input"
-                  rows="5"
-                  value={oboText()}
-                  onInput={(e) => {
-                    setOboText(e.currentTarget.value);
-                    scheduleSave();
-                  }}
-                />
-              </label>
+              <DelegationEndpoints kind="obo" appId={form().app_id} value={oboText()} change={value => {setOboText(value); scheduleSave();}} />
+              <DelegationEndpoints kind="ata" appId={form().app_id} value={ataText()} oboSource={oboText()} change={value => {setAtaText(value); scheduleSave();}} />
             </div>
           </Show>
           <div class="form-footer">
@@ -2029,28 +2087,6 @@ export default function App() {
             <ArrowRight size={16} />
           </button>
         </form>
-      </Dialog>
-      <Dialog open={!!selectedReview()} title="Application review" close={()=>{setSelectedReview(undefined);setSentRevision(value=>value+1);}}>
-        <Show when={selectedReview()}>{(review)=><>
-          <Show when={error()}><p class="field-error" role="alert">{error()}</p></Show>
-          <h3>{review().configuration?.name || review().app_id}</h3><p class="app-id">{review().app_id} · Revision {review().revision}</p>
-          <p>{review().configuration?.description}</p><p><strong>{review().provider}</strong> · {review().scopes.join(", ") || "Publication validation"}</p><Badge>{review().state}</Badge>
-          <For each={review().messages}>{(message)=><article class="review-thread"><small>{message.actor}</small><p>{message.message}</p></article>}</For>
-          <form class="review-form" onSubmit={(e)=>{e.preventDefault();const data=new FormData(e.currentTarget);void act(async()=>{await request(reviewEndpoint(review())+"/messages",{method:"POST",body:JSON.stringify({message:data.get("message")})});setSelectedReview(await request(reviewEndpoint(review())));});}}>
-            <label>Reply to this review<textarea name="message" required maxLength={10000} rows="3"/></label><button class="button outline" disabled={busy()}>Send reply</button>
-          </form>
-          <Show when={review().can_decide}><h3>Review decision</h3><p class="muted">IAM verifies your current reviewer authority. Approval takes effect only after IAM accepts it. Denial requires an explanation.</p>
-          <form class="review-form" onSubmit={(e)=>{e.preventDefault();void act(async()=>{
-            const headers:Record<string,string>={"If-Match":String(review().revision)};if(review().decision?.idempotency_key) headers["Idempotency-Key"]=review().decision.idempotency_key;
-            const result = await request(reviewEndpoint(review())+"/decisions",{method:"POST",headers,body:JSON.stringify({decision:reviewDecision(),reason:reviewReason()})});
-            setNotice(result.publication_state === "published" ? "Approved and published." : result.publication_error || (result.publication_state === "activating" ? "Approved. Publication is completing automatically." : "Review decision saved."));
-            setSelectedReview(await request(reviewEndpoint(review())));setReviewInbox((await request("/api/v1/review-requests")).items);
-          });}}>
-            <label>Decision<select value={reviewDecision()} disabled={!!review().decision} onChange={(e)=>setReviewDecision(e.currentTarget.value)}><option value="approve">Approve</option><option value="deny">Deny</option></select></label>
-            <label>Reason<textarea required={reviewDecision()==="deny"} maxLength={10000} rows="3" value={reviewReason()} disabled={!!review().decision} onInput={(e)=>setReviewReason(e.currentTarget.value)}/></label>
-            <button class="button primary" disabled={busy() || review().decision?.state==="accepted" || (!!review().decision && !review().decision.idempotency_key)}>{review().decision?.state==="pending" ? "Retry decision" : "Submit decision"}</button>
-          </form></Show>
-        </>}</Show>
       </Dialog>
       <Dialog
         open={!!secret()}

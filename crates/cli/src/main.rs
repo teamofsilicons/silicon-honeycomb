@@ -202,7 +202,52 @@ enum Webhook {
     },
 }
 #[derive(Subcommand)]
+enum Ata {
+    /// List your verifications across apps, or all verifications for one managed app.
+    List { app_id: Option<String> },
+    /// Review every required application and endpoint before approving the chain.
+    Preview { app_id: String, file: PathBuf },
+    /// Create from a reviewed request JSON including graph_version. Save the one-time refresh token securely.
+    Create { app_id: String, file: PathBuf },
+    /// Revoke a verification and all its access and refresh tokens.
+    Revoke {
+        app_id: String,
+        verification_id: String,
+    },
+}
+#[derive(Subcommand)]
+enum StorageAuthorization {
+    /// Request Briefcase access when uploading logos or releases.
+    Start { org_id: String },
+    /// Inspect a request, optionally waiting for completion in another browser or CLI.
+    Status {
+        authorization_id: String,
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t=600, value_parser=clap::value_parser!(u64).range(1..=3600))]
+        timeout: u64,
+    },
+    /// Complete approved consent without placing its one-time code in shell history.
+    Complete {
+        authorization_id: String,
+        #[arg(long)]
+        code_file: PathBuf,
+        #[arg(long)]
+        state: String,
+    },
+}
+#[derive(Subcommand)]
 enum Apps {
+    /// Authorize Briefcase storage separately from account sign-in.
+    Storage {
+        #[command(subcommand)]
+        command: StorageAuthorization,
+    },
+    /// Manage application-to-application endpoint verifications.
+    Ata {
+        #[command(subcommand)]
+        command: Ata,
+    },
     /// List every app in an organization you belong to, including private apps.
     Organization {
         org_id: String,
@@ -291,7 +336,30 @@ enum Publication {
         revision: i64,
     },
     /// Requests you can review as a provider administrator or authorized validator.
-    Inbox,
+    Inbox {
+        /// Include completed requests and older application revisions.
+        #[arg(long)]
+        history: bool,
+    },
+    /// Count unread updates and requests awaiting your decision.
+    Activity,
+    /// Requests submitted by applications you manage.
+    Sent {
+        #[arg(long, default_value_t = 1)]
+        page: u32,
+        #[arg(long, default_value_t = 50)]
+        per_page: u32,
+    },
+    /// Acknowledge only the exact activity version you have viewed.
+    MarkRead {
+        request_id: String,
+        #[arg(long, value_parser=["sent","received"])]
+        view: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        activity_version: String,
+    },
     Review {
         request_id: String,
         provider: String,
@@ -329,6 +397,9 @@ enum Publication {
     },
     Reply {
         app_id: String,
+        /// Reply to this request; defaults to the latest request.
+        #[arg(long = "request")]
+        request_id: Option<String>,
         #[arg(long)]
         message: String,
         #[arg(long)]
@@ -825,6 +896,36 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             show(&json!({"archive":archive,"sha256":package::sha256(&archive)?}))?;
         }
         Command::Apps { command } => match command {
+            Apps::Ata { command } => match command {
+                Ata::List { app_id } => match app_id {
+                    Some(app_id) => show(&client.ata_verifications(app_id).await?)?,
+                    None => show(&client.my_ata_verifications().await?)?,
+                },
+                Ata::Preview { app_id, file } => {
+                    let input: Value = serde_json::from_slice(&fs::read(file)?)?;
+                    show(
+                        &client
+                            .preview_ata_verification(app_id, &input, &operation)
+                            .await?,
+                    )?;
+                }
+                Ata::Create { app_id, file } => {
+                    let input: Value = serde_json::from_slice(&fs::read(file)?)?;
+                    show(
+                        &client
+                            .create_ata_verification(app_id, &input, &operation)
+                            .await?,
+                    )?;
+                }
+                Ata::Revoke {
+                    app_id,
+                    verification_id,
+                } => show(
+                    &client
+                        .revoke_ata_verification(app_id, verification_id, &operation)
+                        .await?,
+                )?,
+            },
             Apps::Organization {
                 org_id,
                 after,
@@ -908,11 +1009,89 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             Apps::Reconcile { app_id } => {
                 show(&client.reconcile_app(app_id, &mutation(cli, None)?).await?)?
             }
-            Apps::UploadLogo { org_id, file } => show(
-                &client
-                    .upload_logo(org_id, file, &mutation(cli, None)?)
-                    .await?,
-            )?,
+            Apps::Storage { command } => match command {
+                StorageAuthorization::Start { org_id } => {
+                    let value = client
+                        .storage_authorization_start(org_id, None, &operation)
+                        .await?;
+                    show(&value)?;
+                    eprintln!(
+                        "Open consent_url, approve the requested storage access, then use apps storage complete with the returned code and state."
+                    );
+                }
+                StorageAuthorization::Status {
+                    authorization_id,
+                    wait,
+                    timeout,
+                } => {
+                    let started = std::time::Instant::now();
+                    loop {
+                        let value = client
+                            .storage_authorization_status(authorization_id)
+                            .await?;
+                        if !wait || value["status"] != "pending" {
+                            show(&value)?;
+                            break;
+                        }
+                        if started.elapsed().as_secs() >= *timeout {
+                            show(&value)?;
+                            bail!(
+                                "Storage consent is still pending. Resume with apps storage status {authorization_id} --wait."
+                            );
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
+                StorageAuthorization::Complete {
+                    authorization_id,
+                    code_file,
+                    state,
+                } => {
+                    use std::io::Read as _;
+                    let mut code = String::new();
+                    fs::File::open(code_file)?
+                        .take(2049)
+                        .read_to_string(&mut code)?;
+                    let code = code.trim();
+                    if code.is_empty()
+                        || code.len() > 2048
+                        || code.bytes().any(|b| b.is_ascii_whitespace())
+                    {
+                        bail!("The code file must contain the one-time consent code only");
+                    }
+                    show(
+                        &client
+                            .storage_authorization_complete(
+                                authorization_id,
+                                code,
+                                state,
+                                &operation,
+                            )
+                            .await?,
+                    )?;
+                }
+            },
+            Apps::UploadLogo { org_id, file } => {
+                match client.upload_logo(org_id, file, &operation).await {
+                    Ok(value) => show(&value)?,
+                    Err(error)
+                        if error
+                            .downcast_ref::<honeycomb_client::ApiError>()
+                            .is_some_and(|e| e.code == "storage_authorization_required") =>
+                    {
+                        let mut consent = client
+                            .storage_authorization_start(org_id, None, &Mutation::new())
+                            .await?;
+                        consent["retry_idempotency_key"] = json!(operation.idempotency_key);
+                        show(&consent)?;
+                        bail!(
+                            "Approve consent_url and run apps storage complete. Retry this upload with --idempotency-key {} to resume it safely.",
+                            operation.idempotency_key
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             Apps::List { page } => show(&client.search("", *page, true).await?)?,
             Apps::Get { app_id } => show(&client.app(app_id).await?)?,
             Apps::Create { file } => show(
@@ -999,7 +1178,31 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                     .activate_publication(request_id, &mutation(cli, Some(*revision))?)
                     .await?,
             )?,
-            Publication::Inbox => show(&client.review_inbox().await?)?,
+            Publication::Inbox { history } => show(&if *history {
+                client.review_history().await?
+            } else {
+                client.review_inbox().await?
+            })?,
+            Publication::Activity => show(&client.request_activity().await?)?,
+            Publication::Sent { page, per_page } => {
+                show(&client.sent_requests(*page, *per_page).await?)?
+            }
+            Publication::MarkRead {
+                request_id,
+                view,
+                provider,
+                activity_version,
+            } => show(
+                &client
+                    .mark_request_read(
+                        request_id,
+                        view,
+                        provider.as_deref(),
+                        activity_version,
+                        &mutation(cli, None)?,
+                    )
+                    .await?,
+            )?,
             Publication::Review {
                 request_id,
                 provider,
@@ -1050,11 +1253,18 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
             )?,
             Publication::Reply {
                 app_id,
+                request_id,
                 message,
                 provider,
             } => show(
                 &client
-                    .publication_message(app_id, message, provider.as_deref(), &operation)
+                    .publication_request_message(
+                        app_id,
+                        request_id.as_deref(),
+                        message,
+                        provider.as_deref(),
+                        &operation,
+                    )
                     .await?,
             )?,
         },
@@ -1963,6 +2173,26 @@ async fn record_command(cli: &Cli, source: &str, event: &str, duration: u64, suc
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn ata_list_supports_personal_workspace_and_existing_application_scope() {
+        let cli = Cli::try_parse_from(["honeycomb", "apps", "ata", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Apps {
+                command: Apps::Ata {
+                    command: Ata::List { app_id: None }
+                }
+            }
+        ));
+        let cli = Cli::try_parse_from(["honeycomb", "apps", "ata", "list", "ting"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Apps { command: Apps::Ata { command: Ata::List { app_id: Some(id) } } } if id == "ting")
+        );
+        assert!(
+            Cli::try_parse_from(["honeycomb", "apps", "ata", "create", "request.json"]).is_err()
+        );
+    }
 
     struct Scratch(PathBuf);
     impl Scratch {

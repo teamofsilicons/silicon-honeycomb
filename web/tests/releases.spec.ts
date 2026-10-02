@@ -10,8 +10,8 @@ async function fixture(page: Page, publicApp = false) {
     effective_config: {}, config: { visibility: publicApp ? "public" : "private" }, latest_version: "1.0.0", rating: 0, reviews: 0, stars: 0, installs: 0,
   };
   const releases = {
-    prod: [{ version: "1.0.0", channel: "prod", created_at: 1750000000 }],
-    dev: [{ version: "7.4.2", channel: "dev", created_at: 1750000001 }],
+    prod: [{ version: "1.0.0", channel: "prod", visibility: publicApp ? "public" : "private", created_at: 1750000000, size: 1048576, sha256: "a".repeat(64) }],
+    dev: [{ version: "7.4.2", channel: "dev", visibility: publicApp ? "public" : "private", created_at: 1750000001, size: 1048576, sha256: "b".repeat(64) }],
   };
   const uploads: { channel: string | null; key: string; revision: string }[] = [];
   const promotions: { version: string; key: string; revision: string }[] = [];
@@ -28,7 +28,7 @@ async function fixture(page: Page, publicApp = false) {
       const version = req.postDataJSON().version;
       promotions.push({ version, key: req.headers()["idempotency-key"], revision: req.headers()["if-match"] });
       if (promotions.length === 1) return route.fulfill({ status: 503, json: { error: { message: "Promotion response interrupted; retry." } } });
-      releases.prod.push({ version, channel: "prod", created_at: 1750000002 });
+      releases.prod.push({ version, channel: "prod", visibility: publicApp ? "public" : "private", created_at: 1750000002, size: 1048576, sha256: "c".repeat(64) });
       app.latest_version = version;
       return route.fulfill({ json: { state: "accepted", version, channel: "prod" } });
     }
@@ -79,7 +79,7 @@ test("registration requires a channel for its first archive and preserves develo
   await expect(form.getByRole("alert")).toContainText("CLI release version must use x.x.x");
   expect(creations).toHaveLength(0);
   await form.getByRole("button", { name: "Create application", exact: true }).click();
-  const detail = page.getByRole("dialog", { name: "Channel fixture", exact: true });
+  const detail = page.getByRole("main");
   await expect(detail.getByRole("alert")).toContainText("application was saved, but the release upload failed");
   await expect(detail).toContainText("release.tar.gz · Development");
   await detail.getByRole("button", { name: "Retry release upload" }).click();
@@ -95,11 +95,11 @@ test("channel histories stay separate and promotion asks for a production versio
   const { promotions } = await fixture(page);
   await page.goto(consoleSite);
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
-  await page.getByRole("button", { name: "Releases & publication" }).click();
+  await page.getByRole("tab", { name: "Releases & publication" }).click();
   const history = page.getByRole("region", { name: "Release history" });
   await expect(history).toContainText("channels@1.0.0");
   await expect(history).not.toContainText("7.4.2");
-  await history.getByLabel("Release history channel").selectOption("dev");
+  await history.getByRole("button", { name: "Development", exact: true }).click();
   await expect(history).toContainText("channels>test@7.4.2");
   await expect(history).not.toContainText("channels@1.0.0");
   await history.getByRole("button", { name: "Promote 7.4.2 to production" }).click();
@@ -116,13 +116,13 @@ test("channel histories stay separate and promotion asks for a production versio
   await expect(history.getByRole("alert")).toContainText("Promotion response interrupted");
   await history.getByRole("button", { name: "Create production release" }).click();
   await expect(history.getByRole("status")).toContainText("Production release 2.0.0 created");
-  await expect(history.getByLabel("Release history channel")).toHaveValue("prod");
+  await expect(history.getByRole("button", { name: "Production", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(history).toContainText("channels@2.0.0");
   expect(promotions).toHaveLength(2);
   expect(promotions[0]).toEqual(promotions[1]);
   expect(promotions[0].key).toBeTruthy();
   expect(promotions[0].revision).toBe("4");
-  await history.getByLabel("Release history channel").selectOption("dev");
+  await history.getByRole("button", { name: "Development", exact: true }).click();
   await expect(history).toContainText("channels>test@7.4.2");
   await expect(history).not.toContainText("channels@2.0.0");
 });
@@ -131,8 +131,8 @@ test("uploads require an explicit channel and retain it when retrying", async ({
   const { uploads } = await fixture(page);
   await page.goto(consoleSite);
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
-  await page.getByRole("button", { name: "Releases & publication" }).click();
-  const detail = page.getByRole("dialog", { name: "Channel fixture", exact: true });
+  await page.getByRole("tab", { name: "Releases & publication" }).click();
+  const detail = page.getByRole("main");
   await expect(detail.getByLabel("Upload CLI archive")).toBeDisabled();
   await detail.getByLabel("Upload release channel").selectOption("dev");
   await detail.getByLabel("Upload CLI archive").setInputFiles(archive);
@@ -152,16 +152,25 @@ test("uploads require an explicit channel and retain it when retrying", async ({
   expect(uploads[2].key).not.toBe(uploads[0].key);
 });
 
-test("library defaults to official installs and explains experimental opt-in", async ({ page }) => {
-  await fixture(page);
+test("library defaults to official installs and exposes channel-specific version pages", async ({ page }) => {
+  await fixture(page, true);
   await page.goto("http://localhost:19173");
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
-  const detail = page.getByRole("dialog", { name: "Channel fixture", exact: true });
+  await expect(page).toHaveURL("http://localhost:19173/apps/channels");
+  const detail = page.getByRole("main");
   await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels'" })).toBeVisible();
   await expect(detail).toContainText("follows production updates");
-  await detail.getByText("Experimental development releases", { exact: true }).click();
-  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels>test'" })).toBeVisible();
-  await expect(detail).toContainText("append @x.x.x");
+  await expect(detail.getByRole("link", { name: /1\.0\.0 Production/ })).toHaveAttribute("href", "/apps/channels/releases/prod/1.0.0");
+  await detail.getByRole("combobox", { name: "Channel", exact: true }).selectOption("dev");
+  await expect(detail).toContainText("Development releases are experimental");
+  // Exploring history must not silently change the default production install target.
+  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels'" })).toBeVisible();
+  await detail.getByRole("link", { name: /7\.4\.2 Development/ }).click();
+  await expect(page).toHaveURL("http://localhost:19173/apps/channels/releases/dev/7.4.2");
+  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels>test@7.4.2'" })).toBeVisible();
+  await expect(detail).toContainText("Installs this exact version");
+  await page.reload();
+  await expect(detail.locator("code").filter({ hasText: "honeycomb install 'channels>test@7.4.2'" })).toBeVisible();
 });
 
 test("publication progress distinguishes equal versions from both channels", async ({ page }) => {
@@ -175,7 +184,7 @@ test("publication progress distinguishes equal versions from both channels", asy
   }] } }));
   await page.goto(consoleSite);
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
-  await page.getByRole("button", { name: "Releases & publication" }).click();
+  await page.getByRole("tab", { name: "Releases & publication" }).click();
   const publication = page.locator(".review-thread");
   await expect(publication).toContainText("Production release 1.0.0 · accepted");
   await expect(publication).toContainText("Dev release 1.0.0 · pending");
@@ -193,7 +202,7 @@ test("pending permission releases show private status and retain the public inst
   });
   await page.goto(consoleSite);
   await page.getByRole("heading", { name: "Channel fixture", exact: true }).click();
-  await page.getByRole("button", { name: "Releases & publication" }).click();
+  await page.getByRole("tab", { name: "Releases & publication" }).click();
   const history = page.getByRole("region", { name: "Release history" });
   const pending = history.getByRole("listitem").filter({ hasText: "2.0.0" });
   await expect(pending).toContainText("Private");

@@ -58,7 +58,7 @@ async fn delegated_list(S(s): S<State>, h: HeaderMap, body: Bytes) -> Result<Jso
     let mut context_headers = h.clone();
     context_headers.remove("authorization");
     let c = context(&s, &context_headers).await?;
-    let proof = header_value(&h, "x-iam-obo-access-proof")?
+    let proof = header_value(&h, "x-iam-obo-access-token")?
         .filter(|p| !p.is_empty() && p.len() <= 4096)
         .ok_or_else(Error::unauthorized)?;
     let input: ListRequest = serde_json::from_slice(&body)

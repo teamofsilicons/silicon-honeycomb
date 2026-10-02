@@ -92,12 +92,12 @@ async fn app(s: &State, plane: &str, id: &str, org: &str, visibility: &str) {
         .bind(plane).bind(id).bind(org).bind(visibility).bind(&config).bind(&config).execute(&s.db).await.unwrap();
 }
 fn proof(env: Option<&str>) -> Value {
-    json!({"valid":true,"proof_id":"11111111-1111-4111-8111-111111111111","issuer_app_id":"app","audience":"honeycomb","actor":{"type":"carbon","public_id":"carbon-user"},"authorization":{"actor_type":"carbon","public_id":"carbon-user","organization_id":"22222222-2222-4222-8222-222222222222","org_id":"tos","membership_id":"33333333-3333-4333-8333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"honeycomb","testing_environment_id":env,"scopes":["obo:honeycomb:honeycomb.apps.list"],"org_role":null,"tags":null},"org_id":"tos","endpoint":{"endpoint_id":ENDPOINT_ID,"path":ENDPOINT_PATH},"metadata":{},"expires_at":"2099-01-01T00:00:00Z","consumed_at":"2026-09-22T00:00:00Z"})
+    json!({"active":true,"token_id":"11111111-1111-4111-8111-111111111111","grant_id":"55555555-5555-4555-8555-555555555555","issuer_app_id":"app","originating_app_id":"app","chain":[{"app_id":"app","audience":"honeycomb","endpoint_id":ENDPOINT_ID}],"actor":{"type":"carbon","public_id":"carbon-user"},"authorization":{"actor_type":"carbon","public_id":"carbon-user","organization_id":"22222222-2222-4222-8222-222222222222","org_id":"tos","membership_id":"33333333-3333-4333-8333-333333333333","membership_version":1,"authorization_epoch":1,"audience":"honeycomb","testing_environment_id":env,"scopes":["obo:honeycomb:honeycomb.apps.list"],"org_role":null,"tags":null},"org_id":"tos","endpoint":{"app_id":"honeycomb","endpoint_id":ENDPOINT_ID,"path":ENDPOINT_PATH},"expires_at":"2099-01-01T00:00:00Z"})
 }
 async fn wire(server: &MockServer, response: Value) {
     server.reset().await;
     Mock::given(method("POST"))
-        .and(path("/api/v1/obo-access/verify"))
+        .and(path("/api/v1/obo-access/token-verifications"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response))
         .mount(server)
         .await;
@@ -110,7 +110,7 @@ async fn send(
 ) -> (StatusCode, Value) {
     let mut request = Request::post(ENDPOINT_PATH).header("content-type", "application/json");
     if let Some(proof) = proof {
-        request = request.header("x-iam-obo-access-proof", proof);
+        request = request.header("x-iam-obo-access-token", proof);
     }
     if let Some(env) = env {
         request = request.header("x-testing-environment-key", env);
@@ -126,7 +126,7 @@ async fn send(
 }
 
 #[tokio::test]
-async fn delegates_current_org_private_catalog_with_exact_request_binding_and_safe_projection() {
+async fn delegates_current_org_private_catalog_with_reusable_endpoint_token_and_safe_projection() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
     app(&s, "production", "private", "tos", "private").await;
@@ -149,7 +149,7 @@ async fn delegates_current_org_private_catalog_with_exact_request_binding_and_sa
     let verified: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(
         verified,
-        json!({"access_proof":"opaque-proof","request":{"method":"POST","path":ENDPOINT_PATH,"body_sha256":hex::encode(Sha256::digest(body.as_bytes()))}})
+        json!({"access_token":"opaque-proof","endpoint_id":ENDPOINT_ID,"request":{"method":"POST","path":ENDPOINT_PATH}})
     );
     assert!(
         !requests[0]
@@ -159,7 +159,7 @@ async fn delegates_current_org_private_catalog_with_exact_request_binding_and_sa
     let (_, next) = send(
         &s,
         r#"{"org_id":"tos","after":"private","limit":1}"#,
-        Some("next-proof"),
+        Some("opaque-proof"),
         None,
     )
     .await;
@@ -170,24 +170,26 @@ async fn delegates_current_org_private_catalog_with_exact_request_binding_and_sa
 }
 
 #[tokio::test]
-async fn rejects_missing_consumed_revoked_and_invalid_proofs_without_catalog_disclosure() {
+async fn rejects_missing_newly_revoked_and_invalid_tokens_without_catalog_disclosure() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
     let body = r#"{"org_id":"tos"}"#;
     assert_eq!(send(&s, body, None, None).await.0, StatusCode::UNAUTHORIZED);
     assert!(server.received_requests().await.unwrap().is_empty());
     let consumed = Arc::new(AtomicBool::new(false));
-    Mock::given(method("POST")).and(path("/api/v1/obo-access/verify"))
+    Mock::given(method("POST")).and(path("/api/v1/obo-access/token-verifications"))
         .respond_with(move |_: &wiremock::Request| {
             if consumed.swap(true, Ordering::SeqCst) {
-                ResponseTemplate::new(409).set_body_json(json!({"error":{"code":"obo_proof_consumed","message":"sensitive upstream text","details":null}}))
+                ResponseTemplate::new(409).set_body_json(json!({"error":{"code":"obo_access_token_invalid","message":"sensitive upstream text","details":null}}))
             } else { ResponseTemplate::new(200).set_body_json(proof(None)) }
         }).mount(&server).await;
     assert_eq!(
-        send(&s, body, Some("single-use"), None).await.0,
+        send(&s, body, Some("revoked-after-first-use"), None)
+            .await
+            .0,
         StatusCode::OK
     );
-    let (status, error) = send(&s, body, Some("single-use"), None).await;
+    let (status, error) = send(&s, body, Some("revoked-after-first-use"), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!error.to_string().contains("sensitive"));
     for code in [
@@ -198,7 +200,7 @@ async fn rejects_missing_consumed_revoked_and_invalid_proofs_without_catalog_dis
     ] {
         server.reset().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/obo-access/verify"))
+            .and(path("/api/v1/obo-access/token-verifications"))
             .respond_with(
                 ResponseTemplate::new(403).set_body_json(
                     json!({"error":{"code":code,"message":"denied","details":null}}),
@@ -214,13 +216,13 @@ async fn rejects_missing_consumed_revoked_and_invalid_proofs_without_catalog_dis
 }
 
 #[tokio::test]
-async fn validates_verified_audience_actor_endpoint_org_metadata_and_environment() {
+async fn validates_verified_audience_actor_endpoint_org_and_environment() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
     for (pointer, wrong) in [
-        ("/valid", json!(false)),
+        ("/active", json!(false)),
         ("/authorization/scopes", json!([])),
-        ("/audience", json!("app")),
+        ("/endpoint/app_id", json!("app")),
         ("/authorization/audience", json!("app")),
         ("/authorization/public_id", json!("other-user")),
         ("/authorization/actor_type", json!("silicon")),
@@ -228,7 +230,6 @@ async fn validates_verified_audience_actor_endpoint_org_metadata_and_environment
         ("/authorization/testing_environment_id", json!(ENV)),
         ("/endpoint/endpoint_id", json!("another.endpoint")),
         ("/endpoint/path", json!("/another-path")),
-        ("/metadata", json!({"unregistered":"data"})),
         ("/expires_at", json!("2000-01-01T00:00:00Z")),
     ] {
         let mut result = proof(None);
@@ -410,7 +411,7 @@ async fn invalid_list_inputs_do_not_consume_proofs_and_verifier_outages_fail_clo
         );
     }
     assert!(server.received_requests().await.unwrap().is_empty());
-    Mock::given(method("POST")).and(path("/api/v1/obo-access/verify"))
+    Mock::given(method("POST")).and(path("/api/v1/obo-access/token-verifications"))
         .respond_with(ResponseTemplate::new(503).set_body_json(json!({"error":{"code":"service_down","message":"sensitive upstream reason","details":null}}))).mount(&server).await;
     let (status, error) = send(&s, r#"{"org_id":"tos"}"#, Some("proof"), None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -425,7 +426,7 @@ async fn key_rotation_during_proof_verification_rejects_the_old_request_context(
     let started = Arc::new(tokio::sync::Notify::new());
     let started_on_call = started.clone();
     Mock::given(method("POST"))
-        .and(path("/api/v1/obo-access/verify"))
+        .and(path("/api/v1/obo-access/token-verifications"))
         .respond_with(move |_: &wiremock::Request| {
             started_on_call.notify_one();
             ResponseTemplate::new(200)
@@ -451,7 +452,7 @@ async fn key_rotation_during_proof_verification_rejects_the_old_request_context(
 }
 
 #[tokio::test]
-async fn rust_client_preserves_signed_json_and_supports_direct_and_testing_inventories() {
+async fn rust_client_sends_reusable_tokens_and_supports_direct_and_testing_inventories() {
     let server = MockServer::start().await;
     let s = setup(&server).await;
     app(&s, "production", "private", "tos", "private").await;
@@ -466,9 +467,8 @@ async fn rust_client_preserves_signed_json_and_supports_direct_and_testing_inven
         axum::serve(listener, router).await.unwrap();
     });
     let request = json!({"org_id":"tos","limit":1});
-    let signed_digest = hex::encode(Sha256::digest(serde_json::to_vec(&request).unwrap()));
-    Mock::given(method("POST")).and(path("/api/v1/obo-access/verify"))
-        .and(wiremock::matchers::body_json(json!({"access_proof":"client-proof","request":{"method":"POST","path":ENDPOINT_PATH,"body_sha256":signed_digest}})))
+    Mock::given(method("POST")).and(path("/api/v1/obo-access/token-verifications"))
+        .and(wiremock::matchers::body_json(json!({"access_token":"client-proof","endpoint_id":ENDPOINT_ID,"request":{"method":"POST","path":ENDPOINT_PATH}})))
         .respond_with(ResponseTemplate::new(200).set_body_json(proof(None))).expect(1).mount(&server).await;
     // A caller's own bearer token is not a Honeycomb login; only the proof is used.
     let result = client

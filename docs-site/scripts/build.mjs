@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 import { marked } from "marked";
 const pages = JSON.parse(await readFile("pages.json", "utf8"));
 const base = "https://docs.honeycomb.teamofsilicons.com";
@@ -25,9 +26,45 @@ const groups = [...new Set(pages.map((p) => p.group))];
 const search = [];
 const logo =
   '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 28 9v14l-12 7L4 23V9Z"/><path d="m4 9 12 7 12-7M16 16v14"/></svg>';
-function shell(page, article, toc, i) {
-  const previous = pages[i - 1],
-    next = pages[i + 1];
+function articleShell(page, article, toc) {
+  const words = article.replace(/<[^>]*>/g, " ").trim().split(/\s+/).length;
+  const readingMinutes = Math.max(1, Math.ceil(words / 220));
+  const chapters = toc.map((heading, index) => `<a href="#${heading.id}"><span aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>${escape(heading.text)}</a>`).join("");
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ffffff"><title>${escape(page.title)} · Honeycomb Guides</title>
+<meta name="description" content="${escape(page.description)}"><link rel="canonical" href="${base}${href(page)}">
+<meta property="og:title" content="${escape(page.title)}"><meta property="og:description" content="${escape(page.description)}">
+<meta property="og:type" content="article"><meta property="og:url" content="${base}${href(page)}">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">${assets}
+</head><body class="guide-page">
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar guide-topbar">
+<a class="brand" href="/" aria-label="Honeycomb Docs home">${logo}<strong>honeycomb</strong><span>Guides</span></a>
+<div id="tools"></div>
+<nav class="external" aria-label="Products"><a href="https://honeycomb.teamofsilicons.com">Library ↗</a><a class="console" href="https://console.honeycomb.teamofsilicons.com">Open console ↗</a></nav>
+</header>
+<div class="guide-layout">
+<main id="content" tabindex="-1" class="guide-main">
+<nav class="guide-breadcrumb" aria-label="Breadcrumb"><a href="/"><span aria-hidden="true">←</span> Back to docs</a></nav>
+<header class="guide-header">
+<div class="guide-meta"><span class="guide-kind">Practical guide</span><span>${readingMinutes} min read</span></div>
+<h1>${escape(page.title)}</h1><p class="lead">${escape(page.description)}</p>
+</header>
+${toc.length ? `<details class="guide-mobile-chapters"><summary>In this guide <span>${toc.length} chapters</span></summary><nav class="guide-chapter-links" aria-label="Guide chapters">${chapters}</nav></details>` : ""}
+<article class="guide-article">${article}</article>
+<footer class="guide-footer"><a class="guide-back" href="/">← Back to documentation</a><div class="guide-resources"><a href="/markdown/${page.slug}.md">Read as Markdown</a><a href="https://github.com/teamofsilicons/silicon-honeycomb/blob/main/docs-site/content/${page.slug}.md">View source ↗</a></div></footer>
+</main>
+${toc.length ? `<aside class="guide-toc" aria-label="On this page"><h2>In this guide</h2><nav class="guide-chapter-links" aria-label="Guide chapters">${chapters}</nav><a class="guide-reference-link" href="/">Looking for a reference?<span>Browse the documentation ↗</span></a></aside>` : ""}
+</div></body></html>`;
+}
+function shell(page, article, toc) {
+  if (page.layout === "article") return articleShell(page, article, toc);
+  const referencePages = pages.filter((item) => item.layout !== "article");
+  const index = referencePages.findIndex((item) => item.slug === page.slug);
+  const previous = index > 0 ? referencePages[index - 1] : undefined;
+  const next = index >= 0 ? referencePages[index + 1] : undefined;
   return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#fffdf9"><title>${escape(page.title)} · Honeycomb Docs</title><meta name="description" content="${escape(page.description)}"><link rel="canonical" href="${base}${href(page)}"><meta property="og:title" content="${escape(page.title)} · Honeycomb Docs"><meta property="og:description" content="${escape(page.description)}"><meta property="og:type" content="website"><meta property="og:url" content="${base}${href(page)}"><link rel="icon" href="/favicon.svg" type="image/svg+xml">${assets}</head><body><a class="skip" href="#content">Skip to content</a><header class="topbar"><a class="brand" href="/" aria-label="Honeycomb Docs home">${logo}<strong>honeycomb</strong><span>Docs</span></a><div id="tools"></div><nav class="external" aria-label="Products"><a href="https://honeycomb.teamofsilicons.com">Library ↗</a><a class="console" href="https://console.honeycomb.teamofsilicons.com">Open console ↗</a></nav></header><div class="layout"><nav id="sidebar" class="sidebar" aria-label="Documentation"><div class="edition">DOCUMENTATION <span>v0.1</span></div>${groups
     .map(
       (group) =>
@@ -43,7 +80,7 @@ function shell(page, article, toc, i) {
       "",
     )}<a class="source-link" href="https://github.com/teamofsilicons/silicon-honeycomb">Source on GitHub ↗</a></nav><main id="content" tabindex="-1"><div class="eyebrow">${escape(page.group)} <span>/</span> HONEYCOMB</div><h1>${escape(page.title)}</h1><p class="lead">${escape(page.description)}</p>${page.slug === "" ? '<div class="intro-rule"><span>BUILD SOMETHING. SHARE IT WELL.</span><span>09 — 2026</span></div>' : ""}<article>${article}</article><footer class="article-footer"><div class="page-links">${previous ? `<a href="${href(previous)}"><small>← PREVIOUS</small>${escape(previous.title)}</a>` : "<span></span>"}${next ? `<a href="${href(next)}"><small>NEXT →</small>${escape(next.title)}</a>` : ""}</div><div class="meta"><span>Honeycomb · MIT · 0.3.0</span><a href="/markdown/${page.slug || "index"}.md">Read as Markdown</a><a href="https://github.com/teamofsilicons/silicon-honeycomb/blob/main/docs-site/content/${page.slug || "index"}.md">View source ↗</a></div></footer></main><aside class="toc" aria-label="On this page"><h2>On this page</h2>${toc.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}<div class="toc-note">A shared home for<br>Silicon applications.</div></aside></div></body></html>`;
 }
-for (const [i, page] of pages.entries()) {
+for (const page of pages) {
   let md = await readFile(`content/${page.slug || "index"}.md`, "utf8");
   md = md.replace(
     "<!-- ROUTES -->",
@@ -74,9 +111,10 @@ for (const [i, page] of pages.entries()) {
     .replace(/<\/table>/g, "</table></div>");
   const dir = `dist${href(page)}`;
   await mkdir(dir, { recursive: true });
-  await writeFile(`${dir}index.html`, shell(page, article, toc, i));
-  await mkdir("dist/markdown", { recursive: true });
-  await writeFile(`dist/markdown/${page.slug || "index"}.md`, md);
+  await writeFile(`${dir}index.html`, shell(page, article, toc));
+  const markdownPath = `dist/markdown/${page.slug || "index"}.md`;
+  await mkdir(path.dirname(markdownPath), { recursive: true });
+  await writeFile(markdownPath, md);
   search.push({
     title: page.title,
     group: page.group,
@@ -115,7 +153,6 @@ await writeFile(
     },
     '<p>Try the search above, or <a href="/">return to the documentation home</a>.</p>',
     [],
-    -1,
   ).replace(
     '<meta name="description"',
     '<meta name="robots" content="noindex"><meta name="description"',

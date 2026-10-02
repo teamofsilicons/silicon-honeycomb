@@ -21,6 +21,20 @@ pub struct TestingApplicationAuthority {
 
 #[async_trait]
 pub trait Management: Send + Sync {
+    /// Actor-authenticated ATA records; creation responses contain a one-time secret.
+    async fn ata_verification(
+        &self,
+        _app: &str,
+        _action: &str,
+        _id: Option<uuid::Uuid>,
+        _body: &Value,
+        _actor: &str,
+        _operation: Option<uuid::Uuid>,
+    ) -> Result<Value> {
+        Err(Error::unavailable(
+            "IAM application delegation management is not configured",
+        ))
+    }
     async fn bundle(&self, _id: &str) -> Result<Value> {
         Err(Error::unavailable(
             "IAM bundle management is not configured",
@@ -238,6 +252,10 @@ impl Management for AwaitingIamIntegration {
 }
 #[async_trait]
 pub trait ArchiveStorage: Send + Sync {
+    fn authorization_broker(&self) -> Option<&crate::storage_authorizations::Broker> {
+        None
+    }
+
     /// Store a normalized PNG beside the archives and return its public image URL.
     async fn upload_logo(
         &self,
