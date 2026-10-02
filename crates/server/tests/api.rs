@@ -6624,4 +6624,14 @@ async fn stale_review_emails_do_not_ask_for_completed_or_superseded_approvals() 
         .await
         .unwrap();
     assert_eq!(state, "superseded");
+    sqlx::query("INSERT INTO outbox(id,plane,event_key,kind,payload,created_at) VALUES('legacy-stale-review','production','legacy-stale-review','publication.review',?,2)")
+        .bind(json!({"request_id":id,"app_id":"review-app"}).to_string()).execute(&s.db).await.unwrap();
+    assert!(dispatch_once(&s, Some(&mailbox)).await.unwrap());
+    assert!(mailbox.0.lock().unwrap().is_empty());
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM outbox WHERE id='legacy-stale-review'")
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+    assert_eq!(state, "superseded");
 }

@@ -401,6 +401,14 @@ async fn notification_is_current(s: &State, kind: &str, payload: &Value) -> Resu
     if kind == "publication.status" {
         return Ok(payload["state"].as_str() == Some(state.as_str()));
     }
+    // Older queued review events did not name a provider. They still must not
+    // invite a new decision after the request has completed.
+    if !matches!(
+        state.as_str(),
+        "awaiting_validator" | "awaiting_scope_review"
+    ) {
+        return Ok(false);
+    }
     let Some(provider) = payload["review_provider"].as_str() else {
         return Ok(true);
     };
