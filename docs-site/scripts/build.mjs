@@ -3,6 +3,8 @@ import path from "node:path";
 import { marked } from "marked";
 const pages = JSON.parse(await readFile("pages.json", "utf8"));
 const base = "https://docs.honeycomb.teamofsilicons.com";
+const release = JSON.parse(await readFile("release.json", "utf8"));
+const releaseNotice = release.status === "preview" ? `<div class="release-notice" role="note"><strong>Honeycomb ${release.version} · IAM 5 migration preview</strong><p>The updated contracts are published before the runtime rollout. Prepare your application now; production has not switched yet. <a href="https://docs.iam.teamofsilicons.com/migrating-to-iam-5/">Read the migration guide →</a></p></div>` : "";
 const escape = (s) =>
   String(s).replace(
     /[&<>"']/g,
@@ -46,7 +48,7 @@ function articleShell(page, article, toc) {
 <nav class="external" aria-label="Products"><a href="https://honeycomb.teamofsilicons.com">Library ↗</a><a class="console" href="https://console.honeycomb.teamofsilicons.com">Open console ↗</a></nav>
 </header>
 <div class="guide-layout">
-<main id="content" tabindex="-1" class="guide-main">
+<main id="content" tabindex="-1" class="guide-main">${releaseNotice}
 <nav class="guide-breadcrumb" aria-label="Breadcrumb"><a href="/"><span aria-hidden="true">←</span> Back to docs</a></nav>
 <header class="guide-header">
 <div class="guide-meta"><span class="guide-kind">Practical guide</span><span>${readingMinutes} min read</span></div>
@@ -54,7 +56,7 @@ function articleShell(page, article, toc) {
 </header>
 ${toc.length ? `<details class="guide-mobile-chapters"><summary>In this guide <span>${toc.length} chapters</span></summary><nav class="guide-chapter-links" aria-label="Guide chapters">${chapters}</nav></details>` : ""}
 <article class="guide-article">${article}</article>
-<footer class="guide-footer"><a class="guide-back" href="/">← Back to documentation</a><div class="guide-resources"><a href="/markdown/${page.slug}.md">Read as Markdown</a><a href="https://github.com/teamofsilicons/silicon-honeycomb/blob/main/docs-site/content/${page.slug}.md">View source ↗</a></div></footer>
+<footer class="guide-footer"><a class="guide-back" href="/">← Back to documentation</a><div class="guide-resources"><a href="/markdown/${page.slug}.md">Read as Markdown</a><a href="https://github.com/teamofsilicons/silicon-honeycomb/blob/${release.source_ref}/docs-site/content/${page.slug}.md">View source ↗</a></div></footer>
 </main>
 ${toc.length ? `<aside class="guide-toc" aria-label="On this page"><h2>In this guide</h2><nav class="guide-chapter-links" aria-label="Guide chapters">${chapters}</nav><a class="guide-reference-link" href="/">Looking for a reference?<span>Browse the documentation ↗</span></a></aside>` : ""}
 </div></body></html>`;
@@ -65,7 +67,7 @@ function shell(page, article, toc) {
   const index = referencePages.findIndex((item) => item.slug === page.slug);
   const previous = index > 0 ? referencePages[index - 1] : undefined;
   const next = index >= 0 ? referencePages[index + 1] : undefined;
-  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#fffdf9"><title>${escape(page.title)} · Honeycomb Docs</title><meta name="description" content="${escape(page.description)}"><link rel="canonical" href="${base}${href(page)}"><meta property="og:title" content="${escape(page.title)} · Honeycomb Docs"><meta property="og:description" content="${escape(page.description)}"><meta property="og:type" content="website"><meta property="og:url" content="${base}${href(page)}"><link rel="icon" href="/favicon.svg" type="image/svg+xml">${assets}</head><body><a class="skip" href="#content">Skip to content</a><header class="topbar"><a class="brand" href="/" aria-label="Honeycomb Docs home">${logo}<strong>honeycomb</strong><span>Docs</span></a><div id="tools"></div><nav class="external" aria-label="Products"><a href="https://honeycomb.teamofsilicons.com">Library ↗</a><a class="console" href="https://console.honeycomb.teamofsilicons.com">Open console ↗</a></nav></header><div class="layout"><nav id="sidebar" class="sidebar" aria-label="Documentation"><div class="edition">DOCUMENTATION <span>v0.1</span></div>${groups
+  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#fffdf9"><title>${escape(page.title)} · Honeycomb Docs</title><meta name="description" content="${escape(page.description)}"><link rel="canonical" href="${base}${href(page)}"><meta property="og:title" content="${escape(page.title)} · Honeycomb Docs"><meta property="og:description" content="${escape(page.description)}"><meta property="og:type" content="website"><meta property="og:url" content="${base}${href(page)}"><link rel="icon" href="/favicon.svg" type="image/svg+xml">${assets}</head><body><a class="skip" href="#content">Skip to content</a><header class="topbar"><a class="brand" href="/" aria-label="Honeycomb Docs home">${logo}<strong>honeycomb</strong><span>Docs</span></a><div id="tools"></div><nav class="external" aria-label="Products"><a href="https://honeycomb.teamofsilicons.com">Library ↗</a><a class="console" href="https://console.honeycomb.teamofsilicons.com">Open console ↗</a></nav></header><div class="layout"><nav id="sidebar" class="sidebar" aria-label="Documentation"><div class="edition">DOCUMENTATION <span>v${release.version}</span></div>${groups
     .map(
       (group) =>
         `<section><h2>${escape(group)}</h2>${pages
@@ -78,7 +80,7 @@ function shell(page, article, toc) {
     )
     .join(
       "",
-    )}<a class="source-link" href="https://github.com/teamofsilicons/silicon-honeycomb">Source on GitHub ↗</a></nav><main id="content" tabindex="-1"><div class="eyebrow">${escape(page.group)} <span>/</span> HONEYCOMB</div><h1>${escape(page.title)}</h1><p class="lead">${escape(page.description)}</p>${page.slug === "" ? '<div class="intro-rule"><span>BUILD SOMETHING. SHARE IT WELL.</span><span>09 — 2026</span></div>' : ""}<article>${article}</article><footer class="article-footer"><div class="page-links">${previous ? `<a href="${href(previous)}"><small>← PREVIOUS</small>${escape(previous.title)}</a>` : "<span></span>"}${next ? `<a href="${href(next)}"><small>NEXT →</small>${escape(next.title)}</a>` : ""}</div><div class="meta"><span>Honeycomb · MIT · 0.3.0</span><a href="/markdown/${page.slug || "index"}.md">Read as Markdown</a><a href="https://github.com/teamofsilicons/silicon-honeycomb/blob/main/docs-site/content/${page.slug || "index"}.md">View source ↗</a></div></footer></main><aside class="toc" aria-label="On this page"><h2>On this page</h2>${toc.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}<div class="toc-note">A shared home for<br>Silicon applications.</div></aside></div></body></html>`;
+    )}<a class="source-link" href="https://github.com/teamofsilicons/silicon-honeycomb">Source on GitHub ↗</a></nav><main id="content" tabindex="-1">${releaseNotice}<div class="eyebrow">${escape(page.group)} <span>/</span> HONEYCOMB</div><h1>${escape(page.title)}</h1><p class="lead">${escape(page.description)}</p>${page.slug === "" ? '<div class="intro-rule"><span>BUILD SOMETHING. SHARE IT WELL.</span><span>09 — 2026</span></div>' : ""}<article>${article}</article><footer class="article-footer"><div class="page-links">${previous ? `<a href="${href(previous)}"><small>← PREVIOUS</small>${escape(previous.title)}</a>` : "<span></span>"}${next ? `<a href="${href(next)}"><small>NEXT →</small>${escape(next.title)}</a>` : ""}</div><div class="meta"><span>Honeycomb · MIT · ${release.version} docs</span><a href="/markdown/${page.slug || "index"}.md">Read as Markdown</a><a href="https://github.com/teamofsilicons/silicon-honeycomb/blob/${release.source_ref}/docs-site/content/${page.slug || "index"}.md">View source ↗</a></div></footer></main><aside class="toc" aria-label="On this page"><h2>On this page</h2>${toc.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}<div class="toc-note">A shared home for<br>Silicon applications.</div></aside></div></body></html>`;
 }
 for (const page of pages) {
   let md = await readFile(`content/${page.slug || "index"}.md`, "utf8");

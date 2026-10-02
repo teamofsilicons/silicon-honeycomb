@@ -1,3 +1,5 @@
+> Preparing an existing app for the new release? Start with the [IAM 5 migration guide](https://docs.iam.teamofsilicons.com/migrating-to-iam-5/), then read the [application-building article](/guides/team-of-silicons-ready-applications/).
+
 ## What is Honeycomb?
 Honeycomb brings your application catalog, portable CLI releases, configuration reviews, and shared testing workflows into one place. Browse applications in the **library**, manage your organization's applications in the **console**, or use the same workflows from the Rust CLI and client SDK.
 
