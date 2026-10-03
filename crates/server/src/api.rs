@@ -39,6 +39,10 @@ pub fn router(state: State) -> Router {
             post(super::telemetry::ingest).layer(DefaultBodyLimit::max(4096)),
         )
         .route("/api/v1/review-requests", get(super::reviews::inbox))
+        .route(
+            "/api/v1/legacy-review-requests/{id}",
+            get(super::reviews::legacy_request),
+        )
         .route("/api/v1/sent-requests", get(super::request_activity::sent))
         .route(
             "/api/v1/request-activity",

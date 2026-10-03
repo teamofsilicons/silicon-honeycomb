@@ -492,6 +492,43 @@ async fn discussion_access(s: &State, c: &Context, id: &str, provider: &str) -> 
     }
     Ok(row)
 }
+/// Old IAM email links resolve only after the same live authorization as the
+/// destination discussion. A guessed old ID cannot disclose an app or provider.
+pub async fn legacy_request(
+    S(s): S<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    let c = context(&s, &h).await?;
+    c.identity()?;
+    let mapping = sqlx::query(
+        "SELECT request_id,provider FROM legacy_review_requests WHERE plane=? AND legacy_request_id=?",
+    )
+    .bind(&c.plane)
+    .bind(id)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(Error::missing)?;
+    let request_id: String = mapping.get("request_id");
+    let provider: String = mapping.get("provider");
+    let request = discussion_access(&s, &c, &request_id, &provider)
+        .await
+        .map_err(|error| {
+            if matches!(error.0, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
+                Error::missing()
+            } else {
+                error
+            }
+        })?;
+    let direction = if can_review(&s, &c, &request, &provider).await? {
+        "received"
+    } else {
+        "sent"
+    };
+    Ok(Json(
+        json!({"id":request_id,"provider":provider,"app_id":request.get::<String,_>("app_id"),"direction":direction}),
+    ))
+}
 pub async fn detail(
     S(s): S<State>,
     h: HeaderMap,

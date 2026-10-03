@@ -2227,6 +2227,53 @@ async fn review_application(s: &State) -> String {
     result["id"].as_str().unwrap().into()
 }
 #[tokio::test]
+async fn legacy_review_links_require_current_discussion_authority_and_do_not_mark_read() {
+    let (mut s, _) = setup(true).await;
+    s.identity = Arc::new(ReviewIdentity);
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    sqlx::query("INSERT INTO legacy_review_requests(plane,legacy_request_id,request_id,provider,source_sha256,imported_at) VALUES('production','old-iam-email',?,'provider',?,1)")
+        .bind(&id).bind("a".repeat(64)).execute(&s.db).await.unwrap();
+    let path = "/api/v1/legacy-review-requests/old-iam-email";
+    for (actor, expected, direction) in [
+        (None, StatusCode::UNAUTHORIZED, None),
+        (Some("member"), StatusCode::NOT_FOUND, None),
+        (Some("iam-reviewer"), StatusCode::NOT_FOUND, None),
+        (Some("validator"), StatusCode::NOT_FOUND, None),
+        (Some("outsider"), StatusCode::OK, Some("received")),
+        (Some("admin"), StatusCode::OK, Some("sent")),
+    ] {
+        let (status, response) = call(&s, "GET", path, actor, Value::Null, "", None).await;
+        assert_eq!(status, expected, "{actor:?}: {response}");
+        if let Some(direction) = direction {
+            assert_eq!(
+                response,
+                json!({"id":id,"app_id":"review-app","provider":"provider","direction":direction})
+            );
+        } else {
+            assert!(response.get("app_id").is_none());
+            assert!(response.get("provider").is_none());
+        }
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM request_reads")
+            .fetch_one(&s.db)
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("UPDATE legacy_review_requests SET plane='unrelated-testing-plane'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(&s, "GET", path, Some("admin"), Value::Null, "", None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+#[tokio::test]
 async fn console_discussions_validate_gates_and_notify_participants_once() {
     use silicon_honeycomb_server::notifications::dispatch_once;
     let (mut s, _) = setup(true).await;
