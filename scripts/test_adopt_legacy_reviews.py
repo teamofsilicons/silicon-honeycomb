@@ -7,10 +7,13 @@ import sqlite3
 import unittest
 import uuid
 
-from adopt_legacy_reviews import encoded, finalize, prepare, validate
+from adopt_legacy_reviews import encoded, finalize, prepare, repair_operation, validate
 
 
 class ReviewHandoverTests(unittest.TestCase):
+    def tearDown(self):
+        self.db.close()
+
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         for migration in sorted((Path(__file__).resolve().parents[1] / "crates/server/migrations").glob("*.sql")):
@@ -76,6 +79,53 @@ class ReviewHandoverTests(unittest.TestCase):
         self.assertTrue(again["replayed"])
         self.assertEqual(again["request_id"], receipt["request_id"])
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM discussions").fetchone()[0], 4)
+
+    def test_prepare_supports_ordinary_plans_immutable_body_foreign_key(self):
+        request = self.prepare()["request_id"]
+        with self.db:
+            self.db.execute("INSERT INTO management_requests(operation_id,kind,app_id,encrypted_body,created_at) VALUES(?,'publication.plan','ring','encrypted-body',1)", (request,))
+        self.assertEqual(self.db.execute("SELECT kind,resource,revision,state,actor FROM operations WHERE id=?", (request,)).fetchone(), ("publication.request", "ring", 1, "accepted", "c:author"))
+        self.assertFalse(self.db.execute("PRAGMA foreign_key_check").fetchall())
+
+    def test_missing_parent_repair_changes_only_one_operation_and_is_idempotent(self):
+        request = self.prepare()["request_id"]
+        with self.db:
+            self.db.execute("DELETE FROM operations WHERE id=?", (request,))
+        insert = "INSERT INTO management_requests(operation_id,kind,app_id,encrypted_body,created_at) VALUES(?,'publication.plan','ring','encrypted-body',1)"
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "FOREIGN KEY"):
+            self.db.execute(insert, (request,))
+        self.db.rollback()
+        tables = [r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name!='operations'")]
+        before = {table: self.db.execute('SELECT * FROM ' + table).fetchall() for table in tables}
+        changes = self.db.total_changes
+        with self.db:
+            receipt = repair_operation(self.db, self.source, self.digest)
+        self.assertTrue(receipt["operation_repaired"])
+        self.assertEqual(self.db.total_changes - changes, 1)
+        self.assertEqual(before, {table: self.db.execute('SELECT * FROM ' + table).fetchall() for table in tables})
+        changes = self.db.total_changes
+        with self.db:
+            self.assertTrue(repair_operation(self.db, self.source, self.digest)["replayed"])
+        self.assertEqual(self.db.total_changes, changes)
+        with self.db:
+            self.db.execute(insert, (request,))
+        self.assertFalse(self.db.execute("PRAGMA foreign_key_check").fetchall())
+
+    def test_bookkeeping_repair_rejects_conflict_changed_grants_or_started_plan(self):
+        request = self.prepare()["request_id"]
+        for sql in ["UPDATE operations SET kind='configure' WHERE id='" + request + "'",
+                    "UPDATE applications SET visibility='public'",
+                    "UPDATE applications SET effective_config='{}'",
+                    "UPDATE publication_requests SET plan_id='already-planned'",
+                    "UPDATE discussions SET message='Changed'",
+                    "UPDATE legacy_review_handovers SET state='complete'"]:
+            with self.subTest(sql=sql):
+                self.db.execute("SAVEPOINT changed")
+                self.db.execute(sql)
+                with self.assertRaises(ValueError):
+                    repair_operation(self.db, self.source, self.digest)
+                self.db.execute("ROLLBACK TO changed")
+                self.db.execute("RELEASE changed")
 
     def test_finalize_requires_real_exact_plan_and_preserves_pending_state(self):
         receipt = self.prepare()

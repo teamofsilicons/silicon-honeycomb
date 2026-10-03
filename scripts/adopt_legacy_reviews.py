@@ -9,6 +9,8 @@ publishes, rotates a credential, calls an IAM mutation, or sends mail.
 The source is a protected operator export, pinned by an explicit SHA-256. Runtime
 IAM credentials and Honeycomb's encryption key are read only from the host env file.
 Prepare requires the Python cryptography package for AES-256-GCM at-rest encryption.
+repair-operation only restores missing request bookkeeping in an exact unplanned
+handover made by the original operator; it never retries or changes that request.
 """
 import argparse
 import copy
@@ -149,6 +151,64 @@ def validate(source):
     return copy.deepcopy(config)
 
 
+def publication_operation(source, source_hash):
+    request_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "honeycomb:legacy-review:" + source_hash))
+    app = source["application"]["app_id"]
+    digest = hashlib.sha256(encoded({"kind": "publication.request", "app_id": app,
+        "revision": 1, "source_sha256": source_hash}).encode()).hexdigest()
+    return (request_id, "production", source["requests"][0]["requested_by"],
+        "legacy-review-publication:" + source_hash, "publication.request", app,
+        digest, 1, "accepted", None, None, min(timestamp(r["created_at"]) for r in source["requests"]))
+
+
+def ensure_publication_operation(db, source, source_hash):
+    expected = publication_operation(source, source_hash)
+    existing = db.execute("SELECT id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,error,result,created_at FROM operations WHERE id=?", (expected[0],)).fetchone()
+    if existing:
+        if existing != expected:
+            raise ValueError("Publication operation identity or provenance conflicts; refusing to overwrite")
+        return False
+    # Ordinary review planning saves its immutable encrypted request body with a
+    # foreign key to this row. 'accepted' records the request, not scope approval.
+    db.execute("INSERT INTO operations(id,plane,actor,idempotency_key,kind,resource,request_hash,revision,state,error,result,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", expected)
+    return True
+
+
+def repair_operation(db, source, source_hash):
+    config = validate(source)
+    config["visibility"] = "public"
+    record = source["application"]
+    request_id = publication_operation(source, source_hash)[0]
+    handover = db.execute("SELECT request_id,state,source_requests FROM legacy_review_handovers WHERE source_sha256=?", (source_hash,)).fetchone()
+    if not handover or handover[:2] != (request_id, "prepared") or json.loads(handover[2]) != source["requests"]:
+        raise ValueError("Only this exact prepared handover can repair request bookkeeping")
+    app = db.execute("SELECT revision,iam_revision,effective_revision,credential_version,visibility,state,config,effective_config FROM applications WHERE plane='production' AND app_id=?", (record["app_id"],)).fetchone()
+    if not app or app[:6] != (1, record["iam_revision"], 0, record["credential_version"] or 0, "private", "active" if record["availability"] == "verified" else "disabled") or json.loads(app[6]) != config:
+        raise ValueError("Application changed before bookkeeping repair")
+    effective = copy.deepcopy(config)
+    granted = {item["scope"] for item in record["effective_scopes"]}
+    effective["app_scope"]["iam"] = [s for s in record["app_scope"]["iam"] if s in granted]
+    effective["app_scope"]["external"] = [s for s in record["app_scope"]["external"] if "obo:" + s["app_id"] + ":" + s["endpoint_id"] in granted]
+    effective["visibility"] = "private"
+    effective.pop("webhook_url", None)
+    if json.loads(app[7]) != effective:
+        raise ValueError("Effective configuration changed before bookkeeping repair")
+    publication = db.execute("SELECT state,plan_id,requested_by,config_snapshot FROM publication_requests WHERE id=? AND plane='production' AND app_id=? AND revision=1", (request_id, record["app_id"])).fetchone()
+    if not publication or publication[:3] != ("awaiting_review_plan", None, source["requests"][0]["requested_by"]) or json.loads(publication[3]) != config:
+        raise ValueError("Request is no longer the original unplanned handover")
+    for table in ("review_gates", "decisions", "legacy_review_requests", "publication_authorizations"):
+        if db.execute("SELECT 1 FROM " + table + " WHERE request_id=?", (request_id,)).fetchone():
+            raise ValueError("Planning or review already started; stop bookkeeping repair")
+    if db.execute("SELECT 1 FROM management_requests WHERE operation_id=?", (request_id,)).fetchone() or db.execute("SELECT 1 FROM outbox WHERE plane='production' AND json_extract(payload,'$.app_id')=?", (record["app_id"],)).fetchone() or db.execute("SELECT 1 FROM releases WHERE plane='production' AND app_id=?", (record["app_id"],)).fetchone():
+        raise ValueError("Management, mail or release work already exists; stop bookkeeping repair")
+    expected_messages = sorted((m["id"], m["actor"] or "legacy-iam-system", r["provider"], m["message"], timestamp(m["created_at"])) for r in source["requests"] for m in r["messages"])
+    messages = db.execute("SELECT id,actor,provider,message,created_at FROM discussions WHERE request_id=? ORDER BY id", (request_id,)).fetchall()
+    if messages != expected_messages:
+        raise ValueError("Original discussion changed before bookkeeping repair")
+    inserted = ensure_publication_operation(db, source, source_hash)
+    return {"request_id": request_id, "state": "prepared", "operation_repaired": inserted, "replayed": not inserted}
+
+
 def prepare(db, source, source_hash, actor, encrypt):
     config = validate(source)
     record = source["application"]
@@ -183,6 +243,7 @@ def prepare(db, source, source_hash, actor, encrypt):
     db.execute("""INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot)
         VALUES(?,'production',?,1,'awaiting_review_plan',?,?,?)""",
                (request_id, record["app_id"], requested_by, created, encoded(config)))
+    ensure_publication_operation(db, source, source_hash)
     for request in source["requests"]:
         for message in request["messages"]:
             db.execute("INSERT INTO discussions(id,request_id,actor,provider,message,created_at) VALUES(?,?,?,?,?,?)",
@@ -276,7 +337,7 @@ def encryptor(settings):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--phase", choices=("prepare", "finalize"), required=True)
+    p.add_argument("--phase", choices=("prepare", "repair-operation", "finalize"), required=True)
     p.add_argument("--source", type=Path, required=True)
     p.add_argument("--expected-source-sha256", required=True)
     p.add_argument("--database", type=Path, required=True)
@@ -320,6 +381,8 @@ def main():
             raise RuntimeError("IAM changed since the export; prepare a fresh reviewed snapshot")
         if args.phase == "prepare":
             receipt = prepare(db, source, digest, args.actor, encryptor(settings))
+        elif args.phase == "repair-operation":
+            receipt = repair_operation(db, source, digest)
         else:
             plan = db.execute("SELECT p.plan_id FROM legacy_review_handovers h JOIN publication_requests p ON p.id=h.request_id WHERE h.source_sha256=?", (digest,)).fetchone()
             if not plan or not plan[0]:
