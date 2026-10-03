@@ -24,6 +24,7 @@
 .requests-page .requests-refresh-note{ margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .requests-page .requests-toolbar{ display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; justify-content: space-between; margin-bottom: 20px; }
 .requests-page .requests-filter-note{ color: var(--muted); font-size: 12px; }
+.requests-page .request-history-notice{ background: var(--surface); color: var(--muted); border-color: var(--line); }
 .requests-page .request-filter-count{ font-size: 11px; font-variant-numeric: tabular-nums; opacity: .65; margin-left: 5px; }
 .requests-page .request-list { display: grid; gap: 12px; border: 0; }
 .requests-page .request-card {

@@ -1,20 +1,11 @@
 import { createResource, createSignal, For, Show, onCleanup } from "solid-js";
 import { ArrowUpRight, RefreshCw, Inbox, Bell, ShieldCheck, CheckCheck } from "lucide-solid";
-import { request } from "./api";
-import { publicationStatus, type RequestActivity } from "./sent-requests";
+import { publicationStatus } from "./sent-requests";
+import { loadReceivedRequests, type ReceivedPage, type ReceivedRequest } from "./received-requests";
 import { SegmentedControl, StatusBadge } from "./ui/Arc";
 import "./request-pages.css";
 
-export type ReceivedRequest = RequestActivity & {
-  id: string;
-  provider: string;
-  app_id: string;
-  state: string;
-  request_state?: string;
-  can_decide?: boolean;
-  configuration?: { name?: string };
-  scopes: string[];
-};
+export type { ReceivedRequest } from "./received-requests";
 function displayState(item: ReceivedRequest) {
   return ["published", "denied", "superseded"].includes(item.request_state || "")
     ? item.request_state!
@@ -32,19 +23,13 @@ export default function ReceivedRequests(props: {
   open: (item: ReceivedRequest) => void;
 }) {
   const [filter, setFilter] = createSignal("all");
-  const [cached, setCached] = createSignal<{
-    items: ReceivedRequest[];
-    partial?: boolean;
-  }>();
+  const [cached, setCached] = createSignal<ReceivedPage>();
   let loadRevision = 0;
   const [result, { refetch }] = createResource(
     () => props.revision,
     async () => {
       const revision = ++loadRevision;
-      const loaded = await request<{
-        items: ReceivedRequest[];
-        partial?: boolean;
-      }>("/api/v1/review-requests?include_completed=true");
+      const loaded = await loadReceivedRequests();
       if (revision === loadRevision) setCached(loaded);
       return loaded;
     },
@@ -127,9 +112,10 @@ export default function ReceivedRequests(props: {
         </p>
       </Show>
       <Show when={latest()?.partial}>
-        <p class="inline-notice" role="status">
-          Some reviewer permissions could not be checked. Refresh to see all
-          available requests.
+        <p class="inline-notice" classList={{ "request-history-notice": latest()?.partialScope === "historical" }} role="status">
+          {latest()?.partialScope === "historical"
+            ? "Some historical reviews are unavailable. Current requests are up to date."
+            : "Some reviewer permissions could not be checked. Refresh to see all available requests."}
         </p>
       </Show>
       <Show
