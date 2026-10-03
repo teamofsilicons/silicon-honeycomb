@@ -73,6 +73,12 @@
     "description": "Declare IAM permissions and application-to-application endpoint access."
   },
   {
+    "slug": "app-to-app",
+    "title": "App-to-app verification",
+    "group": "Integrate",
+    "description": "Configure ATA endpoints and manage your signed application verifications from one workspace."
+  },
+  {
     "slug": "library",
     "title": "Use the application library",
     "group": "Use Honeycomb",

@@ -52,6 +52,10 @@ OBO means **on behalf of**. It lets one application call another for a particula
 
 Declare the required endpoints and their dependencies in application configuration, using the providers’ registered catalogs. Then, when the feature needs them, start a separate OBO authorization request. IAM shows the requesting application, the requested actions, the providers involved, and the declared dependency chain. Notes and warnings should explain consequences such as credit use or storage changes where relevant.
 
+On the website, open that review in a popup from the feature's button, with a registered application callback and request-bound state. Complete the one-use code exchange before reporting success to the original window. Check the completion message's origin, source window, and attempt identifier, just as you do for login. Keep credentials out of browser messages and preserve the initiating account, organization, and testing context throughout the review.
+
+If the feature supplied a validated return page when it started the request, return there after the exchange succeeds. Otherwise, show a clear completion page with a way back to the application. Closing, blocking, or declining the popup must leave the feature usable. If saving an approved result fails temporarily, retain a recoverable pending attempt and retry with the same operation identity rather than asking for consent again. CLI callers can use the returned review URL and manual code flow without requiring a browser popup.
+
 If Fieldnotes exposes its own delegated actions, add their definitions in Honeycomb too. A local ID such as `notes.read` becomes `[fieldnotes:obo:notes.read]`. Supply a clear name, endpoint path, description, critical/non-critical classification, and metadata. Add an optional note, explicit downstream dependencies, and applicable warnings from the predefined list, such as credit use. Register the backend origin and implement the handler’s verification and resource checks; a catalog entry describes the action but does not implement it.
 
 This is more useful than a vague “connect everything” prompt at sign-in. A person can see why speech and storage are being requested at that moment. They can also decline and continue using unrelated Fieldnotes features. After approval, redeem the one-use authorization code on the application backend and securely store the dedicated OBO credentials. Do not relabel the ordinary login token as delegated authority.
@@ -74,7 +78,7 @@ Different-account flows also depend on the receiving application’s resource po
 
 Some work belongs to an application itself. A scheduled service task may need another application’s endpoint without representing an individual user. That is the purpose of **app-to-app verification**, or ATA.
 
-Configure ATA endpoints in Honeycomb and create a verification as an authorized application manager. Review the expanded endpoint dependencies and the applications allowed to use that verification. Honeycomb records the signing Carbon or Silicon; the signer is audit information about who authorized the setup, not a user identity delegated to every runtime request.
+Configure ATA endpoints inside each application's configuration in Honeycomb. Create and manage your verifications from the console's centralized **App to App** page, choosing the originating application you manage. Review the expanded endpoint dependencies and the applications allowed to use that verification. Honeycomb records the signing Carbon or Silicon; the signer is audit information about who authorized the setup, not a user identity delegated to every runtime request. The [ATA reference](/app-to-app/) covers the management workflow.
 
 ATA definitions have their own IDs, such as `[fieldnotes:ata:notes.read]`. Honeycomb can import an OBO definition to save retyping, but that copies the description of an endpoint, not its user grant or dependency authority. Review the ATA dependencies independently.
 
@@ -128,6 +132,7 @@ Use this checklist as work to complete and evidence to collect. A configured end
 - [ ] Carbon and Silicon accounts can complete the intended workflows under equivalent permissions, without collecting IAM credentials inside the application.
 - [ ] Application login exchanges only an app-bound SLT; callback handling, secure session storage, refresh, and rejected credentials are exercised.
 - [ ] Carbon and Silicon buttons open separate typed login popups; the backend rejects the wrong identity type. Popup completion, cancellation, and validated return destinations work.
+- [ ] Feature-specific OBO approval opens in a popup, resumes the initiating context, and recovers from an interrupted exchange without creating duplicate work.
 - [ ] Each login remains bound to one account and organization. Multiple sessions, caches, pending approvals, and jobs stay separate when users switch context.
 - [ ] IAM scopes and provider endpoints match actual features. Missing or undisclosed authorization fields never become implied permission.
 - [ ] OBO starts at the feature that needs it. Approval, decline, code redemption, refresh, logout, recovery, and explicit revocation behave predictably.

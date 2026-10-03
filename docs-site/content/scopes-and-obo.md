@@ -37,6 +37,16 @@ The receiving service must verify IAM's delegated authorization, audience, endpo
 ## After an approval changes
 Reconcile accepted application state, then request the appropriate IAM login or separate OBO consent. A changed OBO dependency graph requires a fresh review; an ordinary login does not grant OBO access. [Authentication](/authentication/) and [webhook management](/webhooks/) cover those transitions.
 
+## Browser approval and return flow
+
+Request OBO when the user chooses a feature that needs it. Open the returned IAM authorization URL in a popup from that click; `display=popup` selects IAM's compact presentation. Supply your registered `redirect_uri` callback and bind its state to the initiating application session, account, organization, environment, and pending request.
+
+Your backend exchanges the one-use code and stores the dedicated OBO credentials before confirming completion. The callback can notify the original application window using an exact target origin and a fresh attempt identifier. The opener checks the message origin, source window, and identifier. Access tokens and refresh tokens never belong in browser messages.
+
+Validate any post-completion destination when starting the request and retain it with the pending operation. Do not accept a replacement destination from the callback. Redirect only after the exchange succeeds; without a destination, render a completion page with a return link. Handle popup closure, blocked popups, refusal, expiry, and uncertain exchange responses explicitly. Keep an uncertain exchange recoverable with its original operation identity; do not create another grant or repeat the underlying paid action automatically.
+
+CLI callers may retain a manual URL/code flow. See the [IAM OBO contract](https://docs.iam.teamofsilicons.com/client/obo/) for authorization, exchange, and receiver verification, and [Honeycomb's storage flow](/authentication/#browser-popups-and-return-destinations) for Honeycomb's own `return_url` and `redirect_url` fields.
+
 ## List the user's organization apps
 
 Honeycomb exposes the **critical** OBO endpoint `honeycomb.apps.list` at
