@@ -1,3 +1,5 @@
+Register and configure production applications through Honeycomb. Honeycomb creates and maintains the internal IAM application identity needed for authentication. Direct production app registration in IAM is retired; an existing IAM record alone is not a Honeycomb listing or approval request.
+
 ## A complete creation input
 Save the following as a protected JSON file. Replace the example organization, receiver, and signing secret before submitting. The description intentionally meets the minimum word count.
 ```json

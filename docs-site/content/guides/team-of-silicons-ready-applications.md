@@ -114,11 +114,13 @@ Testing deliveries need the same care. Verify the signed outer envelope, validat
 
 ## Publish an application people can understand
 
-Register Fieldnotes under its owning organization with a permanent, globally unique handle, a useful description, a recognizable logo, and the required webhook and permission configuration. Its ID is `fieldnotes`; its owner, `demo`, is stored separately. The console supports logo upload, and the CLI provides `apps upload-logo`. Uploaded logos are public assets even when the application is private, so choose suitable imagery.
+Register Fieldnotes through Honeycomb under its owning organization with a permanent, globally unique handle, a useful description, a recognizable logo, and the required webhook and permission configuration. Its ID is `fieldnotes`; its owner, `demo`, is stored separately. The console supports logo upload, and the CLI provides `apps upload-logo`. Uploaded logos are public assets even when the application is private, so choose suitable imagery.
 
 Prepare real native CLI builds for all six required platforms, place them under a root `honeycomb.yaml`, and validate the resulting archive. Honeycomb packages these builds; it does not compile them for you. Follow the [package format](/package-format/) and [application configuration](/application-config/) references.
 
 Keep configuration revisions distinct from release versions. A revision describes the application configuration used for an operation. A version such as `1.0.0` identifies immutable release bytes within a channel. Upload changed bytes under a new version, and read current state before using a revision precondition. Preserve the same input and idempotency key when retrying an uncertain operation.
+
+Honeycomb creates the internal IAM application identity as part of registration. Use Honeycomb for application configuration and permission reviews throughout the lifecycle; direct production registration in IAM is retired. App review emails and discussions belong in Honeycomb, while the individual user’s login and OBO consent remain in IAM.
 
 For public distribution, a valid production release and accepted configuration begin the approval workflow. Follow **Sent requests** for reviewer questions, status, and new updates; use **Received requests** for decisions you are authorized to make. An uploaded package or individual approval is not the same as completed publication. A permission-expanding update remains private while approval is pending, leaving the previous public release available to installations.
 

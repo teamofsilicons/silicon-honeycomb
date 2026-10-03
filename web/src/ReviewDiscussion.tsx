@@ -43,8 +43,11 @@ function tone(state: string): StatusTone {
 function reviewState(review: ReviewDetail) {
   return ["published", "denied", "superseded"].includes(review.request_state || "") ? review.request_state! : review.state;
 }
+function isGuidance(actor: string) {
+  return actor === "provider-review-guidance" || actor === "legacy-iam-system";
+}
 function actorName(actor: string) {
-  return actor === "provider-review-guidance" ? "Review guidance" : actor;
+  return isGuidance(actor) ? "Review guidance" : actor;
 }
 function timestamp(value?: number) {
   if (!value || !Number.isFinite(value)) return "";
@@ -124,9 +127,9 @@ export default function ReviewDiscussion(props: ReviewDiscussionProps) {
             </div>
             <Show when={review().messages?.length} fallback={<div class="discussion-empty"><span><MessageSquare size={21} /></span><h3>Start the conversation</h3><p>Ask a question or share context to help move this review forward.</p></div>}>
               <ol class="discussion-messages" aria-label="Review messages, oldest first">
-                <For each={review().messages}>{message => <li class={`discussion-message ${message.actor === "provider-review-guidance" ? "is-guidance" : ""}`}>
+                <For each={review().messages}>{message => <li class={`discussion-message ${isGuidance(message.actor) ? "is-guidance" : ""}`}>
                   <span class="discussion-avatar" aria-hidden="true">
-                    <Show when={message.actor === "provider-review-guidance"} fallback={message.actor.replace(/^[cs]:/, "").slice(0, 1).toUpperCase()}><ShieldCheck size={15} /></Show>
+                    <Show when={isGuidance(message.actor)} fallback={message.actor.replace(/^[cs]:/, "").slice(0, 1).toUpperCase()}><ShieldCheck size={15} /></Show>
                   </span>
                   <article>
                     <div class="discussion-message-meta"><strong>{actorName(message.actor)}</strong><Show when={props.currentActor && message.actor === props.currentActor}><span class="discussion-you">You</span></Show><Show when={timestamp(message.created_at)}><time dateTime={new Date(message.created_at! * 1000).toISOString()}>{timestamp(message.created_at)}</time></Show></div>

@@ -13,6 +13,7 @@
 | `POST` | `/api/v1/reports` | [`report`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/notifications.rs) |
 | `POST` | `/api/v1/telemetry` | [`ingest`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/telemetry.rs) |
 | `GET` | `/api/v1/review-requests` | [`inbox`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/reviews.rs) |
+| `GET` | `/api/v1/legacy-review-requests/{id}` | [`legacy_request`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/reviews.rs) |
 | `GET` | `/api/v1/sent-requests` | [`sent`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/request_activity.rs) |
 | `GET` | `/api/v1/request-activity` | [`summary`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/request_activity.rs) |
 | `POST` | `/api/v1/requests/{id}/read` | [`mark_read`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/request_activity.rs) |

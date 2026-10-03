@@ -4,6 +4,7 @@ import LoginComplete from "./LoginComplete";
 import { authorizeStorage } from "./storage-authorization";
 import Bundles from "./Bundles";
 import RequestLink from "./RequestLink";
+import LegacyRequestLink from "./LegacyRequestLink";
 import PublicApplication from "./PublicApplication";
 import ConsoleApplication, { InstallPanel } from "./ConsoleApplication";
 import ReviewDiscussion from "./ReviewDiscussion";
@@ -915,7 +916,7 @@ export default function App() {
                 </div>
               </Show>
               <Show when={activityError() && ["review-requests","sent-requests","discussion"].includes(view())}><p class="inline-notice" role="status">{activityError()} <button class="text-button" onClick={()=>void refreshActivity()}>Try again</button></p></Show>
-              <Show when={view()==="request-link"}><RequestLink requestId={new URLSearchParams(window.location.search).get("request")||""} appId={new URLSearchParams(window.location.search).get("app")||""} canManage={canManage} received={item=>void openReview(item,"received")} sent={app=>void select(app,"release")}/></Show>
+              <Show when={view()==="request-link"}><Show when={new URLSearchParams(window.location.search).has("legacy_request")} fallback={<RequestLink requestId={new URLSearchParams(window.location.search).get("request")||""} appId={new URLSearchParams(window.location.search).get("app")||""} canManage={canManage} received={item=>void openReview(item,"received")} sent={app=>void select(app,"release")}/>}><LegacyRequestLink query={window.location.search} open={review=>void openReview(review,review.direction)}/></Show></Show>
               <Show when={view() === "review-requests"}><ReceivedRequests revision={sentRevision()} open={item=>void openReview(item,"received")}/></Show>
               <Show when={view() === "sent-requests" && isConsole()}><SentRequests revision={sentRevision()} open={item=>void select(item.app,"release")} discuss={(item,sent)=>void openReview(item,"sent",sent)}/></Show>
               <Show when={view() === "ata-verifications" && isConsole()}><AtaVerifications/></Show>

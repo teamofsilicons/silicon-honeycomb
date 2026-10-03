@@ -19,7 +19,7 @@ Replace the revision with current state. Submission creates durable review work,
 3. Honeycomb validators review the package and publication after required provider approvals.
 4. IAM accepts activation and Honeycomb reconciles archive visibility before publication is complete.
 
-Requested access, approval, effective permissions, and public archive access are distinct states. The current production integration still has contract gaps; a pending operation must remain pending until the responsible service confirms it.
+Requested access, approval, effective permissions, and public archive access are distinct states. A pending operation remains pending until the responsible service confirms it. All application review discussions and notification emails belong to Honeycomb, including reviews of critical IAM permissions. IAM validates reviewer authority and enforces the resulting permission decisions. User login consent and personal OBO consent remain in IAM.
 
 ## Participate as a reviewer
 ```sh
@@ -36,4 +36,4 @@ honeycomb publication reply 'my-app' --message 'Additional justification for the
 honeycomb publication retry-plan REQUEST_ID --revision 1
 honeycomb publication activate REQUEST_ID --revision 1
 ```
-Use the request's current revision and only perform actions your role permits. The console provides the same discussions under **Review requests**. [Operations and retries](/operations/) explains recovery without duplicate work.
+Use the request's current revision and only perform actions your role permits. The console provides the same discussions under **Received requests** and **Sent requests**, each with its own discussion page. Migrated legacy IAM email links retain their original request ID and open the corresponding Honeycomb discussion after current access is checked. [Operations and retries](/operations/) explains recovery without duplicate work.

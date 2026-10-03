@@ -1,3 +1,4 @@
+import { parseDiscussionRoute } from "../src/console-route.ts";
 import { parseApplicationRoute } from "../src/application-route.ts";
 export function loginReturnPath(value: unknown): string {
   if (
@@ -15,7 +16,8 @@ export function loginReturnPath(value: unknown): string {
       !["/", "/requests", "/requests/received", "/requests/sent"].includes(
         url.pathname,
       ) &&
-      !parseApplicationRoute(url.pathname)
+      !parseApplicationRoute(url.pathname) &&
+      !parseDiscussionRoute(url.pathname)
     )
       return "/";
     return url.pathname + url.search;
