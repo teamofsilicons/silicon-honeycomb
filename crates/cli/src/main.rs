@@ -218,7 +218,15 @@ enum Ata {
 #[derive(Subcommand)]
 enum StorageAuthorization {
     /// Request Briefcase access when uploading logos or releases.
-    Start { org_id: String },
+    Start {
+        org_id: String,
+        /// Honeycomb /storage-authorization callback; omit for a manual code.
+        #[arg(long)]
+        return_url: Option<String>,
+        /// Page to open after completion, on the same Honeycomb origin as return-url.
+        #[arg(long, requires = "return_url")]
+        redirect_url: Option<String>,
+    },
     /// Inspect a request, optionally waiting for completion in another browser or CLI.
     Status {
         authorization_id: String,
@@ -1010,9 +1018,18 @@ async fn execute(cli: &Cli, progress: &Progress) -> Result<()> {
                 show(&client.reconcile_app(app_id, &mutation(cli, None)?).await?)?
             }
             Apps::Storage { command } => match command {
-                StorageAuthorization::Start { org_id } => {
+                StorageAuthorization::Start {
+                    org_id,
+                    return_url,
+                    redirect_url,
+                } => {
                     let value = client
-                        .storage_authorization_start(org_id, None, &operation)
+                        .storage_authorization_start_with_redirect(
+                            org_id,
+                            return_url.as_deref(),
+                            redirect_url.as_deref(),
+                            &operation,
+                        )
                         .await?;
                     show(&value)?;
                     eprintln!(

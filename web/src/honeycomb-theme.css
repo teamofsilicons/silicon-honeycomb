@@ -244,3 +244,18 @@ dialog::backdrop { background:#17243d55; backdrop-filter:blur(3px); }
   .sign-in h1 { font-size:2rem; }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+
+/* Separate identity entry points share the same accessible popup flow. */
+.login-choice { display: grid; gap: 10px; }
+.login-choice > p { margin: 0; }
+.login-choice-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.sign-in .login-choice-buttons { justify-content: center; }
+.login-choice.compact .button { padding: 8px 12px; font-size: 13px; }
+.login-choice .field-error { max-width: 440px; font-size: 13px; }
+@media (max-width: 700px) {
+  .topbar-actions .login-choice-buttons { gap: 6px; }
+  .topbar-actions .login-choice.compact .button { padding: 7px 8px; font-size: 11px; }
+  .topbar-actions .login-choice .button svg { display: none; }
+  .sign-in .login-choice-buttons { flex-direction: column; }
+  .login-choice-buttons .button { justify-content: center; }
+}

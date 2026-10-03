@@ -1,4 +1,6 @@
 import StorageCallback from "./StorageCallback";
+import LoginButtons from "./LoginButtons";
+import LoginComplete from "./LoginComplete";
 import { authorizeStorage } from "./storage-authorization";
 import Bundles from "./Bundles";
 import RequestLink from "./RequestLink";
@@ -162,6 +164,7 @@ const blank = () => ({
 
 export default function App() {
   if(window.location.pathname==="/storage-authorization")return <StorageCallback/>;
+  if(window.location.pathname==="/login-complete")return <LoginComplete/>;
   const [config, setConfig] = createSignal<Config>({
     site: "library",
     libraryOrigin: "/",
@@ -171,7 +174,6 @@ export default function App() {
   const [sessionReady, setSessionReady] = createSignal(false);
   const initialView = () => viewForPath(window.location.pathname);
   const [view, setView] = createSignal(initialView());
-  const loginHref=()=>`/auth/login?next=${encodeURIComponent(window.location.pathname+window.location.search)}`;
   const [applicationRoute, setApplicationRoute] = createSignal(parseConsoleApplicationRoute(window.location.pathname) || parseApplicationRoute(window.location.pathname));
   const [discussionRoute, setDiscussionRoute] = createSignal(parseDiscussionRoute(window.location.pathname));
   const [reviewLoading, setReviewLoading] = createSignal(false);
@@ -831,10 +833,7 @@ export default function App() {
             <Show
               when={session().authenticated}
               fallback={
-                <a class="button subtle" href={loginHref()}>
-                  Sign in with IAM
-                  <ArrowRight size={16} />
-                </a>
+                <LoginButtons compact/>
               }
             >
               <span class="account">
@@ -893,11 +892,8 @@ export default function App() {
                     Bring your tools to the Silicon ecosystem. Manage releases,
                     configure access, and publish when you’re ready.
                   </p>
-                  <a href={loginHref()} class="button primary">
-                    Continue with IAM
-                    <ArrowRight size={17} />
-                  </a>
-                  <small>Sign in as a Carbon or Silicon to get started.</small>
+                  <LoginButtons/>
+                  <small>Secure sign-in opens in a small IAM window.</small>
                   <div class="signin-note">
                     <Lock size={19} />
                     <span>
@@ -915,7 +911,7 @@ export default function App() {
                       ? "IAM hasn’t provided an organization owner or admin role. Honeycomb needs membership access from IAM before you can create applications. After that access is enabled, sign in again and approve it."
                       : "Creating applications requires an organization owner or admin role. Ask an organization owner to update your access, then sign in again."}
                   </span>
-                  <a class="text-link" href={loginHref()}>Sign in again <ArrowRight size={16} /></a>
+                  <LoginButtons compact label="Sign in again"/>
                 </div>
               </Show>
               <Show when={activityError() && ["review-requests","sent-requests","discussion"].includes(view())}><p class="inline-notice" role="status">{activityError()} <button class="text-button" onClick={()=>void refreshActivity()}>Try again</button></p></Show>
@@ -957,9 +953,7 @@ export default function App() {
                 <Show
                   when={session().authenticated}
                   fallback={
-                    <a class="button outline" href={loginHref()}>
-                      Sign in to leave a review
-                    </a>
+                    <LoginButtons label="Sign in to leave a review"/>
                   }
                 >
                   <form

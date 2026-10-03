@@ -1,3 +1,4 @@
+import { signIn } from "./sign-in";
 import { readFileSync } from "node:fs";
 const logoPng = readFileSync(new URL("./fixtures/logo.png", import.meta.url));
 import { test, expect } from "@playwright/test";
@@ -48,7 +49,7 @@ test("registration validates the first archive and retries its upload without re
       await route.continue();
     });
     await page.goto(consoleSite);
-    await page.getByRole("link", { name: "Continue with IAM" }).click();
+    await signIn(page);
     await page.getByRole("button", { name: "Create application", exact: true }).click();
     const form = page.getByRole("dialog", { name: "Create an application", exact: true });
     await expect(form.getByLabel("Publication preference")).toHaveValue("public");
@@ -149,7 +150,7 @@ for (const role of [null, "org_member", "org_owner"]) {
       await expect(page.locator("#application-access-help")).toContainText(
         role === null ? "Honeycomb needs membership access" : "Ask an organization owner",
       );
-      await expect(page.locator("#application-access-help").getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/auth/login?next=%2F");
+      await expect(page.locator("#application-access-help").getByRole("button", { name: "Continue as Carbon" })).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
@@ -174,7 +175,7 @@ test("public catalog, typo search, private visibility, sign-in and sign-out", as
     page.getByRole("heading", { name: "Waveform", exact: true }),
   ).toHaveCount(0);
   await page.getByRole("searchbox", { name: "Search applications" }).fill("");
-  await page.getByRole("link", { name: "Sign in with IAM" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Internal tools", exact: true }),
   ).toBeVisible();
@@ -200,7 +201,7 @@ test("console is gated and creates a private application through the backend", a
   await expect(
     page.getByRole("button", { name: "Create application", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Your applications" }),
   ).toBeVisible();
@@ -306,7 +307,7 @@ test("draft closing flushes the latest fields and scope edits", async ({
   page,
 }) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await page
     .getByRole("button", { name: "Create application", exact: true })
     .click();
@@ -341,7 +342,7 @@ test("testing setup shows per-service failures and supports retry", async ({
   page,
 }) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Your applications", exact: true }),
   ).toBeVisible();
@@ -402,7 +403,7 @@ test("concurrent browser requests share one rotating refresh and sign out cleanl
 
 test("console import exposes pending integration without disabling the ready environment", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Testing environments", exact: true }).click();
@@ -423,7 +424,7 @@ test("console import exposes pending integration without disabling the ready env
 
 test("secret rotation is explicit and browser retries preserve the same operation", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   const name=info.project.name === "desktop" ? "Briefcase" : "Waveform";
   const appId=`${name.toLowerCase()}`;
@@ -461,7 +462,7 @@ test("secret rotation is explicit and browser retries preserve the same operatio
 
 test("provider administrators can discuss and approve their review gate", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: /^Received requests(?: \d+ (?:new updates?|pending approvals?))?$/ }).click();
@@ -499,7 +500,7 @@ test("console shows the automatic publication request and publishes an approved 
   const appId = `${handle}`, name = `Public release ${info.project.name}`;
   try {
     await page.goto(consoleSite);
-    await page.getByRole("link", { name: "Continue with IAM" }).click();
+    await signIn(page);
     await expect(page.getByRole("heading", { name: "Your applications" })).toBeVisible();
     const create = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
       headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
@@ -551,13 +552,13 @@ test("console shows the automatic publication request and publishes an approved 
     await page.goto(library);
     await page.getByRole("searchbox", { name: "Search applications" }).fill(name);
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Sign in with IAM" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue as Carbon" }).first()).toBeVisible();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("permission picker reflects IAM eligibility and preserves scope edits", async ({ page }) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await page.getByRole("button", { name: "Create application", exact: true }).click();
   const dialog=page.getByRole("dialog");
   await dialog.getByRole("button", { name: "Configure scopes & delegation endpoints" }).click();
@@ -580,7 +581,7 @@ test("permission picker reflects IAM eligibility and preserves scope edits", asy
 
 test("logo upload retries a lost response using the same operation", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await page.getByRole("button", { name: "Create application", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await page.route("https://briefcase.fixture.invalid/**", route => route.fulfill({ contentType: "image/png", body: logoPng }));

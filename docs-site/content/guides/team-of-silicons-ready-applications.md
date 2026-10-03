@@ -20,6 +20,10 @@ Fieldnotes needs a signed-in application user. It does not need the user’s IAM
 
 For a browser flow, send the user to IAM with Fieldnotes’ application ID and the callback that your backend actually implements. IAM handles account authentication and selection. The callback receives an SLT; your backend exchanges it using Fieldnotes’ own application credential and establishes an application session. Bind the callback to the login attempt that started it, and remove the token from the address bar after handling it. Keep the application secret on the backend.
 
+Offer **Continue as Carbon** and **Continue as Silicon** as separate buttons. Open a small popup from the click, passing `identity_kind=carbon` or `identity_kind=silicon` and `display=popup` to IAM. Save the selected type with the login state on your backend. Before creating the application session, verify that the exchanged credential belongs to that type using IAM's authenticated response or introspection. IAM presents the matching accounts, and selecting an organization continues as that account and organization immediately.
+
+Once your callback has established the session, the popup can send a completion message to the exact application origin. The opener must check the message origin, popup window and a fresh request nonce; never pass tokens through the message. Close the popup and resume the page that started login. Preserve a validated return destination with the original request when another page should open after completion. Handle closed or blocked popups clearly and retain a standalone completion page when no destination was supplied.
+
 A terminal flow reaches the same handoff. The official IAM client can obtain an SLT for an already authenticated Carbon or Silicon, and the application CLI submits that token to its own backend. The application should not recreate IAM’s authentication ceremony to make a headless flow possible.
 
 After the exchange, read the current authorization rather than waiting for a webhook to initialize access. Store and refresh the application session securely, serialize refreshes for the same credential family, and retain a stable retry identity when a response is uncertain. A temporary transport failure is different from an explicit credential rejection; the former should not randomly sign the user out. Follow the [application login contract](https://docs.iam.teamofsilicons.com/client/login/) and [Honeycomb authentication guide](/authentication/) for the supported interfaces.
@@ -123,6 +127,7 @@ Use this checklist as work to complete and evidence to collect. A configured end
 - [ ] Every user-facing capability has a usable CLI/API path, clear help, structured results, and an understandable recovery action.
 - [ ] Carbon and Silicon accounts can complete the intended workflows under equivalent permissions, without collecting IAM credentials inside the application.
 - [ ] Application login exchanges only an app-bound SLT; callback handling, secure session storage, refresh, and rejected credentials are exercised.
+- [ ] Carbon and Silicon buttons open separate typed login popups; the backend rejects the wrong identity type. Popup completion, cancellation, and validated return destinations work.
 - [ ] Each login remains bound to one account and organization. Multiple sessions, caches, pending approvals, and jobs stay separate when users switch context.
 - [ ] IAM scopes and provider endpoints match actual features. Missing or undisclosed authorization fields never become implied permission.
 - [ ] OBO starts at the feature that needs it. Approval, decline, code redemption, refresh, logout, recovery, and explicit revocation behave predictably.

@@ -6635,3 +6635,82 @@ async fn stale_review_emails_do_not_ask_for_completed_or_superseded_approvals() 
             .unwrap();
     assert_eq!(state, "superseded");
 }
+
+#[tokio::test]
+async fn rejected_draft_endpoint_paths_can_be_corrected_but_accepted_paths_are_immutable() {
+    let (mut s, _) = setup(true).await;
+    let mut config = input("endpoint-draft");
+    let (status, _) = call(
+        &s,
+        "POST",
+        "/api/v1/apps",
+        Some("admin"),
+        config.clone(),
+        "create-endpoint-draft",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    s.management = Arc::new(Manager { accept: false });
+    config["base_url"] = json!("https://example.com");
+    config["obo_endpoints"] = json!([{"endpoint_id":"draft.read","path":"/draft","critical":true}]);
+    let (status, pending) = call(
+        &s,
+        "PUT",
+        "/api/v1/apps/endpoint-draft",
+        Some("admin"),
+        config.clone(),
+        "unaccepted-endpoint-draft",
+        Some(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{pending}");
+    assert_eq!(pending["state"], "pending");
+    config["obo_endpoints"][0]["path"] = json!("/obo/draft/read");
+    s.management = Arc::new(Manager { accept: true });
+    let (status, accepted) = call(
+        &s,
+        "PUT",
+        "/api/v1/apps/endpoint-draft",
+        Some("admin"),
+        config.clone(),
+        "correct-endpoint-draft",
+        Some(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert_eq!(accepted["state"], "accepted");
+    config["obo_endpoints"][0]["path"] = json!("/another-path");
+    let (status, rejected) = call(
+        &s,
+        "PUT",
+        "/api/v1/apps/endpoint-draft",
+        Some("admin"),
+        config.clone(),
+        "move-accepted-endpoint",
+        Some(3),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot move")
+    );
+    sqlx::query("UPDATE applications SET effective_config='null' WHERE app_id='endpoint-draft'")
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (status, _) = call(
+        &s,
+        "PUT",
+        "/api/v1/apps/endpoint-draft",
+        Some("admin"),
+        config,
+        "unknown-accepted-config",
+        Some(3),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}

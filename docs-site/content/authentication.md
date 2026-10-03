@@ -55,3 +55,11 @@ Honeycomb stores the resulting storage access/refresh credentials separately fro
 | IAM step-up assertion | Fresh, action-bound proof for sensitive credential/webhook changes. |
 
 These credentials are not interchangeable. Do not put application secrets or environment keys in frontend bundles, repositories, package archives, or documentation.
+
+## Browser popups and return destinations
+
+Show separate **Continue as Carbon** and **Continue as Silicon** buttons. Honeycomb opens IAM in a popup with `identity_kind=carbon|silicon` and `display=popup`, binds the chosen type and return page to signed login state, exchanges the SLT on its server, and checks the returned identity before setting the application session. The popup sends only a completion signal to the originating Honeycomb window; it never sends access or refresh tokens through browser messages.
+
+OBO approval also opens in a popup when a feature needs storage. `POST /api/v1/storage-authorizations` accepts `org_id`, an optional `return_url` pointing to an allowed Honeycomb origin's `/storage-authorization` callback, and an optional `redirect_url` for the page to visit after successful completion. The redirect must use the same Honeycomb origin, requires `return_url`, and is bound to the original request and idempotency key. It cannot be changed on the callback. The callback completes the exchange before redirecting. Without `redirect_url`, it shows the **Return to Honeycomb** page; popup callers can close that window and resume their feature.
+
+The CLI supports `apps storage start ORG --return-url URL --redirect-url URL`. Omit both URLs for the manual CLI consent-code flow. Applications integrating directly with IAM should use their registered `redirect_uri` callback, bind any later return destination to their own request state, and use exact-origin, exact-window completion checks.

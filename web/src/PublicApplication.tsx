@@ -1,3 +1,4 @@
+import LoginButtons from "./LoginButtons";
 import {
   createResource,
   createSignal,
@@ -538,12 +539,7 @@ export default function PublicApplication(props: {
                     <Show
                       when={props.authenticated}
                       fallback={
-                        <a
-                          class="button outline"
-                          href={`/auth/login?next=${encodeURIComponent(window.location.pathname)}`}
-                        >
-                          Sign in to leave a review
-                        </a>
+                        <LoginButtons label="Sign in to leave a review"/>
                       }
                     >
                       <form class="review-form" onSubmit={saveReview}>

@@ -412,3 +412,91 @@ async fn iam_unknown_codes_and_malformed_correlation_ids_are_not_exposed() {
     let error = exchange_failure(500, "SECRET_UNKNOWN_CODE", "SECRET_REQUEST_ID").await;
     assert_eq!(error.1.details, vec!["upstream_status=500"]);
 }
+
+#[tokio::test]
+async fn completion_redirect_is_same_origin_bound_to_request_and_returned_after_exchange() {
+    let (broker, _) = broker(false).await;
+    let callback = Some("https://console.example/storage-authorization");
+    for target in [
+        "https://evil.example/",
+        "https://console.example.evil.invalid/",
+        "https://user@console.example/apps/app",
+        "https://console.example/auth/login",
+        "https://console.example/storage-authorization",
+    ] {
+        assert!(
+            broker
+                .start_with_redirect(
+                    "acme",
+                    callback,
+                    Some(target),
+                    "c:owner",
+                    None,
+                    "bad-redirect"
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        broker
+            .start_with_redirect(
+                "acme",
+                None,
+                Some("https://console.example/apps/app"),
+                "c:owner",
+                None,
+                "missing-callback"
+            )
+            .await
+            .is_err()
+    );
+    let target = "https://console.example/apps/app/releases";
+    let started = broker
+        .start_with_redirect(
+            "acme",
+            callback,
+            Some(target),
+            "c:owner",
+            None,
+            "redirect-bound-request",
+        )
+        .await
+        .unwrap();
+    assert!(
+        broker
+            .start_with_redirect(
+                "acme",
+                callback,
+                Some("https://console.example/apps/other"),
+                "c:owner",
+                None,
+                "redirect-bound-request"
+            )
+            .await
+            .is_err()
+    );
+    let result = broker
+        .complete(
+            REQUEST.parse().unwrap(),
+            "obc_authorization_code",
+            started["state"].as_str().unwrap(),
+            "c:owner",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["status"], "ready");
+    assert_eq!(result["redirect_url"], target);
+    let replay = broker
+        .complete(
+            REQUEST.parse().unwrap(),
+            "obc_authorization_code",
+            started["state"].as_str().unwrap(),
+            "c:owner",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay["redirect_url"], target);
+}

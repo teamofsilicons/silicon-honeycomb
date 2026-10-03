@@ -43,7 +43,7 @@ export default function StorageCallback() {
       return;
     }
     try {
-      await request(
+      const result = await request<{ redirect_url?: string | null }>(
         `/api/v1/storage-authorizations/${encodeURIComponent(id)}/complete`,
         {
           method: "POST",
@@ -53,6 +53,11 @@ export default function StorageCallback() {
       );
       setStatus("complete");
       notify();
+      if (result.redirect_url) {
+        const target = new URL(result.redirect_url);
+        if (target.origin !== window.location.origin) throw new Error("The saved return destination is invalid.");
+        window.location.replace(target.href);
+      }
     } catch (error) {
       setError((error as Error).message);
       setStatus("error");
@@ -80,7 +85,7 @@ export default function StorageCallback() {
           <p role="status">
             Storage access is connected. You can return to your application.
           </p>
-          <button class="button primary" onClick={() => window.close()}>
+          <button class="button primary" onClick={() => window.opener ? window.close() : window.location.assign("/")}>
             Return to Honeycomb
             <ArrowLeft size={16} />
           </button>

@@ -1,9 +1,10 @@
+import { signIn } from "./sign-in";
 import { test, expect } from "@playwright/test";
 const consoleSite = "http://localhost:19174";
 
 test("webhook approval and signing-secret rotation use transient verification and durable retry", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   const handle = `webhook-${info.project.name}-${Date.now()}`;
   const name = `Webhook test ${info.project.name}`, appId = `${handle}`;
   const created = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
@@ -41,7 +42,7 @@ test("webhook approval and signing-secret rotation use transient verification an
 
 test("environment retention persists and reports per-application activity", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Testing environments", exact: true }).click();
@@ -63,7 +64,7 @@ test("environment retention persists and reports per-application activity", asyn
 
 test("automatic cleanup exposes pending service receipts and preserves its retry operation", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name:"Your applications", exact:true })).toBeVisible();
   if (await page.getByRole("button", { name:"Open navigation" }).isVisible()) await page.getByRole("button", { name:"Open navigation" }).click();
   await page.getByRole("button", { name:"Testing environments", exact:true }).click();

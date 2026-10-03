@@ -4,7 +4,7 @@ import { marked } from "marked";
 const pages = JSON.parse(await readFile("pages.json", "utf8"));
 const base = "https://docs.honeycomb.teamofsilicons.com";
 const release = JSON.parse(await readFile("release.json", "utf8"));
-const releaseNotice = release.status === "preview" ? `<div class="release-notice" role="note"><strong>Honeycomb ${release.version} · IAM 5 migration preview</strong><p>The updated contracts are published before the runtime rollout. Prepare your application now; production has not switched yet. <a href="https://docs.iam.teamofsilicons.com/migrating-to-iam-5/">Read the migration guide →</a></p></div>` : "";
+const releaseNotice = release.status === "preview" ? `<div class="release-notice" role="note"><strong>Honeycomb ${release.version} · IAM 5 migration preview</strong><p>The updated contracts are published before the runtime rollout. Prepare your application now; production has not switched yet. <a href="https://docs.iam.teamofsilicons.com/migrating-to-iam-5/">Read the migration guide →</a></p></div>` : release.status === "rolling-out" ? `<div class="release-notice" role="note"><strong>Honeycomb ${release.version} and IAM 5 are live</strong><p>The services have switched to IAM 5. Installer publication and the latest popup improvements are being verified. <a href="https://docs.iam.teamofsilicons.com/migrating-to-iam-5/">Read the migration guide →</a></p></div>` : "";
 const escape = (s) =>
   String(s).replace(
     /[&<>"']/g,

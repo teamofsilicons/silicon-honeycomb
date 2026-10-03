@@ -472,6 +472,10 @@ Arguments:
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --return-url <RETURN_URL>
+          Honeycomb /storage-authorization callback; omit for a manual code
+      --redirect-url <REDIRECT_URL>
+          Page to open after completion, on the same Honeycomb origin as return-url
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json

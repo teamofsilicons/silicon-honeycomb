@@ -792,7 +792,18 @@ async fn save_app(
         if Some(a.revision) != expected {
             return Err(Error::conflict("Application revision has changed"));
         }
-        let old = a.config["obo_endpoints"]
+        if !a.effective_config.is_object()
+            || a.effective_config
+                .get("obo_endpoints")
+                .is_some_and(|v| !v.is_array())
+        {
+            return Err(Error::unavailable(
+                "The accepted application configuration is unavailable; reconcile before editing endpoints",
+            ));
+        }
+        // Draft endpoints that IAM has never accepted can still be corrected.
+        // IAM remains authoritative for previously accepted or retired IDs.
+        let old = a.effective_config["obo_endpoints"]
             .as_array()
             .cloned()
             .unwrap_or_default();

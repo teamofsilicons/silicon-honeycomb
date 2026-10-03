@@ -101,12 +101,49 @@ impl Broker {
         environment: Option<&str>,
         idem: &str,
     ) -> Result<Value> {
+        self.start_with_redirect(org, return_url, None, token, environment, idem)
+            .await
+    }
+    pub async fn start_with_redirect(
+        &self,
+        org: &str,
+        return_url: Option<&str>,
+        redirect_url: Option<&str>,
+        token: &str,
+        environment: Option<&str>,
+        idem: &str,
+    ) -> Result<Value> {
         if let Some(uri) = return_url {
             self.callback(uri)?;
         }
+        if let Some(destination) = redirect_url {
+            let callback = return_url
+                .and_then(|s| url::Url::parse(s).ok())
+                .ok_or_else(|| Error::bad("redirect_url requires a Honeycomb return_url"))?;
+            let target =
+                url::Url::parse(destination).map_err(|_| Error::bad("Invalid redirect_url"))?;
+            if destination.len() > 2048
+                || target.as_str() != destination
+                || target.origin() != callback.origin()
+                || !target.username().is_empty()
+                || target.password().is_some()
+                || target.fragment().is_some()
+                || target.path() == "/storage-authorization"
+                || target.path() == "/login-complete"
+                || target.path() == "/auth"
+                || target.path().starts_with("/auth/")
+            {
+                return Err(Error::bad(
+                    "redirect_url must use the same Honeycomb origin and a normal application page",
+                ));
+            }
+        }
         let return_url = return_url.unwrap_or("");
         let (identity, plane, generation) = self.caller(token, environment, org).await?;
-        let hash = hex::encode(Sha256::digest(format!("{org}:{return_url}")));
+        let hash = hex::encode(Sha256::digest(match redirect_url {
+            Some(url) => format!("{org}:{return_url}:redirect:{url}"),
+            None => format!("{org}:{return_url}"),
+        }));
         let id = uuid::Uuid::new_v4().to_string();
         let state = format!(
             "{}{}",
@@ -118,8 +155,8 @@ impl Broker {
             body.as_object_mut().unwrap().remove("redirect_uri");
             body.as_object_mut().unwrap().remove("state");
         }
-        sqlx::query("INSERT OR IGNORE INTO storage_authorizations(id,plane,generation,actor,org_id,idempotency_key,request_hash,callback_state,redirect_uri,expires_at,exchange_key,created_at,encrypted_request) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
-   .bind(&id).bind(&plane).bind(generation).bind(&identity.principal_id).bind(org).bind(idem).bind(&hash).bind(&state).bind(return_url).bind(now()+600).bind(uuid::Uuid::new_v4().to_string()).bind(now()).bind(crate::encrypt(&self.encryption_key,&body.to_string())?).execute(&self.db).await?;
+        sqlx::query("INSERT OR IGNORE INTO storage_authorizations(id,plane,generation,actor,org_id,idempotency_key,request_hash,callback_state,redirect_uri,expires_at,exchange_key,created_at,encrypted_request,post_redirect_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+   .bind(&id).bind(&plane).bind(generation).bind(&identity.principal_id).bind(org).bind(idem).bind(&hash).bind(&state).bind(return_url).bind(now()+600).bind(uuid::Uuid::new_v4().to_string()).bind(now()).bind(crate::encrypt(&self.encryption_key,&body.to_string())?).bind(redirect_url).execute(&self.db).await?;
         let row=sqlx::query("SELECT * FROM storage_authorizations WHERE plane=? AND generation=? AND actor=? AND idempotency_key=?").bind(&plane).bind(generation).bind(&identity.principal_id).bind(idem).fetch_one(&self.db).await?;
         if row.get::<String, _>("request_hash") != hash {
             return Err(Error::conflict(
@@ -193,7 +230,9 @@ impl Broker {
             return Err(Error::unauthorized());
         }
         if row.get::<String, _>("status") == "ready" {
-            return Ok(json!({"authorization_id":id,"status":"ready"}));
+            return Ok(
+                json!({"authorization_id":id,"status":"ready","redirect_url":row.get::<Option<String>,_>("post_redirect_url")}),
+            );
         }
         if row.get::<i64, _>("expires_at") <= now() {
             return Err(Error::bad("Storage authorization expired"));
@@ -240,7 +279,9 @@ impl Broker {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(json!({"authorization_id":id,"status":"ready"}))
+        Ok(
+            json!({"authorization_id":id,"status":"ready","redirect_url":row.get::<Option<String>,_>("post_redirect_url")}),
+        )
     }
     pub async fn token(
         &self,
@@ -307,6 +348,7 @@ impl Broker {
 struct Start {
     org_id: String,
     return_url: Option<String>,
+    redirect_url: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -332,9 +374,10 @@ async fn start(S(s): S<State>, h: HeaderMap, Json(input): Json<Start>) -> Result
         .ok_or_else(|| required(&input.org_id))?;
     Ok(Json(
         broker
-            .start(
+            .start_with_redirect(
                 &input.org_id,
                 input.return_url.as_deref(),
+                input.redirect_url.as_deref(),
                 token,
                 c.environment.as_deref(),
                 key(&h)?,

@@ -1,5 +1,6 @@
 import express from "express";
 import { loginReturnPath } from "./login-return.ts";
+import { identityKind, signLoginContext, readLoginContext } from "./login-context.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import packageInfo from "../package.json" with { type: "json" };
 import { DatabaseSync } from "node:sqlite";
@@ -165,6 +166,12 @@ app.get("/api/session", async (req, res) => {
 });
 app.get("/auth/login", async (req, res) => {
   try {
+    const kind = identityKind(req.query.identity_kind);
+    if (req.query.identity_kind !== undefined && !kind) {
+      res.status(400).send("Choose Continue as Carbon or Continue as Silicon to sign in.");
+      return;
+    }
+    const nonce = req.query.popup === "1" && typeof req.query.popup_nonce === "string" && /^[a-f0-9-]{36}$/.test(req.query.popup_nonce) ? req.query.popup_nonce : undefined;
     const response = await api("iam");
     if (!response.ok)
       throw new Error("IAM sign-in is temporarily unavailable.");
@@ -174,12 +181,14 @@ app.get("/auth/login", async (req, res) => {
     };
     const state = randomBytes(32).toString("hex");
     setCookie(res, stateCookie, state, 600, "/auth");
-    setCookie(res, `${stateCookie}_return`, `${state}.${Buffer.from(loginReturnPath(req.query.next)).toString("base64url")}`, 600, "/auth");
+    setCookie(res, `${stateCookie}_context`, signLoginContext({ state, kind, next: loginReturnPath(req.query.next), nonce, expires: Date.now() + 600000 }, key), 600, "/auth");
     const callback = new URL("/auth/callback", origin);
     callback.searchParams.set("state", state);
     const login = new URL("/login", iam.login_url);
     login.searchParams.set("app_id", iam.app_id);
     login.searchParams.set("redirect_uri", callback.href);
+    if (kind) login.searchParams.set("identity_kind", kind);
+    if (nonce) login.searchParams.set("display", "popup");
     res.redirect(login.href);
   } catch (e) {
     fail(res, e);
@@ -190,11 +199,12 @@ app.get("/auth/callback", async (req, res) => {
     const supplied = typeof req.query.state === "string" ? req.query.state : "";
     const expected = cookie(req, stateCookie) || "";
     const slt = typeof req.query.slt === "string" ? req.query.slt : "";
+    const context = readLoginContext(cookie(req, `${stateCookie}_context`) || "", supplied, key);
     if (
       !expected ||
       supplied.length !== expected.length ||
       !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected)) ||
-      !slt
+      !slt || !context
     ) {
       res
         .status(400)
@@ -203,9 +213,7 @@ app.get("/auth/callback", async (req, res) => {
         );
       return;
     }
-    const savedReturn=cookie(req,`${stateCookie}_return`) || "";
-    const returnPath=savedReturn.startsWith(`${expected}.`) ? loginReturnPath(Buffer.from(savedReturn.slice(expected.length+1),"base64url").toString("utf8")) : "/";
-    setCookie(res, `${stateCookie}_return`, "", 0, "/auth");
+    setCookie(res, `${stateCookie}_context`, "", 0, "/auth");
     setCookie(res, stateCookie, "", 0, "/auth");
     const startedAt = Date.now();
     const response = await api("auth/login", {
@@ -220,10 +228,19 @@ app.get("/auth/callback", async (req, res) => {
       throw new Error(
         "IAM could not exchange this sign-in token. Please start sign-in again.",
       );
+    const tokens = await response.json();
+    if (context.kind) {
+      const checked = await api("auth/status", { headers: { Authorization: `Bearer ${tokens.access_token}` } });
+      const identity = checked.ok ? await checked.json() : undefined;
+      if (!identity?.authenticated || identity.identity?.actor_type !== context.kind) {
+        await api("auth/logout", { method: "POST", headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", "Idempotency-Key": randomBytes(16).toString("hex") }, body: JSON.stringify({ refresh_token: tokens.refresh_token }) });
+        throw new Error(`This sign-in did not return a ${context.kind === "carbon" ? "Carbon" : "Silicon"} account. Close this window and use the matching sign-in button.`);
+      }
+    }
     const id = randomBytes(32).toString("hex");
-    sessions.create(createHash("sha256").update(id).digest("hex"), await response.json(), startedAt, Date.now() + 30 * 86400000);
+    sessions.create(createHash("sha256").update(id).digest("hex"), tokens, startedAt, Date.now() + 30 * 86400000);
     setCookie(res, sessionCookie, id, 30 * 86400);
-    res.redirect(returnPath);
+    res.redirect(context.nonce ? `/login-complete?state=${encodeURIComponent(context.nonce)}` : context.next);
   } catch (e) {
     fail(res, e);
   }

@@ -36,7 +36,7 @@ export function isStorageCompletion(
   );
 }
 /** Credentials stay in the backend; the popup only returns an authenticated completion signal. */
-export async function authorizeStorage(orgId: string): Promise<void> {
+export async function authorizeStorage(orgId: string, redirectUrl?: string): Promise<void> {
   const popup = window.open(
     "about:blank",
     "honeycomb-storage-authorization",
@@ -53,9 +53,11 @@ export async function authorizeStorage(orgId: string): Promise<void> {
       body: JSON.stringify({
         org_id: orgId,
         return_url: window.location.origin + "/storage-authorization",
+        ...(redirectUrl ? { redirect_url: new URL(redirectUrl, window.location.origin).href } : {}),
       }),
     });
-    const consent = trustedConsentUrl(authorization.consent_url);
+    const consent = new URL(trustedConsentUrl(authorization.consent_url));
+    consent.searchParams.set("display", "popup");
     if (!authorization.authorization_id || !authorization.state)
       throw new Error("IAM could not start storage authorization.");
     await new Promise<void>((resolve, reject) => {
@@ -82,7 +84,13 @@ export async function authorizeStorage(orgId: string): Promise<void> {
                 "Storage permission was not approved. You can review it again when ready.",
               ),
             );
-          else resolve();
+          else {
+            resolve();
+            if (redirectUrl) {
+              const target = new URL(redirectUrl, window.location.origin);
+              if (target.origin === window.location.origin) window.location.assign(target.href);
+            }
+          }
         }
       };
       const closed = setInterval(() => {
@@ -103,7 +111,7 @@ export async function authorizeStorage(orgId: string): Promise<void> {
         10 * 60 * 1000,
       );
       window.addEventListener("message", receive);
-      popup.location.assign(consent);
+      popup.location.assign(consent.href);
     });
     popup.close();
   } catch (error) {

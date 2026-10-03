@@ -420,13 +420,23 @@ impl Client {
         return_url: Option<&str>,
         m: &Mutation,
     ) -> Result<Value> {
-        self.mutate(
-            Method::POST,
-            &["storage-authorizations"],
-            &json!({"org_id":org_id,"return_url":return_url}),
-            m,
-        )
-        .await
+        self.storage_authorization_start_with_redirect(org_id, return_url, None, m)
+            .await
+    }
+    /// Complete consent at the callback, then return to a page on the same Honeycomb origin.
+    pub async fn storage_authorization_start_with_redirect(
+        &self,
+        org_id: &str,
+        return_url: Option<&str>,
+        redirect_url: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        let mut body = json!({"org_id":org_id,"return_url":return_url});
+        if let Some(url) = redirect_url {
+            body["redirect_url"] = json!(url);
+        }
+        self.mutate(Method::POST, &["storage-authorizations"], &body, m)
+            .await
     }
     /// Read only this authenticated account's pending storage authorization.
     pub async fn storage_authorization_status(&self, id: &str) -> Result<Value> {
