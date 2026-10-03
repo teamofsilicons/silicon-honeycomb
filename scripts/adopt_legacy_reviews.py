@@ -96,6 +96,13 @@ def validate(source):
     url = urllib.parse.urlparse(config.get("webhook_url", ""))
     if url.scheme != "https" or not url.netloc or url.username or url.password or url.fragment:
         raise ValueError("Supply the existing HTTPS webhook destination")
+    destinations = {record.get("webhook_url")}
+    if record["availability"] == "under_review":
+        destinations.add(record.get("pending_webhook_url"))
+    destinations.discard(None)
+    destinations.discard("")
+    if destinations != {config["webhook_url"]}:
+        raise ValueError("Webhook destination is absent, ambiguous, or differs from the current IAM record")
     if not isinstance(source["webhook_secret"], str) or not source["webhook_secret"]:
         raise ValueError("Supply the existing webhook secret through the protected export")
     if not isinstance(requests, list) or not requests:

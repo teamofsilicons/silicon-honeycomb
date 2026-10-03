@@ -21,7 +21,7 @@ class ReviewHandoverTests(unittest.TestCase):
                       testing_idle_days=30, app_scope={"iam": ["self.identity.read", "directory.carbons.read"],
                       "external": [{"app_id": "ting", "endpoint_id": "send"}]},
                       effective_scopes=[{"scope": "self.identity.read"}], obo_endpoints=[],
-                      obo_review_message=None, webhook_scope=["full"])
+                      obo_review_message=None, webhook_scope=["full"], webhook_url="https://ring.example.com/webhook", pending_webhook_url=None)
         config = dict(org_id="tos", app_id="ring", name="Silicon Ring", description=" ".join(["description"] * 50),
                       logo_url=None, base_url=record["base_url"], app_scope=record["app_scope"],
                       webhook_url="https://ring.example.com/webhook", webhook_scope=["full"],
@@ -91,7 +91,8 @@ class ReviewHandoverTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0], 0)
 
     def test_public_under_review_source_stays_disabled_private_without_minting_credentials(self):
-        self.source["application"].update(availability="under_review", visibility="public", credential_version=None)
+        self.source["application"].update(availability="under_review", visibility="public", credential_version=None,
+                                          webhook_url=None, pending_webhook_url="https://ring.example.com/webhook")
         self.prepare()
         self.finish(self.plan())
         self.assertEqual(self.db.execute("SELECT visibility,state,credential_version,effective_revision FROM applications").fetchone(), ("private", "disabled", 0, 0))
@@ -137,6 +138,9 @@ class ReviewHandoverTests(unittest.TestCase):
                      lambda s: s["application"].update(configuration_revision=1),
                      lambda s: s["configuration"].update(name="Other app"),
                      lambda s: s["configuration"].update(webhook_secret="exposed"),
+                     lambda s: s["configuration"].update(webhook_url="https://different.example.com/webhook"),
+                     lambda s: s["application"].update(webhook_url=None),
+                     lambda s: s["application"].update(availability="under_review", visibility="public", pending_webhook_url="https://different.example.com/webhook"),
                      lambda s: s["requests"][0].update(status="approved"),
                      lambda s: s["requests"][0].update(scopes=["obo:ting:send"]),
                      lambda s: s["requests"][0].update(requested_by="arbitrary-actor"),
