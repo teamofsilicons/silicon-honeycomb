@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         app_id,
         iam_app_id,
         iam_login_url: std::env::var("IAM_LOGIN_URL")
-            .unwrap_or_else(|_| "https://iam.teamofsilicons.com".into()),
+            .unwrap_or_else(|_| "https://auth.iam.teamofsilicons.com".into()),
         encryption_key,
         webhook_secret: required("HONEYCOMB_WEBHOOK_SECRET")?,
     };

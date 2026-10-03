@@ -975,6 +975,13 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
         other => {
             let message = match other {
                 Err(e) => e.1.message,
+                Ok(response)
+                    if response["state"] == "pending"
+                        && response["required_approvals"]["publication"] == true =>
+                {
+                    "Configuration saved. Publication approval is required; open Sent requests to continue."
+                        .into()
+                }
                 Ok(_) => "IAM has not accepted this configuration".into(),
             };
             sqlx::query("UPDATE operations SET error=? WHERE id=?")
