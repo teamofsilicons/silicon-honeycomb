@@ -15,7 +15,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tower::ServiceExt;
@@ -2272,6 +2272,113 @@ async fn legacy_review_links_require_current_discussion_authority_and_do_not_mar
             .0,
         StatusCode::NOT_FOUND
     );
+}
+struct UnavailableReviewEligibility {
+    calls: AtomicUsize,
+}
+#[async_trait]
+impl Management for UnavailableReviewEligibility {
+    async fn configure(&self, _: &Value, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unavailable("not used"))
+    }
+    async fn lifecycle(&self, _: &Value, _: &str) -> Result<Value> {
+        Err(Error::unavailable("not used"))
+    }
+    async fn review_eligibility(&self, _: &str, _: &str, _: &str, _: Option<&str>) -> Result<bool> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(Error::unavailable(
+            "IAM reviewer eligibility is unavailable",
+        ))
+    }
+}
+#[tokio::test]
+async fn closed_operator_review_archives_do_not_report_a_false_permission_outage() {
+    let (mut s, _) = setup(true).await;
+    s.management = Arc::new(ReviewManager::default());
+    let id = review_application(&s).await;
+    let unavailable = Arc::new(UnavailableReviewEligibility {
+        calls: AtomicUsize::new(0),
+    });
+    s.management = unavailable.clone();
+    let sentinel = format!("operator-direct:{}", uuid::Uuid::new_v4());
+    for state in ["published", "denied"] {
+        sqlx::query("UPDATE publication_requests SET state=?,plan_id=? WHERE id=?")
+            .bind(state)
+            .bind(&sentinel)
+            .bind(&id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+        let (status, inbox) = call(
+            &s,
+            "GET",
+            "/api/v1/review-requests?include_completed=true",
+            Some("admin"),
+            Value::Null,
+            "",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(inbox, json!({"items":[],"partial":false}));
+    }
+    assert_eq!(unavailable.calls.load(Ordering::SeqCst), 0);
+    // A malformed pending request still fails closed and remains actionable as
+    // an integration failure. So does a real IAM plan during an upstream outage.
+    for (state, plan) in [
+        ("awaiting_scope_review", sentinel),
+        ("published", uuid::Uuid::new_v4().to_string()),
+        ("published", "operator-direct:invalid".into()),
+    ] {
+        sqlx::query("UPDATE publication_requests SET state=?,plan_id=? WHERE id=?")
+            .bind(state)
+            .bind(plan)
+            .bind(&id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+        let (status, inbox) = call(
+            &s,
+            "GET",
+            "/api/v1/review-requests?include_completed=true",
+            Some("admin"),
+            Value::Null,
+            "",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(inbox, json!({"items":[],"partial":true}));
+    }
+    assert_eq!(unavailable.calls.load(Ordering::SeqCst), 9);
+    // A closed record visited first must not cache eligibility=false for a
+    // malformed pending row that happens to repeat the same old receipt marker.
+    let shared = format!("operator-direct:{}", uuid::Uuid::new_v4());
+    let pending = uuid::Uuid::new_v4().to_string();
+    sqlx::query("UPDATE publication_requests SET state='published',plan_id=? WHERE id=?")
+        .bind(&shared)
+        .bind(&id)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot,plan_id) SELECT ?,plane,app_id,revision+1,'awaiting_scope_review',requested_by,created_at,config_snapshot,plan_id FROM publication_requests WHERE id=?")
+        .bind(&pending).bind(&id).execute(&s.db).await.unwrap();
+    sqlx::query("INSERT INTO review_gates(request_id,provider,scopes) SELECT ?,provider,scopes FROM review_gates WHERE request_id=?")
+        .bind(&pending).bind(&id).execute(&s.db).await.unwrap();
+    sqlx::query("UPDATE publication_activity SET updated_at=CASE WHEN request_id=? THEN 2000000000 ELSE 1 END")
+        .bind(&id).execute(&s.db).await.unwrap();
+    let (_, inbox) = call(
+        &s,
+        "GET",
+        "/api/v1/review-requests?include_completed=true",
+        Some("admin"),
+        Value::Null,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(inbox, json!({"items":[],"partial":true}));
+    assert_eq!(unavailable.calls.load(Ordering::SeqCst), 12);
 }
 #[tokio::test]
 async fn console_discussions_validate_gates_and_notify_participants_once() {

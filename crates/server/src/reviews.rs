@@ -186,6 +186,18 @@ pub(crate) async fn can_review(
     let Some(plan) = request.get::<Option<String>, _>("plan_id") else {
         return Ok(false);
     };
+    // Early catalog adoption stored closed operator receipts in this field.
+    // They are historical provenance, not IAM plans that can grant a reviewer
+    // authority. Keep real/pending failures visible instead of masking them.
+    if matches!(
+        request.get::<String, _>("state").as_str(),
+        "published" | "denied"
+    ) && plan
+        .strip_prefix("operator-direct:")
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+    {
+        return Ok(false);
+    }
     s.management
         .review_eligibility(
             &plan,
@@ -222,9 +234,11 @@ pub(crate) async fn inbox_items(
     let mut authority = BTreeMap::new();
     for row in rows {
         let provider: String = row.get("provider");
-        let authorized = if let Some(value) =
-            authority.get(&(row.get::<Option<String>, _>("plan_id"), provider.clone()))
-        {
+        let authorized = if let Some(value) = authority.get(&(
+            row.get::<Option<String>, _>("plan_id"),
+            provider.clone(),
+            row.get::<String, _>("state"),
+        )) {
             *value
         } else {
             let value = match can_review(s, c, &row, &provider).await {
@@ -235,7 +249,11 @@ pub(crate) async fn inbox_items(
                 }
             };
             authority.insert(
-                (row.get::<Option<String>, _>("plan_id"), provider.clone()),
+                (
+                    row.get::<Option<String>, _>("plan_id"),
+                    provider.clone(),
+                    row.get::<String, _>("state"),
+                ),
                 value,
             );
             value
