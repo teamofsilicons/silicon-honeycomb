@@ -12,6 +12,13 @@
     "description": "Install the CLI, authenticate, and discover your first package."
   },
   {
+    "slug": "guides/team-of-silicons-ready-applications",
+    "title": "Building a Team of Silicons-ready application",
+    "group": "Guides",
+    "layout": "article",
+    "description": "A practical guide to identity, permissions, delegated actions, and releases for applications in the Silicon ecosystem."
+  },
+  {
     "slug": "installation",
     "title": "Install the CLI",
     "group": "Start here",
@@ -64,6 +71,12 @@
     "title": "Scopes & delegated access",
     "group": "Publish an app",
     "description": "Declare IAM permissions and application-to-application endpoint access."
+  },
+  {
+    "slug": "app-to-app",
+    "title": "App-to-app verification",
+    "group": "Integrate",
+    "description": "Configure ATA endpoints and manage your signed application verifications from one workspace."
   },
   {
     "slug": "library",

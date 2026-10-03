@@ -11,9 +11,11 @@ MAP = {'applications':[{'legacy_id':'tos>hello','app_id':'hello','org_id':'tos'}
        'identities':[{'legacy_id':'saket','public_id':'c:saket'}]}
 
 class IdentifierMigration(unittest.TestCase):
-    def database(self):
+    def database(self, through=None):
         db = sqlite3.connect(':memory:')
         for path in sorted((Path(__file__).parents[1] / 'crates/server/migrations').glob('*.sql')):
+            if through is not None and int(path.name.split('_', 1)[0]) > through:
+                continue
             db.executescript(path.read_text())
         config = json.dumps({'org_id':'tos','local_app_id':'hello','name':'Hello',
                              'metadata':{'app_id':'tos>hello'},'description':'saket tos>hello'})
@@ -67,8 +69,8 @@ class IdentifierMigration(unittest.TestCase):
         db.execute("UPDATE operations SET state='pending'")
         db.commit()
         with self.assertRaisesRegex(ValueError, 'in-flight'): m.migrate_database(db, MAP, True)
-    def held_database(self):
-        db=self.database()
+    def held_database(self, through=None):
+        db=self.database(through)
         db.execute("UPDATE operations SET state='pending',request_json=?", (' {"app_id":"tos>hello","secret":"opaque"} ',))
         db.execute("INSERT INTO management_requests VALUES('op','configure','tos>hello','unchanged-encrypted-body',1)")
         db.execute("INSERT INTO publication_requests(id,plane,app_id,revision,state,requested_by,created_at,config_snapshot) VALUES('pub','production','tos>hello',1,'awaiting_review_plan','saket',1,?)", (' {"app_id":"tos>hello"} ',))
@@ -106,6 +108,20 @@ class IdentifierMigration(unittest.TestCase):
         db=self.held_database();h.hold(db,h.inventory(db),True)
         db.execute(f"UPDATE {h.TABLE} SET original_row='{{}}'");db.commit()
         with self.assertRaisesRegex(ValueError,'hash'):m.migrate_database(db,MAP,True)
+    def test_request_activity_upgrade_preserves_existing_hold_evidence(self):
+        h=m.identifier_holds
+        db=self.held_database(through=27)
+        h.hold(db,h.inventory(db),True)
+        evidence=db.execute(f'SELECT * FROM {h.TABLE} ORDER BY table_name,row_id').fetchall()
+        original=h.packed(h.row(db,'publication_requests','pub'))
+        migration=Path(__file__).parents[1] / 'crates/server/migrations/0028_request_activity.sql'
+        db.executescript(migration.read_text())
+        self.assertEqual(h.packed(h.row(db,'publication_requests','pub')),original)
+        self.assertEqual(db.execute(f'SELECT * FROM {h.TABLE} ORDER BY table_name,row_id').fetchall(),evidence)
+        self.assertEqual(len(h.verify(db)),4)
+        self.assertEqual(db.execute('SELECT updated_at FROM publication_activity WHERE request_id=?',('pub',)).fetchone(),(1,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("UPDATE publication_requests SET state='published' WHERE id='pub'")
     def test_accepted_request_bytes_remain_historical_evidence(self):
         db=self.database();body=' {"app_id":"tos>hello"} '
         db.execute('UPDATE operations SET request_json=?,result=?',(body,body));db.commit()

@@ -1,0 +1,97 @@
+/* SolidJS adaptations of Arc's free card, badge, and file dropzone patterns.
+   https://uiarc.dev/components/card
+   https://uiarc.dev/components/file-dropzone */
+.arc-release-history { display: grid; gap: 18px; }
+.release-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.release-section-heading h3 { margin: 0; font-size: 18px; font-weight: 500; }
+.release-section-heading .muted { margin: 6px 0 0; font-size: 13px; line-height: 1.6; }
+.release-channel-control { border: 0; padding: 0; margin: 0; min-width: 0; flex-shrink: 0; }
+.release-channel-control:disabled { opacity: .6; }
+.release-channel-note { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); }
+.release-channel-note svg { flex-shrink: 0; margin-top: 2px; color: var(--blue); }
+.release-channel-note p { margin: 0; font-size: 12px; line-height: 1.6; }
+.arc-release-history > .inline-notice, .arc-release-history > .field-error { margin: 0; }
+.release-list-caption { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); padding: 4px 0 0; }
+.release-list-caption > span:first-child { font-weight: 500; color: var(--ink); }
+.arc-release-history .release-list { display: grid; gap: 12px; margin: -6px 0 0; padding: 0; }
+.arc-release-history .release-list > li { position: relative; align-items: center; flex-wrap: nowrap; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); gap: 20px; }
+.arc-release-history .release-list > li.release-current { border-color: color-mix(in srgb, var(--blue) 42%, var(--line)); box-shadow: inset 3px 0 var(--blue); }
+.release-item-main { flex: 1; min-width: 0; }
+.release-item-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.release-item-heading > strong { font: 500 15px var(--mono); margin-right: 4px; }
+.release-item-icon { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); display: grid; place-items: center; color: var(--muted); margin-right: 2px; }
+.release-current .release-item-icon { color: var(--blue); background: color-mix(in srgb, var(--blue) 6%, var(--paper)); border-color: color-mix(in srgb, var(--blue) 18%, var(--line)); }
+.release-visibility-note { margin: 12px 0 0; max-width: 70ch; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.release-item-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; margin-top: 12px; font-size: 11px; color: var(--muted); }
+.release-item-meta > span, .release-item-meta > a { display: inline-flex; align-items: center; gap: 6px; }
+.release-item-meta .text-link { font-size: 12px; }
+.release-install { margin-top: 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.release-install > span { display: block; font-size: 10px; color: var(--muted); }
+.arc-release-history .release-install code { margin-top: 5px; font-size: 11px; line-height: 1.6; color: var(--ink); }
+.release-promote-button { flex-shrink: 0; font-size: 12px; }
+.release-empty { display: flex; align-items: center; gap: 16px; min-height: 130px; padding: 24px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); background: var(--surface); }
+.release-empty > svg { flex-shrink: 0; }
+.release-empty strong { display: block; color: var(--ink); font-size: 14px; font-weight: 500; }
+.release-empty p { margin: 6px 0 0; font-size: 12px; line-height: 1.6; }
+.arc-release-history .release-promotion-form { margin-top: 0; gap: 18px; padding: 24px; border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--blue) 3%, var(--paper)); }
+.release-promotion-heading { display: flex; align-items: center; gap: 12px; }
+.release-promotion-heading > svg { color: var(--blue); }
+.release-promotion-heading h4 { margin: 0; font-size: 15px; font-weight: 500; }
+.release-promotion-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.release-promotion-form > .muted { margin: 0; font-size: 13px; }
+.release-promotion-form > label { max-width: 320px; }
+.arc-logo-field { gap: 16px; padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.logo-field-heading { align-items: flex-start; gap: 14px; }
+.logo-field-heading h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0; font-size: 15px; font-weight: 500; }
+.logo-field-heading .optional { font-size: 11px; font-weight: 400; color: var(--muted); }
+.logo-field-heading p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.logo-field-heading .text-button { white-space: nowrap; font-size: 11px; }
+.arc-logo-field .logo-upload-row { gap: 16px; }
+.arc-logo-field .logo-preview-frame { width: 116px; min-height: 150px; border-radius: 10px; border-color: var(--line); background: var(--surface); color: var(--muted); }
+.arc-logo-field .logo-preview-frame img { padding: 12px; max-height: 150px; }
+.arc-logo-field .logo-dropzone { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; min-height: 150px; border: 1px dashed var(--line); border-radius: 10px; background: var(--surface); color: var(--muted); font-family: inherit; transition: background .16s ease, border-color .16s ease; }
+.arc-logo-field .logo-dropzone:not(:disabled):hover, .arc-logo-field .logo-dropzone.is-dragging { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 5%, var(--paper)); }
+.arc-logo-field .logo-dropzone:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.arc-logo-field .logo-dropzone:disabled { cursor: default; opacity: .65; }
+.arc-logo-field .logo-dropzone strong { color: var(--ink); font-size: 13px; font-weight: 500; }
+.arc-logo-field .logo-upload-icon { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 8px; color: var(--blue); background: var(--paper); margin-bottom: 2px; }
+.arc-logo-field .logo-dropzone-hint { font-size: 12px; }
+.arc-logo-field .logo-file-limits { font-size: 10px; line-height: 1.6; margin-top: 3px; }
+.arc-logo-field .logo-url-option { padding-top: 2px; }
+.arc-logo-field .logo-url-option summary { display: flex; align-items: center; gap: 7px; width: fit-content; color: var(--muted); font-size: 12px; }
+.arc-logo-field .logo-url-option summary:hover { color: var(--blue); }
+.arc-logo-field .logo-url-option summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: 3px; }
+.arc-logo-field .logo-privacy-note { font-size: 11px; line-height: 1.6; color: var(--muted); }
+.logo-permission-note { display: grid; gap: 14px; padding: 16px; border: 1px solid color-mix(in srgb, var(--blue) 25%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--blue) 4%, var(--paper)); }
+.logo-permission-note strong { font-size: 13px; font-weight: 500; }
+.logo-permission-note p { font-size: 12px; line-height: 1.6; color: var(--muted); margin: 5px 0 0; }
+.logo-permission-note > button { justify-self: start; }
+.logo-upload-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.logo-upload-status > span:first-child { max-width: 75%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.logo-upload-progress { width: 100%; height: 4px; border-radius: 10px; overflow: hidden; background: var(--line); }
+.logo-upload-progress > span { display: block; width: 34%; height: 100%; background: var(--blue); border-radius: inherit; animation: logo-upload-progress 1.25s ease-in-out infinite alternate; }
+.logo-upload-spinner { animation: logo-upload-spin 1s linear infinite; }
+@keyframes logo-upload-progress { from { transform: translateX(0); } to { transform: translateX(195%); } }
+@keyframes logo-upload-spin { to { transform: rotate(360deg); } }
+@media (max-width: 780px) {
+  .release-section-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .arc-release-history .release-list > li { flex-wrap: wrap; padding: 17px; }
+  .release-item-main { flex-basis: 100%; }
+}
+@media (max-width: 500px) {
+  .arc-logo-field { padding: 16px; }
+  .logo-field-heading { flex-wrap: wrap; }
+  .arc-logo-field .logo-preview-frame { width: 64px; min-height: 140px; }
+  .arc-logo-field .logo-preview-frame img { padding: 7px; }
+  .arc-logo-field .logo-upload-row { gap: 10px; }
+  .arc-logo-field .logo-dropzone { padding: 14px 10px; }
+  .arc-logo-field .logo-file-limits { max-width: 160px; }
+  .arc-release-history .release-promotion-form { padding: 18px; }
+  .release-actions { gap: 8px; }
+  .release-item-heading > strong { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arc-logo-field .logo-dropzone { transition: none; }
+  .logo-upload-progress > span, .logo-upload-spinner { animation: none; }
+  .logo-upload-progress > span { width: 100%; opacity: .55; }
+}

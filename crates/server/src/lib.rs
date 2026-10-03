@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod activation;
 pub mod api;
+pub mod ata;
 pub mod auth;
 pub mod bundles;
 pub mod catalog;
@@ -19,11 +20,13 @@ pub mod participant_management;
 mod publication_intents;
 pub mod publication_worker;
 pub mod reconciliation;
+pub mod request_activity;
 pub mod retention;
 pub mod retention_worker;
 pub mod reviews;
 pub mod secrets;
 pub mod storage;
+pub mod storage_authorizations;
 pub mod telemetry;
 pub mod webhook_management;
 

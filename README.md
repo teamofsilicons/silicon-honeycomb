@@ -18,6 +18,11 @@ identity and authorization authority.
 
 Read the [Honeycomb documentation](https://docs.honeycomb.teamofsilicons.com) for installation, app uploads, the CLI, Rust SDK, and operational guides.
 
+Start with [Building Team of Silicons ready applications](https://docs.honeycomb.teamofsilicons.com/guides/team-of-silicons-ready-applications/)
+for the complete application journey and publication checklist. Existing apps can
+follow the [IAM 5 migration guide](https://docs.iam.teamofsilicons.com/migrating-to-iam-5/).
+Check the release notice in the documentation before switching production integrations.
+
 The human-owned `UNDERSTANDING.md` is the product specification. Integration
 requirements and unfinished work are tracked in the [local handoff](docs/LOCAL-HANDOFF.md),
 [current IAM contract review](docs/IAM-CONTRACT-REVIEW.md), and
@@ -53,7 +58,10 @@ IAM and Briefcase; it is excluded from the production image.
 
 ## Install the CLI
 
-Version 0.3.3 fixes secret rotation and reconciliation for imported testing applications, including recovery of rotations rejected for an IAM configuration revision mismatch. It retains the release channels, shared minute updater and durable session recovery. Published CLI versions are distributed as six native release binaries and on crates.io. Honeycomb also packages those same native binaries for its own `tos>honeycomb` catalog entry.
+Published CLI versions are distributed as six native release binaries and on
+crates.io. Honeycomb packages those same binaries for its `honeycomb` catalog
+entry. The CLI supports release channels, a shared minute updater and durable
+session recovery.
 
 ```sh
 printf "Starting Honeycomb installer…\n"; /bin/bash -c "$(curl -fL --progress-bar --connect-timeout 20 --max-time 120 https://raw.githubusercontent.com/teamofsilicons/silicon-honeycomb/main/install.sh)"
@@ -114,8 +122,8 @@ honeycomb login status --json
 honeycomb validate ./my-app
 honeycomb pack ./my-app --output my-app-1.0.0.tar.gz
 honeycomb apps create application.json
-honeycomb releases upload 'my-org>my-app' my-app-1.0.0.tar.gz --channel prod --revision 1
-honeycomb publication request 'my-org>my-app' --revision 1 --message 'Why this should be public'
+honeycomb releases upload my-app my-app-1.0.0.tar.gz --channel prod --revision 1
+honeycomb publication request my-app --revision 1 --message 'Why this should be public'
 ```
 
 Configuration revisions are different from semantic release versions. Reuse

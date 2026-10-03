@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         })?;
     let identity = Iam::new(&iam_url, &app_id, &secret)?;
     let storage = Briefcase {
+        grants: None,
         iam: identity.client.clone(),
         http: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -48,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
         base_url: std::env::var("BRIEFCASE_BASE_URL")
             .unwrap_or_else(|_| "https://backend.briefcase.teamofsilicons.com".into()),
         app_id: app_id.clone(),
-        audience: storage_app_id,
+        audience: storage_app_id.clone(),
     };
     let mut state = State {
         telemetry: silicon_honeycomb_server::telemetry::Recorder::from_env(),
@@ -62,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         app_id,
         iam_app_id,
         iam_login_url: std::env::var("IAM_LOGIN_URL")
-            .unwrap_or_else(|_| "https://iam.teamofsilicons.com".into()),
+            .unwrap_or_else(|_| "https://auth.iam.teamofsilicons.com".into()),
         encryption_key,
         webhook_secret: required("HONEYCOMB_WEBHOOK_SECRET")?,
     };
@@ -101,6 +102,18 @@ async fn main() -> anyhow::Result<()> {
         Iam::new(&iam_url, &state.app_id, &secret)?
             .with_testing_context(state.db.clone(), state.management.clone()),
     );
+    state.storage = Arc::new(Briefcase {
+        iam: Iam::new(&iam_url,&state.app_id,&secret)?.client,
+        grants: Some(Arc::new(silicon_honeycomb_server::storage_authorizations::Broker {
+            db:state.db.clone(), identity:state.identity.clone(), encryption_key,
+            audience:storage_app_id.clone(),
+            allowed_origins:std::env::var("HONEYCOMB_WEB_ORIGINS").unwrap_or_else(|_|"https://honeycomb.teamofsilicons.com,https://console.honeycomb.teamofsilicons.com".into()).split(',').map(|s|s.trim().to_owned()).collect(),
+            iam_origin:url::Url::parse(&state.iam_login_url)?.origin().ascii_serialization(),
+        })),
+        http:reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(std::time::Duration::from_secs(300)).build()?,
+        base_url:std::env::var("BRIEFCASE_BASE_URL").unwrap_or_else(|_|"https://backend.briefcase.teamofsilicons.com".into()),
+        app_id:state.app_id.clone(), audience:storage_app_id,
+    });
     let notifications = std::env::var("IAM_HONEYCOMB_NOTIFICATION_SIGNING_KEY")
         .ok()
         .filter(|v| !v.is_empty())
@@ -141,9 +154,14 @@ async fn main() -> anyhow::Result<()> {
         );
     let mailer = std::env::var("POSTMARK_SERVER_TOKEN")
         .ok()
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.trim().is_empty())
         .map(silicon_honeycomb_server::notifications::Postmark::new)
         .transpose()?;
+    if mailer.is_none() {
+        tracing::warn!(
+            "Email delivery is disabled: POSTMARK_SERVER_TOKEN is missing; notification events remain queued"
+        );
+    }
     tokio::spawn(silicon_honeycomb_server::notifications::run(
         state.clone(),
         mailer,

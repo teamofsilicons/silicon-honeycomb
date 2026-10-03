@@ -29,6 +29,52 @@ fn record() -> Value {
     json!({"app_id":"sdk-test","org_id":"tos","app_name":"Accepted name","app_logo":null,"base_url":null,"configuration_revision":1,"iam_revision":2,"visibility":"private","availability":"verified","app_scope":{"iam":["self.identity.read","directory.carbons.read"],"external":[]},"effective_scopes":[{"scope":"self.identity.read","basis":"policy"}],"obo_endpoints":[],"webhook_scope":["membership"],"testing_idle_days":30})
 }
 #[tokio::test]
+async fn configuration_preserves_downstream_calls_through_the_management_sdk() {
+    let server = MockServer::start().await;
+    let (adapter, _, mut config, id) = setup(&server).await;
+    let endpoints = json!([{
+        "endpoint_id":"speech.generate", "path":"/speech", "metadata":{},
+        "critical":false, "ttl_seconds":300,
+        "downstream":[
+            {"audience":"briefcase","endpoint_id":"files.upload"},
+            {"audience":"audit","endpoint_id":"events.write"}
+        ]
+    }]);
+    config["obo_endpoints"] = endpoints.clone();
+    let mut accepted = record();
+    accepted["obo_endpoints"] = endpoints.clone();
+    Mock::given(method("PUT"))
+        .and(path(
+            "/api/v1/honeycomb/applications/sdk-test/configuration",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "operation_id":id,"state":"accepted","configuration_revision":1,
+            "iam_revision":2,"effective_configuration":accepted
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let operation = json!({
+        "operation_id":id,"app_id":"sdk-test","configuration_revision":1,
+        "expected_iam_revision":0,"configuration":config,
+        "webhook_secret":"webhook-secret-only-inside-encryption","visibility":"private"
+    });
+    let result = adapter
+        .configure(&operation, "oat_actor", None)
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let wire: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(
+        wire["obo_endpoints"][0]["downstream"],
+        endpoints[0]["downstream"]
+    );
+    assert_eq!(
+        result["effective_configuration"]["obo_endpoints"][0]["downstream"],
+        endpoints[0]["downstream"]
+    );
+}
+#[tokio::test]
 async fn configuration_uses_service_and_actor_authority_and_replays_identical_encrypted_body() {
     let server = MockServer::start().await;
     let (adapter, db, config, id) = setup(&server).await;
@@ -280,4 +326,102 @@ async fn validation_failures_explain_correction_without_leaking_upstream_details
     assert!(message.contains("webhook_scope"));
     assert!(message.contains("01a0a943-b40b-703c-92df-9f7017037f56"));
     assert!(!message.contains("private"));
+}
+
+#[tokio::test]
+async fn ata_definitions_survive_management_configuration_round_trip() {
+    let server = MockServer::start().await;
+    let (adapter, _, mut config, id) = setup(&server).await;
+    let endpoints = json!([{
+        "endpoint_id":"speech.generate", "name":"Generate speech", "path":"/speech",
+        "description":"Generate audio for the calling application", "metadata":{"format":"mp3"},
+        "critical":true, "note_to_user":"Uses the application's balance", "additional_warnings":["uses_credits"],
+        "downstream":[{"audience":"briefcase","endpoint_id":"files.upload"}], "enabled":true
+    }]);
+    config["ata_endpoints"] = endpoints.clone();
+    config["base_url"] = json!("https://sdk-test.example");
+    let mut accepted = record();
+    accepted["ata_endpoints"] = endpoints.clone();
+    Mock::given(method("PUT"))
+        .and(path(
+            "/api/v1/honeycomb/applications/sdk-test/configuration",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "operation_id":id,"state":"accepted","configuration_revision":1,
+            "iam_revision":2,"effective_configuration":accepted
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = adapter
+        .configure(
+            &json!({
+                "operation_id":id,"app_id":"sdk-test","configuration_revision":1,
+                "expected_iam_revision":0,"configuration":config,
+                "webhook_secret":"synthetic-secret","visibility":"private"
+            }),
+            "oat_actor",
+            None,
+        )
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let wire: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(wire["ata_endpoints"], endpoints);
+    assert_eq!(
+        result["effective_configuration"]["ata_endpoints"],
+        endpoints
+    );
+    assert!(wire["ata_endpoints"][0].get("ttl_seconds").is_none());
+}
+
+#[tokio::test]
+async fn ata_credentials_forward_current_actor_and_stable_operation_without_persisting_secrets() {
+    let server = MockServer::start().await;
+    let (adapter, db, _, _) = setup(&server).await;
+    let operation = uuid::Uuid::new_v4();
+    let input = json!({"operation_id":operation,"app_ids":["waveform"],
+        "endpoints":[{"audience":"waveform","endpoint_id":"speech"}],"graph_version":"reviewed"});
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/honeycomb/applications/sdk-test/ata-verifications",
+        ))
+        .and(header("x-honeycomb-actor-token", "oat_current_actor"))
+        .and(header("idempotency-key", operation.to_string()))
+        .and(header(
+            "authorization",
+            format!("Bearer hck_{}", "a".repeat(43)),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"id":operation,
+            "signing_principal_id":"c:operator","refresh_token":"atr_ONE_TIME_SYNTHETIC_SECRET"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let created = adapter
+        .ata_verification(
+            "sdk-test",
+            "create",
+            None,
+            &input,
+            "oat_current_actor",
+            Some(operation),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created["refresh_token"], "atr_ONE_TIME_SYNTHETIC_SECRET");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[0].body).unwrap(),
+        input
+    );
+    let retained: i64 = sqlx::query_scalar("SELECT count(*) FROM management_requests")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        retained, 0,
+        "ATA credentials must not become Honeycomb configuration archives"
+    );
 }

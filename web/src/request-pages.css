@@ -1,0 +1,107 @@
+/* Card, badge, and segmented-control patterns adapted from Arc UI's free
+   components: https://uiarc.dev/components/card and /badge, /segmented-control. */
+.requests-page .page-heading {
+  align-items: center;
+  margin-bottom: 28px;
+}
+.requests-page .page-heading h1 { margin-bottom: 10px; }
+.requests-page .page-heading p { max-width: 680px; }
+.requests-page .requests-heading-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 10px; }
+.requests-page .requests-heading-actions .button { white-space: nowrap; }
+.requests-page .requests-read-action { display: grid; justify-items: end; gap: 8px; }
+.requests-page .requests-read-feedback { max-width: 300px; font-size: 12px; line-height: 1.5; color: var(--muted); text-align: right; margin: 0; }
+.requests-page .requests-read-feedback.field-error { color: var(--danger, #b42318); }
+.requests-page .requests-overview{
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 18px 20px;
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.requests-page .requests-overview-item{ display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.requests-page .requests-overview-item strong{ color: var(--ink); font-size: 15px; font-weight: 600; margin-right: 2px; }
+.requests-page .requests-overview-icon{ display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--surface); color: #64748b; }
+.requests-page .requests-overview-icon.activity{ color: var(--blue); background: var(--blue-pale); }
+.requests-page .requests-overview-icon.approval{ color: #976515; background: #fbf4e7; }
+.requests-page .requests-refresh-note{ margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.requests-page .requests-toolbar{ display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; justify-content: space-between; margin-bottom: 20px; }
+.requests-page .requests-filter-note{ color: var(--muted); font-size: 12px; }
+.requests-page .request-history-notice{ background: var(--surface); color: var(--muted); border-color: var(--line); }
+.requests-page .request-filter-count{ font-size: 11px; font-variant-numeric: tabular-nums; opacity: .65; margin-left: 5px; }
+.requests-page .request-list { display: grid; gap: 12px; border: 0; }
+.requests-page .request-card {
+  width: 100%;
+  padding: 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px #18233503;
+}
+.requests-page .request-card.has-update { border-color: #bdd2ed; background: var(--paper); box-shadow: inset 3px 0 0 var(--blue), 0 1px 2px #18233503; }
+.requests-page .request-card h2 { font-family: inherit; font-size: 16px; font-weight: 600; line-height: 1.4; letter-spacing: -.15px; margin: 0; }
+.requests-page .request-title { gap: 12px; }
+.requests-page .request-identity{ display: flex; align-items: center; gap: 13px; min-width: 0; }
+.requests-page .request-identity > div{ min-width: 0; }
+.requests-page .request-app-mark{ display: grid; place-items: center; flex-shrink: 0; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: #52627a; font-size: 17px; font-weight: 500; }
+.requests-page .app-id { margin: 5px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
+.requests-page .app-id > span { display: inline-block; padding: 0 4px; color: #aab2bf; }
+.requests-page .request-unread-label{ display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--blue); font-weight: 500; white-space: nowrap; }
+.requests-page .request-unread-label > span{ width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.requests-page .request-timestamp { color: var(--muted); font-size: 11px; margin: 16px 0 0; }
+.requests-page .sent-request > .muted { margin-top: 12px; font-size: 12px; }
+.requests-page .sent-request > .field-error { margin: 14px 0 0; }
+.requests-page .request-gates { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; margin: 20px 0; overflow: hidden; }
+.requests-page .request-section-label{ padding: 10px 13px; font-size: 11px; font-weight: 500; color: var(--muted); background: var(--surface); }
+.requests-page .sent-request-gate { padding: 12px 13px; border-top: 1px solid var(--line); gap: 12px; }
+.requests-page .request-gate-detail{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.requests-page .request-gate-icon{ display: inline-flex; color: #8490a1; }
+.requests-page .request-provider{ font-size: 13px; font-weight: 500; }
+.requests-page .request-discussion-link { font-size: 12px; gap: 6px; color: var(--blue); }
+.requests-page .request-card-footer{ display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; margin-top: 20px; }
+.requests-page .request-footer-note{ color: var(--muted); font-size: 12px; }
+.requests-page .request-card-footer .button{ min-height: 34px; padding: 8px 12px; font-size: 12px; }
+.requests-page .review-request-row { display: flex; align-items: center; gap: 16px; text-align: left; transition: border-color .15s ease, box-shadow .15s ease; }
+.requests-page .review-request-row > div { flex: 1; min-width: 0; }
+.requests-page .received-request-content .app-id { margin-top: 4px; }
+.requests-page .request-row-metadata{ display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin-top: 11px; line-height: 1.5; }
+.requests-page .request-metadata-divider{ color: #a6afba; }
+.requests-page .received-request-action{ display: grid; justify-items: end; gap: 11px; flex-shrink: 0; }
+.requests-page .request-open-label{ display: inline-flex; align-items: center; gap: 5px; color: var(--blue); font-size: 12px; font-weight: 500; }
+.requests-page .request-empty { display: grid; justify-items: center; text-align: center; background: var(--paper); border: 1px dashed var(--line); border-radius: 10px; padding: 54px 24px; }
+.requests-page .requests-empty-icon{ display: grid; place-items: center; width: 52px; height: 52px; color: #64748b; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); margin-bottom: 18px; }
+.requests-page .request-empty h2 { font-family: inherit; font-size: 17px; font-weight: 500; margin-bottom: 8px; }
+.requests-page .request-empty p { max-width: 480px; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.requests-page .pagination { margin-top: 24px; font-size: 12px; }
+@media (hover: hover) {
+  .requests-page .review-request-row:hover { border-color: #a6c1e4; box-shadow: 0 3px 12px #23497707; }
+  .requests-page .review-request-row.has-update:hover { box-shadow: inset 3px 0 0 var(--blue), 0 3px 12px #23497707; }
+}
+@media (max-width: 760px) {
+  .requests-page .requests-overview{ gap: 16px 24px; flex-wrap: wrap; }
+  .requests-page .requests-refresh-note{ margin-left: 0; }
+  .requests-page .review-request-row { flex-wrap: wrap; gap: 13px; }
+  .requests-page .review-request-row > .received-request-content { flex: 1; min-width: 160px; }
+  .requests-page .received-request-action{ width: 100%; display: flex; justify-content: space-between; align-items: center; padding-top: 13px; border-top: 1px solid var(--line); }
+}
+@media (max-width: 520px) {
+  .requests-page .page-heading { align-items: flex-start; flex-wrap: wrap; gap: 18px; }
+  .requests-page .requests-heading-actions { justify-content: flex-start; width: 100%; }
+  .requests-page .requests-read-action { justify-items: start; }
+  .requests-page .requests-read-feedback { text-align: left; }
+  .requests-page .request-card { padding: 18px 16px; }
+  .requests-page .sent-request-heading { align-items: flex-start; gap: 14px; }
+  .requests-page .sent-request-gate { align-items: flex-start; }
+  .requests-page .request-gate-detail{ gap: 8px; }
+  .requests-page .request-gate-detail .arc-badge{ font-size: 10px; }
+  .requests-page .request-card-footer{ align-items: flex-start; }
+  .requests-page .requests-overview-item{ font-size: 12px; }
+  .requests-page .requests-filter-note{ font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .requests-page .review-request-row { transition: none; }
+}
+
+.requests-page .request-discussion-link .sr-only{ position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

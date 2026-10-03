@@ -21,6 +21,8 @@ pub fn router(state: State) -> Router {
     let archive_limit = DefaultBodyLimit::max(honeycomb_core::package::MAX_ARCHIVE_BYTES as usize);
     Router::new()
         .merge(super::obo::router())
+        .merge(super::storage_authorizations::router())
+        .merge(super::ata::router())
         .route("/health", get(health))
         .route("/api/contracts", get(super::contracts::discovery))
         .route("/api/v1/contract", get(super::contracts::discovery))
@@ -37,6 +39,19 @@ pub fn router(state: State) -> Router {
             post(super::telemetry::ingest).layer(DefaultBodyLimit::max(4096)),
         )
         .route("/api/v1/review-requests", get(super::reviews::inbox))
+        .route(
+            "/api/v1/legacy-review-requests/{id}",
+            get(super::reviews::legacy_request),
+        )
+        .route("/api/v1/sent-requests", get(super::request_activity::sent))
+        .route(
+            "/api/v1/request-activity",
+            get(super::request_activity::summary),
+        )
+        .route(
+            "/api/v1/requests/{id}/read",
+            post(super::request_activity::mark_read),
+        )
         .route(
             "/api/v1/review-requests/{id}/activate",
             post(super::activation::activate),
@@ -781,7 +796,18 @@ async fn save_app(
         if Some(a.revision) != expected {
             return Err(Error::conflict("Application revision has changed"));
         }
-        let old = a.config["obo_endpoints"]
+        if !a.effective_config.is_object()
+            || a.effective_config
+                .get("obo_endpoints")
+                .is_some_and(|v| !v.is_array())
+        {
+            return Err(Error::unavailable(
+                "The accepted application configuration is unavailable; reconcile before editing endpoints",
+            ));
+        }
+        // Draft endpoints that IAM has never accepted can still be corrected.
+        // IAM remains authoritative for previously accepted or retired IDs.
+        let old = a.effective_config["obo_endpoints"]
             .as_array()
             .cloned()
             .unwrap_or_default();
@@ -964,6 +990,13 @@ async fn apply_config(s: &State, c: &Context, id: &str) -> Result<Value> {
         other => {
             let message = match other {
                 Err(e) => e.1.message,
+                Ok(response)
+                    if response["state"] == "pending"
+                        && response["required_approvals"]["publication"] == true =>
+                {
+                    "Configuration saved. Publication approval is required; open Sent requests to continue."
+                        .into()
+                }
                 Ok(_) => "IAM has not accepted this configuration".into(),
             };
             sqlx::query("UPDATE operations SET error=? WHERE id=?")
@@ -1642,6 +1675,7 @@ async fn set_star(s: State, h: HeaderMap, id: String, enabled: bool) -> Result<J
 #[derive(Deserialize)]
 struct Message {
     message: String,
+    request_id: Option<String>,
     #[serde(default)]
     provider: Option<String>,
 }
@@ -1713,6 +1747,7 @@ pub(crate) async fn automatic_publication_result(
         id,
         app.revision,
         Message {
+            request_id: None,
             message,
             provider: None,
         },
@@ -1823,9 +1858,19 @@ async fn publication(
     Path(id): Path<String>,
 ) -> Result<Json<Value>> {
     let c = context(&s, &h).await?;
-    find_app(&s, &c, &id, true).await?;
+    Ok(Json(
+        json!({"items":publication_items(&s,&c,&id,true).await?}),
+    ))
+}
+pub(crate) async fn publication_items(
+    s: &State,
+    c: &Context,
+    id: &str,
+    remember: bool,
+) -> Result<Vec<Value>> {
+    find_app(s, c, id, true).await?;
     let requests = sqlx::query(
-        "SELECT * FROM publication_requests WHERE plane=? AND app_id=? ORDER BY revision DESC",
+        "SELECT id FROM publication_requests WHERE plane=? AND app_id=? ORDER BY revision DESC",
     )
     .bind(&c.plane)
     .bind(id)
@@ -1834,7 +1879,16 @@ async fn publication(
     let mut items = vec![];
     for r in requests {
         let request_id: String = r.get("id");
-        crate::publication_worker::remember(&s, &c, &request_id).await?;
+        let mut activity = json!({"id":request_id});
+        crate::request_activity::decorate(s, c, &mut activity, "sent", "").await?;
+        let r = sqlx::query("SELECT * FROM publication_requests WHERE id=? AND plane=?")
+            .bind(&request_id)
+            .bind(&c.plane)
+            .fetch_one(&s.db)
+            .await?;
+        if remember {
+            crate::publication_worker::remember(s, c, &request_id).await?;
+        }
         let rows =
             sqlx::query("SELECT * FROM discussions WHERE request_id=? ORDER BY created_at,id")
                 .bind(&request_id)
@@ -1863,9 +1917,19 @@ async fn publication(
         } else {
             Value::Null
         };
-        items.push(json!({"id":request_id,"revision":r.get::<i64,_>("revision"),"state":r.get::<String,_>("state"),"messages":messages,"gates":gates,"error":r.get::<Option<String>,_>("error"),"activation":activation}));
+        let mut item = json!({"id":request_id,"revision":r.get::<i64,_>("revision"),"state":r.get::<String,_>("state"),"messages":messages,"gates":gates,"error":r.get::<Option<String>,_>("error"),"activation":activation});
+        for field in [
+            "activity_version",
+            "unread",
+            "created_at",
+            "updated_at",
+            "message_count",
+        ] {
+            item[field] = activity[field].clone();
+        }
+        items.push(item);
     }
-    Ok(Json(json!({"items":items})))
+    Ok(items)
 }
 async fn message(
     ExtractState(s): ExtractState<State>,
@@ -1879,7 +1943,8 @@ async fn message(
     if body.message.trim().is_empty() || body.message.len() > 10000 {
         return Err(Error::bad("message must contain 1–10000 characters"));
     }
-    let request:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane=? AND app_id=? ORDER BY revision DESC LIMIT 1").bind(&c.plane).bind(&id).fetch_optional(&s.db).await?;
+    let request:Option<String>=sqlx::query_scalar("SELECT id FROM publication_requests WHERE plane=? AND app_id=? AND (? IS NULL OR id=?) ORDER BY revision DESC LIMIT 1")
+        .bind(&c.plane).bind(&id).bind(&body.request_id).bind(&body.request_id).fetch_optional(&s.db).await?;
     let request = request.ok_or_else(Error::missing)?;
     // A targeted reply must belong to the accepted review plan. General replies
     // are visible to all gates, but validators only participate after scope review.

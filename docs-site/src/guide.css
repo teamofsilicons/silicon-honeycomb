@@ -1,0 +1,100 @@
+/* Editorial pages use the same restrained blue and Plex typography as the
+   Honeycomb console. They intentionally retain a separate reading layout. */
+.guide-page {
+  --blue: #1f5fb8;
+  --paper: #ffffff;
+  --line: #e4e8ef;
+  --muted: #637083;
+  background: var(--paper);
+  color: #202a3a;
+}
+.guide-page .topbar { height: 72px; padding-inline: max(28px, calc((100vw - 1180px) / 2)); background: #ffffff; }
+.guide-page .brand { color: #202a3a; }
+.guide-page .brand span { border-color: var(--line); }
+.guide-page .external a { color: var(--muted); }
+.guide-page .external .console { color: var(--blue); border-color: #d3deef; border-radius: 8px; }
+.guide-page .search-button { background: #f7f9fc; color: var(--muted); border-radius: 8px; }
+.guide-page .search-button kbd { border-color: var(--line); }
+.guide-layout { display: grid; grid-template-columns: minmax(0, 720px) 224px; gap: 88px; max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+.guide-main { padding: 35px 0 50px; max-width: 720px; }
+.guide-breadcrumb a { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); text-decoration: none; }
+.guide-breadcrumb a:hover { color: var(--blue); }
+.guide-header { padding: 43px 0 34px; border-bottom: 1px solid var(--line); margin-bottom: 33px; }
+.guide-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 22px; font-size: 12px; color: var(--muted); }
+.guide-kind { padding: 4px 9px; border: 1px solid #d9e5f7; border-radius: 6px; color: var(--blue); background: #f0f5fc; font-weight: 500; }
+.guide-header h1 { font: 500 clamp(36px, 3.7vw, 48px)/1.12 "IBM Plex Sans", sans-serif; color: #172234; letter-spacing: -1.7px; margin-bottom: 22px; text-wrap: balance; }
+.guide-header .lead { color: var(--muted); font-size: 18px; line-height: 1.65; margin: 0; }
+.guide-article { font-size: 16px; line-height: 1.85; color: #435167; overflow-wrap: break-word; }
+.guide-article p { margin: 18px 0; }
+.guide-article > p:first-child { margin-top: 0; }
+.guide-article h2 { font: 500 27px/1.3 "IBM Plex Sans", sans-serif; color: #1d2a3e; letter-spacing: -.6px; margin: 48px 0 18px; scroll-margin-top: 99px; }
+.guide-article h3 { font-size: 19px; color: #26374e; margin-top: 30px; letter-spacing: -.2px; }
+.guide-article strong { color: #24344a; font-weight: 500; }
+.guide-article a { text-decoration-color: #bed0e8; }
+.guide-article a:hover { text-decoration-color: var(--blue); }
+.guide-article blockquote { border-left: 3px solid #7da9e4; border-radius: 0 8px 8px 0; background: #f4f7fc; color: #445c7f; margin: 28px 0; padding: 3px 20px; }
+.guide-article code { background: #f3f6fa; border-color: #e5eaf1; color: #37567b; border-radius: 4px; }
+.guide-article pre { background: #f7f9fc; border-color: var(--line); border-radius: 10px; padding: 26px 22px; color: #2a3b53; }
+.guide-article pre code { background: transparent; color: inherit; font-size: 12px; }
+.guide-article .copy { background: white; color: var(--muted); border-color: var(--line); border-radius: 5px; }
+.guide-article th { background: #f7f9fc; color: #334762; }
+.guide-article td:first-child { color: #334762; }
+.guide-article .anchor { color: #91a9c9; }
+.guide-toc { position: sticky; top: 109px; align-self: start; margin-top: 105px; font-size: 12px; max-height: calc(100dvh - 140px); overflow-y: auto; scrollbar-width: thin; }
+.guide-toc h2 { margin: 0 0 16px; color: #23344c; font-size: 12px; font-weight: 500; }
+.guide-chapter-links { display: grid; gap: 3px; }
+.guide-chapter-links a { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; padding: 8px 6px 8px 0; text-decoration: none; color: var(--muted); line-height: 1.5; font-size: 12px; }
+.guide-chapter-links a > span { font-size: 10px; color: #91a0b2; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.guide-chapter-links a:hover { color: var(--blue); }
+.guide-reference-link { display: grid; gap: 6px; border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; color: var(--muted); text-decoration: none; line-height: 1.5; }
+.guide-reference-link span { color: var(--blue); }
+.guide-mobile-chapters { display: none; }
+.guide-footer { display: grid; gap: 24px; border-top: 1px solid var(--line); margin-top: 48px; padding-top: 24px; font-size: 12px; }
+.guide-back { color: var(--blue); text-decoration: none; font-weight: 500; }
+.guide-resources { display: flex; gap: 18px; flex-wrap: wrap; }
+.guide-resources a { color: var(--muted); text-decoration: none; }
+.guide-page dialog { color: #28384e; background: #ffffff; border-color: var(--line); border-radius: 12px; }
+.guide-page #docs-search { border-radius: 7px; border-color: #d1deef; }
+.guide-page .search-result { color: #2c3e55; border-radius: 7px; }
+.guide-page .search-result span { color: var(--muted); }
+.guide-page .search-result:hover, .guide-page .search-result:focus { background: #f0f5fc; }
+.guide-entry { display: block; padding: 25px 28px; border: 1px solid #d4e0f0; border-radius: 10px; background: #f6f9fd; margin: 28px 0; text-decoration: none; }
+.guide-entry-label { display: block; color: #1f5fb8; font-size: 11px; font-weight: 500; margin-bottom: 10px; }
+.guide-entry strong { display: block; font-family: "IBM Plex Sans", sans-serif; font-size: 23px; font-weight: 500; line-height: 1.35; letter-spacing: -.35px; color: #263750; }
+.guide-entry p { margin: 11px 0 17px; color: #637083; font-size: 14px; }
+.guide-entry-action { display: inline-flex; gap: 8px; align-items: center; color: #1f5fb8; font-size: 12px; font-weight: 500; }
+.guide-entry:hover { background: #f0f5fc; border-color: #a8c2e4; }
+.guide-article ul:has(> li > input[type="checkbox"]) { padding-left: 0; }
+.guide-article li:has(> input[type="checkbox"]) { list-style: none; position: relative; padding-left: 29px; }
+.guide-article li > input[type="checkbox"] { appearance: none; position: absolute; left: 0; top: 7px; width: 15px; height: 15px; margin: 0; border: 1px solid #9bacc3; border-radius: 3px; background: #fff; opacity: 1; }
+@media (max-width: 1000px) {
+  .guide-layout { grid-template-columns: minmax(0, 690px); justify-content: center; max-width: 800px; gap: 0; }
+  .guide-toc { display: none; }
+  .guide-header { margin-bottom: 22px; }
+  .guide-mobile-chapters { display: block; border: 1px solid var(--line); border-radius: 9px; margin-bottom: 28px; padding: 0 16px; background: #fafbfd; }
+  .guide-mobile-chapters summary { cursor: pointer; padding: 14px 0; font-size: 13px; color: #3e526d; }
+  .guide-mobile-chapters summary > span { font-size: 11px; color: var(--muted); margin-left: 9px; }
+  .guide-mobile-chapters nav { padding-bottom: 12px; }
+}
+@media (max-width: 760px) {
+  .guide-page .topbar { height: 65px; padding: 0 20px; }
+  .guide-layout { padding: 0 22px; }
+  .guide-main { padding: 25px 0 40px; }
+  .guide-header { padding-top: 30px; padding-bottom: 27px; }
+  .guide-meta { margin-bottom: 20px; }
+  .guide-header h1 { font-size: 36px; letter-spacing: -1.2px; }
+  .guide-header .lead { font-size: 16px; }
+  .guide-article { font-size: 15px; line-height: 1.85; }
+  .guide-article h2 { font-size: 24px; margin-top: 38px; scroll-margin-top: 87px; }
+  .guide-article h3 { font-size: 18px; }
+  .guide-article pre { padding: 24px 16px 18px; }
+  .guide-entry { padding: 22px; }
+  .guide-entry strong { font-size: 21px; }
+}
+@media print {
+  .guide-layout { display: block; max-width: none; padding: 0; }
+  .guide-main { max-width: none; padding: 0; }
+  .guide-breadcrumb, .guide-toc, .guide-mobile-chapters, .guide-footer { display: none; }
+  .guide-header { padding-top: 0; }
+  .guide-article pre { white-space: pre-wrap; }
+}

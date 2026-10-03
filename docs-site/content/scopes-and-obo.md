@@ -1,5 +1,5 @@
 ## Requested versus effective
-`app_scope` describes what your app requests. IAM decides what is accepted and currently effective. A user must also consent to the requested account/organization data. Honeycomb saves requested configuration and displays accepted state separately.
+`app_scope` describes what your app requests. IAM decides what is accepted and currently effective. Application login selects one account and one organization and asks for consent only to critical IAM scopes. Separate OBO consent covers access to other applications. Honeycomb saves requested configuration and displays accepted state separately.
 
 ## Request access to another application
 ```json
@@ -30,12 +30,22 @@ OBO means **on behalf of**: a service calls a provider for a particular user and
   }]
 }
 ```
-Endpoint IDs must be unique, nonempty, at most 128 characters, and use letters, digits, dots, underscores, or hyphens. Paths must be absolute endpoint paths without traversal, query, or fragment. TTL must be positive. Exposing endpoints requires a backend `base_url` origin.
+The local `endpoint_id` is stored within the app; IAM exposes the globally unique `obo_id` `[app_id:obo:local_id]`. Local endpoint IDs must be unique, nonempty, at most 128 characters, and use letters, digits, dots, underscores, or hyphens. Paths must be absolute endpoint paths without traversal, query, or fragment. TTL must be positive. Exposing endpoints requires a backend `base_url` origin.
 
 The receiving service must verify IAM's delegated authorization, audience, endpoint, organization context, and relevant permissions. Registering an endpoint does not implement its handler or authorization checks for you.
 
 ## After an approval changes
-Reconcile accepted application state, then renew affected user consent/session grants. A cached session may lack a new scope even though the management API reports that scope as effective. [Authentication](/authentication/) and [webhook management](/webhooks/) cover those transitions.
+Reconcile accepted application state, then request the appropriate IAM login or separate OBO consent. A changed OBO dependency graph requires a fresh review; an ordinary login does not grant OBO access. [Authentication](/authentication/) and [webhook management](/webhooks/) cover those transitions.
+
+## Browser approval and return flow
+
+Request OBO when the user chooses a feature that needs it. Open the returned IAM authorization URL in a popup from that click; `display=popup` selects IAM's compact presentation. Supply your registered `redirect_uri` callback and bind its state to the initiating application session, account, organization, environment, and pending request.
+
+Your backend exchanges the one-use code and stores the dedicated OBO credentials before confirming completion. The callback can notify the original application window using an exact target origin and a fresh attempt identifier. The opener checks the message origin, source window, and identifier. Access tokens and refresh tokens never belong in browser messages.
+
+Validate any post-completion destination when starting the request and retain it with the pending operation. Do not accept a replacement destination from the callback. Redirect only after the exchange succeeds; without a destination, render a completion page with a return link. Handle popup closure, blocked popups, refusal, expiry, and uncertain exchange responses explicitly. Keep an uncertain exchange recoverable with its original operation identity; do not create another grant or repeat the underlying paid action automatically.
+
+CLI callers may retain a manual URL/code flow. See the [IAM OBO contract](https://docs.iam.teamofsilicons.com/client/obo/) for authorization, exchange, and receiver verification, and [Honeycomb's storage flow](/authentication/#browser-popups-and-return-destinations) for Honeycomb's own `return_url` and `redirect_url` fields.
 
 ## List the user's organization apps
 
@@ -52,18 +62,21 @@ Declare access through Honeycomb:
 ```
 
 Public callers need the provider's critical-scope approval; private callers follow
-IAM's private-app exemption. Both require effective declared access, current user
-consent, and current membership in the requested organization. Application
+IAM's private-app exemption for that configuration approval. Both still require
+effective declared access, separate user OBO consent, and current membership in
+the requested organization. Application
 credentials alone cannot authorize an organization inventory.
 
-Use IAM's endpoint catalog and signed OBO exchange with audience `honeycomb`,
-endpoint ID `honeycomb.apps.list`, metadata `{}`, and method `POST`. Hash the exact
-JSON bytes that will be sent. For example:
+Use IAM's endpoint catalog to request separate OBO authorization for audience
+`honeycomb`, endpoint ID `honeycomb.apps.list`. The user reviews the complete
+dependency chain and selects an account and organization for each provider. The
+originating app redeems the single-use authorization code and securely stores the
+OBO refresh credential. Send the resulting access token:
 
 ```http
 POST /api/v1/obo/apps/list
 Content-Type: application/json
-X-IAM-OBO-Access-Proof: <single-use proof>
+X-IAM-OBO-Access-Token: <OBO access token>
 
 {"org_id":"tos","limit":100}
 ```
@@ -75,18 +88,23 @@ The response is deliberately limited to catalog identity and status:
 ```
 
 `limit` defaults to 100 and accepts 1–100. If `next_cursor` is present, send its
-value as `after` in the next request, with a new proof bound to that request body.
+value as `after` in the next request using the same unexpired access token.
 Rows are ordered by `app_id`. Configuration, webhook secrets, app credentials,
 testing keys, and unpublished configuration details are never returned.
-Honeycomb verifies the proof with IAM on each request, binding method, path, and
-body digest; IAM checks live authority and consumes the proof. A reused, expired,
-revoked, or mismatched proof is rejected. Proof verification does not disclose a
-user's org role unless IAM authorizes that separate scope, and listing does not
-require an admin role or `self.identity.read` disclosure.
+Honeycomb authenticates as the receiving application and verifies the token with
+IAM on every request against the registered endpoint, method and path. Tokens are
+reusable, do not bind the body digest, and are not consumed. Expired, revoked or
+mismatched authority is rejected. A declared downstream provider can receive the
+same chain token and verify its own endpoint. Verification returns that
+provider's approved account and organization. Consent persists until revoked;
+current membership, security epochs and graph changes still govern credentials.
+Verification does not disclose a user's org role unless IAM authorizes that
+separate scope, and listing does not require an admin role or
+`self.identity.read` disclosure.
 
 For a test environment, pass `X-Testing-Environment-Key`. Honeycomb resolves only
 that ready environment, recovers its own recipient credential through the
-protected IAM integration, and verifies the proof there. The proof's environment
+protected IAM integration, and verifies the access token there. The token's environment
 must match; invalid keys, cleanup, and mismatched credentials never fall back to
 production. This selects an isolated testing environment, independently of a
 package's dev/prod release channel.
@@ -103,7 +121,7 @@ The backend advertises the definition through `/api/contracts` under
 `deploy/honeycomb-obo.json` into Honeycomb's existing application configuration,
 then submit it through Honeycomb's normal configuration/IAM reconciliation flow.
 Preserve existing endpoint definitions and configuration. The definition is
-critical, enabled, and uses a 60-second proof TTL. Shipping the HTTP handler alone
+critical, enabled, and uses a 60-second access-token TTL. Shipping the HTTP handler alone
 does not register its scope in a running IAM instance. Each existing testing
 import must be explicitly refreshed to receive the new definition; production
 configuration does not silently change test snapshots.

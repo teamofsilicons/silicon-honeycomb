@@ -30,6 +30,9 @@ export type Config = {
   libraryOrigin: string;
   consoleOrigin: string;
 };
+export class ApiError extends Error {
+  constructor(message:string,public code?:string,public status?:number){super(message);this.name="ApiError";}
+}
 export async function request<T = any>(
   path: string,
   options: RequestInit = {},
@@ -52,16 +55,16 @@ export async function request<T = any>(
   try {
     value = JSON.parse(text);
   } catch {
-    value = {
-      error: { message: "The service returned an unexpected response." },
-    };
+    if (response.ok && response.status === 204) return undefined as T;
+    throw new ApiError("The service returned an unexpected response. Please try again.", "invalid_response", response.status);
   }
   if (!response.ok) {
-    throw new Error(
+    throw new ApiError(
       [
         value.error?.message || `Request failed (${response.status})`,
-        ...(value.error?.details || []),
+        ...(Array.isArray(value.error?.details) ? value.error.details.filter((detail: unknown) => typeof detail === "string") : []),
       ].join("\n"),
+      typeof value.error?.code === "string" ? value.error.code : undefined, response.status,
     );
   }
   return value;

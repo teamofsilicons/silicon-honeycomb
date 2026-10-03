@@ -5,11 +5,11 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use silicon_iam_client::{Client, EnvironmentKey, Mutation, models};
+use silicon_iam_client::Client;
 
 // Only documented error codes and validated correlation IDs may cross this boundary.
 // Upstream messages/details can contain credentials or request data and are never copied.
-fn iam_storage_error(error: silicon_iam_client::Error) -> Error {
+pub(crate) fn iam_storage_error(error: silicon_iam_client::Error) -> Error {
     use silicon_iam_client::Error as IamError;
     let (status, api, request_id) = match &error {
         IamError::Api(api) => (
@@ -29,9 +29,9 @@ fn iam_storage_error(error: silicon_iam_client::Error) -> Error {
     };
     let mut result = if api.is_some() && status == Some(401) {
         Error::new(
-            axum::http::StatusCode::UNAUTHORIZED,
-            "authentication_required",
-            "IAM could not authenticate the storage request. Sign in again, then retry the same operation.",
+            axum::http::StatusCode::FORBIDDEN,
+            "storage_authorization_required",
+            "IAM could not authenticate the storage grant. Authorize storage, then retry the same operation.",
         )
     } else if api.is_some() && status == Some(403) {
         Error::new(
@@ -115,6 +115,7 @@ mod authorization_tests {
 
 pub struct Briefcase {
     pub iam: Client,
+    pub grants: Option<std::sync::Arc<crate::storage_authorizations::Broker>>,
     pub http: reqwest::Client,
     pub base_url: String,
     pub app_id: String,
@@ -129,32 +130,22 @@ impl Briefcase {
         token: &str,
         environment: Option<&str>,
         org: &str,
-    ) -> Result<(reqwest::Response, Option<String>)> {
+    ) -> Result<(reqwest::Response, Option<String>, String)> {
         let bytes = serde_json::to_vec(&body).map_err(|e| anyhow::anyhow!(e))?;
-        let iam = match environment {
-            Some(k) => self.iam.with_environment(
-                EnvironmentKey::new(k).map_err(|_| Error::bad("Invalid environment key"))?,
-            ),
-            None => self.iam.clone(),
-        };
-        let catalog = iam
-            .obo()
-            .endpoints(&self.audience)
-            .await
-            .map_err(iam_storage_error)?;
-        let input:models::OboExchangeRequest=serde_json::from_value(json!({"org_id":org,"subject_token":token,"audience":self.audience,"endpoint_id":endpoint,"metadata":{},"request":{"method":"POST","body_sha256":silicon_iam_client::api::obo::body_sha256(&bytes)}})).map_err(|e|anyhow::anyhow!(e))?;
-        let proof = iam
-            .obo()
-            .exchange_signed(&input, &catalog, &Mutation::new())
-            .await
-            .map_err(iam_storage_error)?;
+        let credentials = self
+            .grants
+            .as_ref()
+            .ok_or_else(|| crate::storage_authorizations::required(org))?
+            .token(endpoint, token, environment, org)
+            .await?;
         let mut request = self
             .http
             .post(format!("{}{path}", self.base_url))
             .header("x-app-id", &self.app_id)
-            .header("x-iam-obo-access-proof", proof.access_proof)
+            .header("x-org-id", &credentials.org_id)
+            .header("x-iam-obo-access-token", &credentials.access_token)
             .header("content-type", "application/json");
-        let test_secret = proof.testing_context.map(|c| c.app_secret);
+        let test_secret = credentials.testing_context.map(|c| c.app_secret);
         if let Some(secret) = &test_secret {
             request = request.header("x-briefcase-app-secret", secret);
         }
@@ -163,13 +154,16 @@ impl Briefcase {
                 "Briefcase request failed; reconcile the same operation before retrying",
             )
         })?;
+        if matches!(response.status().as_u16(), 401 | 403) {
+            return Err(crate::storage_authorizations::required(org));
+        }
         if !response.status().is_success() {
             return Err(Error::unavailable(format!(
                 "Briefcase returned HTTP {}; verify delegated permissions and retry the same operation",
                 response.status().as_u16()
             )));
         }
-        Ok((response, test_secret))
+        Ok((response, test_secret, credentials.org_id))
     }
 }
 struct UploadFile<'a> {
@@ -191,7 +185,7 @@ impl Briefcase {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
         let body = json!({"operation_id":operation_id,"parent_path":format!("apps/{}/public",self.app_id),"name":file.name,"content_type":file.content_type,"size":bytes.len(),"sha256":sha256});
-        let (response, test_secret) = self
+        let (response, test_secret, storage_org) = self
             .control(
                 "briefcase.uploads.reserve",
                 "/api/v1/obo/uploads/reserve",
@@ -224,7 +218,7 @@ impl Briefcase {
                     "{}/api/v1/obo/uploads/{upload_id}/content",
                     self.base_url
                 ))
-                .header("x-org-id", file.org)
+                .header("x-org-id", &storage_org)
                 .header("x-briefcase-upload-capability", capability)
                 .header("content-type", "application/octet-stream");
             if let Some(secret) = test_secret {
@@ -243,7 +237,7 @@ impl Briefcase {
                 "Briefcase upload is in progress or requires cleanup; retry the same operation later",
             ));
         }
-        let (response, _) = self
+        let (response, _, _) = self
             .control(
                 "briefcase.uploads.commit",
                 "/api/v1/obo/uploads/commit",
@@ -266,6 +260,9 @@ impl Briefcase {
 
 #[async_trait]
 impl ArchiveStorage for Briefcase {
+    fn authorization_broker(&self) -> Option<&crate::storage_authorizations::Broker> {
+        self.grants.as_deref()
+    }
     async fn put(
         &self,
         _org: &str,
@@ -426,7 +423,7 @@ impl Briefcase {
         let digest = Sha256::digest(format!("{operation_id}:publish:{entry}"));
         let link_operation =
             uuid::Uuid::from_slice(&digest[..16]).map_err(|e| anyhow::anyhow!(e))?;
-        let (response, _) = self
+        let (response, _, _) = self
             .control(
                 "briefcase.link_access.update",
                 "/api/v1/obo/link-access",

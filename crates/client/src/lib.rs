@@ -34,6 +34,8 @@ use url::Url;
 #[derive(Debug)]
 pub struct ApiError {
     pub status: u16,
+    /// Stable backend error identifier for recoverable feature flows.
+    pub code: String,
     message: String,
 }
 impl std::fmt::Display for ApiError {
@@ -247,6 +249,10 @@ impl Client {
             .unwrap_or_default();
         Err(ApiError {
             status: status.as_u16(),
+            code: error["code"]
+                .as_str()
+                .unwrap_or("request_failed")
+                .to_owned(),
             message: format!(
                 "HTTP {} {}: {}{}",
                 status.as_u16(),
@@ -381,16 +387,17 @@ impl Client {
             &Self::bounded(response, 4 * 1024 * 1024).await?,
         )?)
     }
-    /// Send a delegated organization-app query. Sign `serde_json::to_vec(request)`
-    /// when requesting the proof; these are the exact bytes sent by this method.
+    /// Query an organization using its separately approved IAM OBO access token.
+    /// Honeycomb verifies the selected organization and endpoint on every request.
+    /// The same token may be reused for pagination until it expires or is revoked.
     pub async fn organization_apps_obo(
         &self,
         request: &Value,
-        access_proof: &str,
+        access_token: &str,
     ) -> Result<Value> {
         let response = Self::check(
             self.request(Method::POST, self.url(&["obo", "apps", "list"])?, None)
-                .header("x-iam-obo-access-proof", access_proof)
+                .header("x-iam-obo-access-token", access_token)
                 .json(request)
                 .send()
                 .await?,
@@ -405,6 +412,51 @@ impl Client {
     }
     pub async fn create_app(&self, input: &AppInput, m: &Mutation) -> Result<Value> {
         self.mutate(Method::POST, &["apps"], input, m).await
+    }
+    /// Begin feature-time Briefcase consent. Omit the return URL for a manual CLI code.
+    pub async fn storage_authorization_start(
+        &self,
+        org_id: &str,
+        return_url: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.storage_authorization_start_with_redirect(org_id, return_url, None, m)
+            .await
+    }
+    /// Complete consent at the callback, then return to a page on the same Honeycomb origin.
+    pub async fn storage_authorization_start_with_redirect(
+        &self,
+        org_id: &str,
+        return_url: Option<&str>,
+        redirect_url: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        let mut body = json!({"org_id":org_id,"return_url":return_url});
+        if let Some(url) = redirect_url {
+            body["redirect_url"] = json!(url);
+        }
+        self.mutate(Method::POST, &["storage-authorizations"], &body, m)
+            .await
+    }
+    /// Read only this authenticated account's pending storage authorization.
+    pub async fn storage_authorization_status(&self, id: &str) -> Result<Value> {
+        self.get(&["storage-authorizations", id]).await
+    }
+    /// Exchange the consent code through Honeycomb; storage credentials remain on its server.
+    pub async fn storage_authorization_complete(
+        &self,
+        id: &str,
+        code: &str,
+        state: &str,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["storage-authorizations", id, "complete"],
+            &json!({"code":code,"state":state}),
+            m,
+        )
+        .await
     }
     /// Upload a publicly viewable logo to Briefcase; save its URL in application configuration.
     pub async fn upload_logo(&self, org: &str, path: &Path, m: &Mutation) -> Result<Value> {
@@ -623,6 +675,55 @@ impl Client {
         )
         .await
     }
+    /// List application-owned ATA verifications, without their credentials.
+    pub async fn ata_verifications(&self, id: &str) -> Result<Value> {
+        self.get(&["apps", id, "ata-verifications"]).await
+    }
+    /// List the current signer's ATA verifications across manageable applications.
+    /// Includes per-application failures so callers can distinguish partial results.
+    pub async fn my_ata_verifications(&self) -> Result<Value> {
+        self.get(&["ata-verifications"]).await
+    }
+    /// Review the dependency expansion before explicitly accepting its graph.
+    pub async fn preview_ata_verification(
+        &self,
+        id: &str,
+        input: &Value,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["apps", id, "ata-verifications", "preview"],
+            input,
+            m,
+        )
+        .await
+    }
+    /// Create a reviewed verification; its refresh token is returned only here.
+    pub async fn create_ata_verification(
+        &self,
+        id: &str,
+        input: &Value,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(Method::POST, &["apps", id, "ata-verifications"], input, m)
+            .await
+    }
+    /// Revoke the verification and every credential derived from it.
+    pub async fn revoke_ata_verification(
+        &self,
+        id: &str,
+        verification: &str,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["apps", id, "ata-verifications", verification, "revoke"],
+            &json!({}),
+            m,
+        )
+        .await
+    }
     /// Read IAM's current pending webhook identity (application managers only).
     pub async fn webhook_state(&self, id: &str) -> Result<Value> {
         self.get(&["apps", id, "webhook"]).await
@@ -705,6 +806,46 @@ impl Client {
         )
         .await
     }
+    pub async fn request_activity(&self) -> Result<Value> {
+        self.get(&["request-activity"]).await
+    }
+    pub async fn sent_requests(&self, page: u32, per_page: u32) -> Result<Value> {
+        let mut url = self.url(&["sent-requests"])?;
+        url.query_pairs_mut()
+            .append_pair("page", &page.to_string())
+            .append_pair("per_page", &per_page.to_string());
+        Self::check(self.request(Method::GET, url, None).send().await?)
+            .await?
+            .json()
+            .await
+            .map_err(Into::into)
+    }
+    pub async fn mark_request_read(
+        &self,
+        id: &str,
+        view: &str,
+        provider: Option<&str>,
+        activity_version: &str,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["requests", id, "read"],
+            &json!({"view":view,"provider":provider,"activity_version":activity_version}),
+            m,
+        )
+        .await
+    }
+    pub async fn review_history(&self) -> Result<Value> {
+        let mut url = self.url(&["review-requests"])?;
+        url.query_pairs_mut()
+            .append_pair("include_completed", "true");
+        Self::check(self.request(Method::GET, url, None).send().await?)
+            .await?
+            .json()
+            .await
+            .map_err(Into::into)
+    }
     pub async fn review_inbox(&self) -> Result<Value> {
         self.get(&["review-requests"]).await
     }
@@ -769,6 +910,23 @@ impl Client {
         )
         .await
     }
+    pub async fn publication_request_message(
+        &self,
+        id: &str,
+        request_id: Option<&str>,
+        message: &str,
+        provider: Option<&str>,
+        m: &Mutation,
+    ) -> Result<Value> {
+        self.mutate(
+            Method::POST,
+            &["apps", id, "publication", "messages"],
+            &json!({"request_id":request_id,"message":message,"provider":provider}),
+            m,
+        )
+        .await
+    }
+
     pub async fn operation(&self, id: &str) -> Result<Value> {
         self.get(&["operations", id]).await
     }

@@ -407,6 +407,8 @@ Create, inspect and configure organization-owned applications
 Usage: honeycomb apps [OPTIONS] <COMMAND>
 
 Commands:
+  storage        Authorize Briefcase storage separately from account sign-in
+  ata            Manage application-to-application endpoint verifications
   organization   List every app in an organization you belong to, including private apps
   upload-logo    Upload a publicly viewable logo to Briefcase. Set the returned logo_url in application.json
   webhook        Manage pending webhook destinations and signing credentials through IAM
@@ -417,6 +419,235 @@ Commands:
   create         Submit application.json containing org_id, app_id, details, webhook and scopes
   update         Update using a complete application.json and the current revision from apps get
   help           Print this message or the help of the given subcommand(s)
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps storage
+
+```text
+Authorize Briefcase storage separately from account sign-in
+
+Usage: honeycomb apps storage [OPTIONS] <COMMAND>
+
+Commands:
+  start     Request Briefcase access when uploading logos or releases
+  status    Inspect a request, optionally waiting for completion in another browser or CLI
+  complete  Complete approved consent without placing its one-time code in shell history
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps storage start
+
+```text
+Request Briefcase access when uploading logos or releases
+
+Usage: honeycomb apps storage start [OPTIONS] <ORG_ID>
+
+Arguments:
+  <ORG_ID>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --return-url <RETURN_URL>
+          Honeycomb /storage-authorization callback; omit for a manual code
+      --redirect-url <REDIRECT_URL>
+          Page to open after completion, on the same Honeycomb origin as return-url
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps storage status
+
+```text
+Inspect a request, optionally waiting for completion in another browser or CLI
+
+Usage: honeycomb apps storage status [OPTIONS] <AUTHORIZATION_ID>
+
+Arguments:
+  <AUTHORIZATION_ID>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --wait
+
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --timeout <TIMEOUT>
+          [default: 600]
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps storage complete
+
+```text
+Complete approved consent without placing its one-time code in shell history
+
+Usage: honeycomb apps storage complete [OPTIONS] --code-file <CODE_FILE> --state <STATE> <AUTHORIZATION_ID>
+
+Arguments:
+  <AUTHORIZATION_ID>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --code-file <CODE_FILE>
+
+      --state <STATE>
+
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps ata
+
+```text
+Manage application-to-application endpoint verifications
+
+Usage: honeycomb apps ata [OPTIONS] <COMMAND>
+
+Commands:
+  list     List your verifications across apps, or all verifications for one managed app
+  preview  Review every required application and endpoint before approving the chain
+  create   Create from a reviewed request JSON including graph_version. Save the one-time refresh token securely
+  revoke   Revoke a verification and all its access and refresh tokens
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps ata list
+
+```text
+List your verifications across apps, or all verifications for one managed app
+
+Usage: honeycomb apps ata list [OPTIONS] [APP_ID]
+
+Arguments:
+  [APP_ID]
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps ata preview
+
+```text
+Review every required application and endpoint before approving the chain
+
+Usage: honeycomb apps ata preview [OPTIONS] <APP_ID> <FILE>
+
+Arguments:
+  <APP_ID>
+  <FILE>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps ata create
+
+```text
+Create from a reviewed request JSON including graph_version. Save the one-time refresh token securely
+
+Usage: honeycomb apps ata create [OPTIONS] <APP_ID> <FILE>
+
+Arguments:
+  <APP_ID>
+  <FILE>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb apps ata revoke
+
+```text
+Revoke a verification and all its access and refresh tokens
+
+Usage: honeycomb apps ata revoke [OPTIONS] <APP_ID> <VERIFICATION_ID>
+
+Arguments:
+  <APP_ID>
+  <VERIFICATION_ID>
 
 Options:
       --api <API>
@@ -870,6 +1101,9 @@ Usage: honeycomb publication [OPTIONS] <COMMAND>
 Commands:
   activate      Activate an approved public revision and reconcile archive access
   inbox         Requests you can review as a provider administrator or authorized validator
+  activity      Count unread updates and requests awaiting your decision
+  sent          Requests submitted by applications you manage
+  mark-read     Acknowledge only the exact activity version you have viewed
   review
   retry-plan
   decide
@@ -927,8 +1161,83 @@ Usage: honeycomb publication inbox [OPTIONS]
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --history
+          Include completed requests and older application revisions
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb publication activity
+
+```text
+Count unread updates and requests awaiting your decision
+
+Usage: honeycomb publication activity [OPTIONS]
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb publication sent
+
+```text
+Requests submitted by applications you manage
+
+Usage: honeycomb publication sent [OPTIONS]
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --page <PAGE>
+          [default: 1]
+      --per-page <PER_PAGE>
+          [default: 50]
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --json
+          Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Reuse this key to safely retry a mutation after an uncertain response
+  -h, --help
+          Print help
+```
+
+## honeycomb publication mark-read
+
+```text
+Acknowledge only the exact activity version you have viewed
+
+Usage: honeycomb publication mark-read [OPTIONS] --view <VIEW> --activity-version <ACTIVITY_VERSION> <REQUEST_ID>
+
+Arguments:
+  <REQUEST_ID>
+
+Options:
+      --api <API>
+          Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --view <VIEW>
+          [possible values: sent, received]
+      --provider <PROVIDER>
+
+      --test <TEST>
+          Use a saved testing environment ID or its 32-character root key
+      --activity-version <ACTIVITY_VERSION>
+
       --json
           Emit structured JSON. Secrets appear only in explicit credential-returning commands
       --idempotency-key <IDEMPOTENCY_KEY>
@@ -1090,14 +1399,16 @@ Arguments:
 Options:
       --api <API>
           Honeycomb backend origin. HTTPS required outside localhost [env: HONEYCOMB_API_URL=]
+      --request <REQUEST_ID>
+          Reply to this request; defaults to the latest request
       --message <MESSAGE>
-
-      --provider <PROVIDER>
 
       --test <TEST>
           Use a saved testing environment ID or its 32-character root key
       --json
           Emit structured JSON. Secrets appear only in explicit credential-returning commands
+      --provider <PROVIDER>
+
       --idempotency-key <IDEMPOTENCY_KEY>
           Reuse this key to safely retry a mutation after an uncertain response
   -h, --help

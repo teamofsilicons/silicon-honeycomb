@@ -289,6 +289,7 @@ impl IamManagement {
             ("logo_url", "app_logo"),
             ("base_url", "base_url"),
             ("obo_endpoints", "obo_endpoints"),
+            ("ata_endpoints", "ata_endpoints"),
             ("obo_review_message", "obo_review_message"),
             ("testing_idle_days", "testing_idle_days"),
             ("webhook_scope", "webhook_scope"),
@@ -464,7 +465,7 @@ impl IamManagement {
             None
         } else {
             Some(decode::<models::HoneycombConfiguration>(
-                json!({"operation_id":id,"configuration_revision":o["configuration_revision"],"expected_iam_revision":o["expected_iam_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":o["visibility"],"availability":"active","publication_approved":false,"webhook":{"url":c["webhook_url"],"secret":o["webhook_secret"],"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_u64().unwrap_or(30)}),
+                json!({"operation_id":id,"configuration_revision":o["configuration_revision"],"expected_iam_revision":o["expected_iam_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":o["visibility"],"availability":"active","publication_approved":false,"webhook":{"url":c["webhook_url"],"secret":o["webhook_secret"],"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"ata_endpoints":c.get("ata_endpoints").cloned().unwrap_or_else(||json!([])),"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_u64().unwrap_or(30)}),
             )?)
         };
         let input = models::HoneycombTestingAppMutation {

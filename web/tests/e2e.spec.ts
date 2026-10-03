@@ -1,9 +1,10 @@
+import { signIn } from "./sign-in";
 import { test, expect } from "@playwright/test";
 const consoleSite = "http://localhost:19174";
 
 test("webhook approval and signing-secret rotation use transient verification and durable retry", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   const handle = `webhook-${info.project.name}-${Date.now()}`;
   const name = `Webhook test ${info.project.name}`, appId = `${handle}`;
   const created = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
@@ -15,7 +16,7 @@ test("webhook approval and signing-secret rotation use transient verification an
   expect(created.ok()).toBe(true);
   await page.reload();
   await page.getByRole("button").filter({ has: page.getByRole("heading", { name, exact: true }) }).click();
-  await page.getByRole("button", { name: "Access & secrets" }).click();
+  await page.getByRole("tab", { name: "Access & secrets" }).click();
   const section = page.getByRole("region", { name: "Webhook management" });
   const proof = section.getByLabel("IAM webhook step-up assertion");
   await expect(section.getByRole("button", { name: "Approve webhook destination" })).toBeDisabled();
@@ -41,8 +42,8 @@ test("webhook approval and signing-secret rotation use transient verification an
 
 test("environment retention persists and reports per-application activity", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
-  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Testing environments", exact: true }).click();
   const row = page.locator(".environment-row").filter({ has: page.getByRole("heading", { name: `Retention sandbox ${info.project.name}`, exact: true }) });
@@ -63,8 +64,8 @@ test("environment retention persists and reports per-application activity", asyn
 
 test("automatic cleanup exposes pending service receipts and preserves its retry operation", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
-  await expect(page.getByRole("heading", { name:"Your applications.", exact:true })).toBeVisible();
+  await signIn(page);
+  await expect(page.getByRole("heading", { name:"Your applications", exact:true })).toBeVisible();
   if (await page.getByRole("button", { name:"Open navigation" }).isVisible()) await page.getByRole("button", { name:"Open navigation" }).click();
   await page.getByRole("button", { name:"Testing environments", exact:true }).click();
   const row=page.locator(".environment-row").filter({has:page.getByRole("heading",{name:`Cleanup sandbox ${info.project.name}`,exact:true})});

@@ -43,7 +43,7 @@ impl IamManagement {
         .fetch_one(&self.db)
         .await?;
         let secret = crate::decrypt(&self.encryption_key, &encrypted)?;
-        let configuration = json!({"operation_id":id,"expected_iam_revision":0,"configuration_revision":request["configuration_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":"public","availability":"active","publication_approved":true,"webhook":{"url":c["webhook_url"],"secret":secret,"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_i64().unwrap_or(30)});
+        let configuration = json!({"operation_id":id,"expected_iam_revision":0,"configuration_revision":request["configuration_revision"],"app_id":app,"org_id":c["org_id"],"name":c["name"],"logo_url":c["logo_url"],"base_url":c["base_url"],"visibility":"public","availability":"active","publication_approved":true,"webhook":{"url":c["webhook_url"],"secret":secret,"scope":c["webhook_scope"]},"app_scope":c["app_scope"],"obo_endpoints":c["obo_endpoints"],"ata_endpoints":c.get("ata_endpoints").cloned().unwrap_or_else(||json!([])),"obo_review_message":c["obo_review_message"],"testing_idle_days":c["testing_idle_days"].as_i64().unwrap_or(30)});
         let body=self.saved(id,"publication.plan",app,json!({"request_id":id,"app_id":app,"configuration_revision":request["configuration_revision"],"visibility":"public","configuration":configuration})).await?;
         let input = decode::<models::HoneycombPublicationPlan>(body)?;
         let receipt = self

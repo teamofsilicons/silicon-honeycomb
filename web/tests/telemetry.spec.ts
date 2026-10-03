@@ -1,3 +1,4 @@
+import { signIn } from "./sign-in";
 import { test, expect } from "@playwright/test";
 
 for (const [site, origin, login] of [
@@ -11,7 +12,7 @@ for (const [site, origin, login] of [
         events.push(request.postDataJSON());
     });
     await page.goto(origin);
-    await page.getByRole("link", { name: login }).click();
+    await signIn(page);
     await expect.poll(() => events.length).toBeGreaterThan(0);
     expect(events.every(event => event.source === site)).toBe(true);
     expect(Object.keys(events[0]).sort()).toEqual(["action", "duration_ms", "event", "source", "success"]);

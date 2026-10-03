@@ -816,3 +816,7 @@ dialog::backdrop {
     padding-top: 25px;
   }
 }
+
+.release-notice { margin: 0 0 2rem; padding: 1rem 1.2rem; border: 1px solid #d6e0f0; border-left: 3px solid #315daf; border-radius: 8px; background: #f3f6fb; color: #354660; font-size: .88rem; line-height: 1.65; }
+.release-notice strong { color: #1b376c; }
+.release-notice p { margin: .35rem 0 0; }

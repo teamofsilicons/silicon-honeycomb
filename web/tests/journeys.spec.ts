@@ -1,3 +1,4 @@
+import { signIn } from "./sign-in";
 import { readFileSync } from "node:fs";
 const logoPng = readFileSync(new URL("./fixtures/logo.png", import.meta.url));
 import { test, expect } from "@playwright/test";
@@ -48,7 +49,7 @@ test("registration validates the first archive and retries its upload without re
       await route.continue();
     });
     await page.goto(consoleSite);
-    await page.getByRole("link", { name: "Continue with IAM" }).click();
+    await signIn(page);
     await page.getByRole("button", { name: "Create application", exact: true }).click();
     const form = page.getByRole("dialog", { name: "Create an application", exact: true });
     await expect(form.getByLabel("Publication preference")).toHaveValue("public");
@@ -75,11 +76,12 @@ test("registration validates the first archive and retries its upload without re
     await form.getByLabel("First CLI archive").setInputFiles(optionalArchive);
     await form.getByLabel("Application handle").fill(handle);
     await form.getByRole("button", { name: "Create application" }).click();
-    const detail = page.getByRole("dialog", { name, exact: true });
+    const detail = page.locator(".console-application");
+    await expect(page).toHaveURL(new RegExp(`/apps/${appId}/releases$`));
     const secret = page.getByRole("dialog", { name: "Save your application secret", exact: true });
     await expect(secret).toBeVisible();
     await secret.getByRole("button", { name: "I’ve saved it" }).click();
-    await expect(detail.getByRole("alert")).toContainText("application was saved, but the release upload failed");
+    await expect(page.getByRole("alert")).toContainText("application was saved, but the release upload failed");
     expect(creates).toBe(1);
     await detail.getByRole("button", { name: "Retry release upload" }).click();
     await expect(detail.getByRole("button", { name: "Retry release upload" })).toHaveCount(0);
@@ -106,7 +108,7 @@ test("registration validates the first archive and retries its upload without re
     const afterDevelopment = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}`)).json();
     expect(afterDevelopment.latest_version).toBe("1.0.0");
     const history = detail.getByRole("region", { name: "Release history" });
-    await history.getByLabel("Release history channel").selectOption("dev");
+    await history.getByRole("group", { name: "Release history channel" }).getByRole("button", { name: "Development", exact: true }).click();
     await history.getByRole("button", { name: "Promote 3.4.5 to production" }).click();
     await expect(history.getByLabel("Production version")).toHaveValue("");
     await history.getByLabel("Production version").fill("1.1.0");
@@ -115,7 +117,7 @@ test("registration validates the first archive and retries its upload without re
     await expect(history).toContainText(`${appId}@1.1.0`);
     const afterPromotion = await (await page.context().request.get(`${consoleSite}/api/v1/apps/${encodeURIComponent(appId)}`)).json();
     expect(afterPromotion.latest_version).toBe("1.1.0");
-    await history.getByLabel("Release history channel").selectOption("dev");
+    await history.getByRole("group", { name: "Release history channel" }).getByRole("button", { name: "Development", exact: true }).click();
     await expect(history).toContainText(`${appId}>test@3.4.5`);
     await expect(history).not.toContainText(`${appId}@1.1.0`);
     await detail.getByRole("heading", { name: "Upload a CLI release" }).scrollIntoViewIfNeeded();
@@ -129,7 +131,7 @@ test("library header opens the console", async ({ page }) => {
   const link = page.locator(".topbar").getByRole("link", { name: "Create an app" });
   await expect(link).toHaveAttribute("href", consoleSite);
   await link.click();
-  await expect(page.getByRole("heading", { name: /Your next application/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /A home for your applications/ })).toBeVisible();
 });
 for (const role of [null, "org_member", "org_owner"]) {
   test(`console explains creation access for ${role ?? "undisclosed"} role`, async ({ page }) => {
@@ -148,7 +150,7 @@ for (const role of [null, "org_member", "org_owner"]) {
       await expect(page.locator("#application-access-help")).toContainText(
         role === null ? "Honeycomb needs membership access" : "Ask an organization owner",
       );
-      await expect(page.locator("#application-access-help").getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/auth/login");
+      await expect(page.locator("#application-access-help").getByRole("button", { name: "Continue as Carbon" })).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
@@ -173,7 +175,7 @@ test("public catalog, typo search, private visibility, sign-in and sign-out", as
     page.getByRole("heading", { name: "Waveform", exact: true }),
   ).toHaveCount(0);
   await page.getByRole("searchbox", { name: "Search applications" }).fill("");
-  await page.getByRole("link", { name: "Sign in with IAM" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Internal tools", exact: true }),
   ).toBeVisible();
@@ -194,14 +196,14 @@ test("console is gated and creates a private application through the backend", a
 }, info) => {
   await page.goto(consoleSite);
   await expect(
-    page.getByRole("heading", { name: /Your next application/ }),
+    page.getByRole("heading", { name: /A home for your applications/ }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Create application", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(
-    page.getByRole("heading", { name: "Your applications." }),
+    page.getByRole("heading", { name: "Your applications" }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Create application", exact: true })
@@ -229,11 +231,9 @@ test("console is gated and creates a private application through the backend", a
     .click();
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-  const card = page
-    .getByRole("button")
-    .filter({ has: page.getByRole("heading", { name, exact: true }) });
-  await expect(card).toContainText("private");
-  await card.click();
+  const detail = page.locator(".console-application");
+  await expect(detail).toContainText("Private application");
+  await expect(page).toHaveURL(/\/apps\/[^/]+$/);
   await page
     .getByRole("button", { name: "Edit configuration", exact: true })
     .click();
@@ -251,13 +251,8 @@ test("console is gated and creates a private application through the backend", a
   await expect(
     page.getByRole("heading", { name: name + " updated", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("button")
-    .filter({
-      has: page.getByRole("heading", { name: name + " updated", exact: true }),
-    })
-    .click();
-  await page.getByRole("button", { name: "Releases & publication" }).click();
+  await expect(detail.getByRole("heading", { name: name + " updated", exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Releases & publication" }).click();
   await expect(
     page.getByRole("button", { name: "Request publication", exact: true }),
   ).toBeDisabled();
@@ -312,7 +307,7 @@ test("draft closing flushes the latest fields and scope edits", async ({
   page,
 }) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await page
     .getByRole("button", { name: "Create application", exact: true })
     .click();
@@ -320,7 +315,7 @@ test("draft closing flushes the latest fields and scope edits", async ({
   const name = `Draft ${Date.now()}`;
   await dialog.getByLabel("Application name", { exact: true }).fill(name);
   await dialog
-    .getByRole("button", { name: "Configure scopes & OBO endpoints" })
+    .getByRole("button", { name: "Configure scopes & delegation endpoints" })
     .click();
   const scopes = JSON.stringify({
     iam: ["self.identity.read", "self.profile.read"],
@@ -338,7 +333,7 @@ test("draft closing flushes the latest fields and scope edits", async ({
   ).toHaveValue(name);
   if (!(await dialog.getByLabel("Application scopes").isVisible()))
     await dialog
-      .getByRole("button", { name: "Configure scopes & OBO endpoints" })
+      .getByRole("button", { name: "Configure scopes & delegation endpoints" })
       .click();
   await expect(dialog.getByLabel("Application scopes")).toHaveValue(scopes);
 });
@@ -347,9 +342,9 @@ test("testing setup shows per-service failures and supports retry", async ({
   page,
 }) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await expect(
-    page.getByRole("heading", { name: "Your applications.", exact: true }),
+    page.getByRole("heading", { name: "Your applications", exact: true }),
   ).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
     await page.getByRole("button", { name: "Open navigation" }).click();
@@ -408,8 +403,8 @@ test("concurrent browser requests share one rotating refresh and sign out cleanl
 
 test("console import exposes pending integration without disabling the ready environment", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
-  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Testing environments", exact: true }).click();
   const row=page.locator(".environment-row").filter({ has: page.getByRole("heading", { name: `Import sandbox ${info.project.name}`, exact: true }) });
@@ -429,13 +424,13 @@ test("console import exposes pending integration without disabling the ready env
 
 test("secret rotation is explicit and browser retries preserve the same operation", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
-  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   const name=info.project.name === "desktop" ? "Briefcase" : "Waveform";
   const appId=`${name.toLowerCase()}`;
   await page.getByRole("heading", { name, exact: true }).click();
-  const dialog=page.getByRole("dialog");
-  await dialog.getByRole("button", { name: "Access & secrets", exact: true }).click();
+  const dialog=page.locator(".console-application");
+  await dialog.getByRole("tab", { name: "Access & secrets", exact: true }).click();
   await dialog.getByRole("button", { name: "Refresh IAM state", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("Synchronization pending");
   await expect(dialog.getByRole("status")).toContainText("not yet available");
@@ -467,19 +462,30 @@ test("secret rotation is explicit and browser retries preserve the same operatio
 
 test("provider administrators can discuss and approve their review gate", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
-  await expect(page.getByRole("heading", { name: "Your applications.", exact: true })).toBeVisible();
+  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Your applications", exact: true })).toBeVisible();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: "Review requests", exact: true }).click();
+  await page.getByRole("button", { name: /^Received requests(?: \d+ (?:new updates?|pending approvals?))?$/ }).click();
   await page.getByRole("heading", { name: `Review candidate ${info.project.name}`, exact: true }).click();
-  const dialog=page.getByRole("dialog");
-  await dialog.getByLabel("Reply to this review").fill("The selected file access is appropriate for this application.");
-  await dialog.getByRole("button", { name: "Send reply", exact: true }).click();
-  await expect(dialog.locator(".review-thread")).toContainText("selected file access is appropriate");
-  await dialog.getByLabel("Reason", { exact: true }).fill("Reviewed the declared file access.");
-  await dialog.getByRole("button", { name: "Submit decision", exact: true }).click();
-  await expect(dialog).toContainText("approved");
-  await expect(dialog.getByRole("button", { name: "Submit decision", exact: true })).toBeDisabled();
+  const discussion=page.locator(".discussion-page");
+  await expect(page).toHaveURL(/\/requests\/received\/[^/]+\/[^/]+$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await discussion.getByLabel("Add a reply", { exact: true }).fill("The selected file access is appropriate for this application.");
+  // Refreshing the standalone page must not discard an unsent reply.
+  await discussion.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(discussion.getByLabel("Add a reply", { exact: true })).toHaveValue("The selected file access is appropriate for this application.");
+  await discussion.getByRole("button", { name: "Send reply", exact: true }).click();
+  await expect(discussion.locator(".discussion-message").filter({ hasText: "selected file access is appropriate" })).toBeVisible();
+  await expect(discussion.getByLabel("Add a reply", { exact: true })).toHaveValue("");
+  await discussion.getByLabel(/Note to the owner/).fill("Reviewed the declared file access.");
+  await discussion.getByRole("button", { name: "Approve request", exact: true }).click();
+  await expect(discussion.getByText("Approved", { exact: true })).toBeVisible();
+  await expect(discussion.getByRole("button", { name: "Approve request", exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(discussion.getByRole("heading", { name: "Review approved", exact: true })).toBeVisible();
+  await expect(discussion.getByRole("button", { name: "Approve request", exact: true })).toHaveCount(0);
+  await discussion.getByLabel("Add a reply", { exact: true }).fill("Thank you for the update.");
+  await expect(discussion.getByRole("button", { name: "Send reply", exact: true })).toBeEnabled();
 });
 
 test("console shows the automatic publication request and publishes an approved release in the anonymous library", async ({ page, request }, info) => {
@@ -494,8 +500,8 @@ test("console shows the automatic publication request and publishes an approved 
   const appId = `${handle}`, name = `Public release ${info.project.name}`;
   try {
     await page.goto(consoleSite);
-    await page.getByRole("link", { name: "Continue with IAM" }).click();
-    await expect(page.getByRole("heading", { name: "Your applications." })).toBeVisible();
+    await signIn(page);
+    await expect(page.getByRole("heading", { name: "Your applications" })).toBeVisible();
     const create = await page.context().request.post(`${consoleSite}/api/v1/apps`, {
       headers: { Origin: consoleSite, "Idempotency-Key": `${handle}-create` },
       data: { org_id: "tos", app_id: handle, name,
@@ -516,8 +522,8 @@ test("console shows the automatic publication request and publishes an approved 
     execFileSync(cliPath, ["pack", root, "--output", archive], { env: cliEnv });
     await page.reload();
     await page.getByRole("heading", { name, exact: true }).click();
-    await page.getByRole("button", { name: "Releases & publication" }).click();
-    const dialog = page.getByRole("dialog");
+    await page.getByRole("tab", { name: "Releases & publication" }).click();
+    const dialog = page.locator(".console-application");
     await dialog.getByLabel("Upload release channel").selectOption("prod");
     await expect(dialog.getByLabel("Upload CLI archive")).toBeEnabled();
     await dialog.getByLabel("Upload CLI archive").setInputFiles(archive);
@@ -535,26 +541,27 @@ test("console shows the automatic publication request and publishes an approved 
     });
     expect(decision.ok()).toBe(true);
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Your applications." })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("tab", { name: "Releases & publication" })).toHaveAttribute("aria-selected", "true");
     if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
       await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.getByRole("button", { name: "Sent requests", exact: true }).click();
+    await page.getByRole("button", { name: /^Sent requests(?: \d+ new updates)?$/ }).click();
     const sentRequest = page.locator("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
     await expect(sentRequest).toContainText("Published", { timeout: 30_000 });
     await expect(page.getByRole("button", { name: "Activate public release", exact: true })).toHaveCount(0);
     await page.goto(library);
     await page.getByRole("searchbox", { name: "Search applications" }).fill(name);
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Sign in with IAM" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue as Carbon" }).first()).toBeVisible();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("permission picker reflects IAM eligibility and preserves scope edits", async ({ page }) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await page.getByRole("button", { name: "Create application", exact: true }).click();
   const dialog=page.getByRole("dialog");
-  await dialog.getByRole("button", { name: "Configure scopes & OBO endpoints" }).click();
+  await dialog.getByRole("button", { name: "Configure scopes & delegation endpoints" }).click();
   await expect(dialog.getByRole("checkbox", { name: "self.profile.read", exact: true })).toBeChecked();
   await expect(dialog.getByRole("checkbox", { name: "directory.carbons.read", exact: true })).toBeDisabled();
   await expect(dialog).toContainText("Unavailable for this organization");
@@ -574,7 +581,7 @@ test("permission picker reflects IAM eligibility and preserves scope edits", asy
 
 test("logo upload retries a lost response using the same operation", async ({ page }, info) => {
   await page.goto(consoleSite);
-  await page.getByRole("link", { name: "Continue with IAM" }).click();
+  await signIn(page);
   await page.getByRole("button", { name: "Create application", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await page.route("https://briefcase.fixture.invalid/**", route => route.fulfill({ contentType: "image/png", body: logoPng }));

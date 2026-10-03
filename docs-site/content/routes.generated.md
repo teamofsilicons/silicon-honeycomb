@@ -13,6 +13,10 @@
 | `POST` | `/api/v1/reports` | [`report`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/notifications.rs) |
 | `POST` | `/api/v1/telemetry` | [`ingest`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/telemetry.rs) |
 | `GET` | `/api/v1/review-requests` | [`inbox`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/reviews.rs) |
+| `GET` | `/api/v1/legacy-review-requests/{id}` | [`legacy_request`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/reviews.rs) |
+| `GET` | `/api/v1/sent-requests` | [`sent`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/request_activity.rs) |
+| `GET` | `/api/v1/request-activity` | [`summary`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/request_activity.rs) |
+| `POST` | `/api/v1/requests/{id}/read` | [`mark_read`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/request_activity.rs) |
 | `POST` | `/api/v1/review-requests/{id}/activate` | [`activate`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/activation.rs) |
 | `GET` | `/api/v1/review-requests/{id}/{provider}` | [`detail`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/reviews.rs) |
 | `POST` | `/api/v1/review-requests/{id}/{provider}/messages` | [`message`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/reviews.rs) |
@@ -66,3 +70,11 @@
 | `POST` | `/webhook/` | [`webhook`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/control.rs) |
 | `POST` | `/api/v1/obo/apps/list` | [`delegated_list`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/obo.rs) |
 | `GET` | `/api/v1/organizations/{org}/apps` | [`member_list`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/obo.rs) |
+| `POST` | `/api/v1/storage-authorizations` | [`start`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/storage_authorizations.rs) |
+| `GET` | `/api/v1/storage-authorizations/{id}` | [`status`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/storage_authorizations.rs) |
+| `POST` | `/api/v1/storage-authorizations/{id}/complete` | [`complete`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/storage_authorizations.rs) |
+| `GET` | `/api/v1/ata-verifications` | [`list_mine`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/ata.rs) |
+| `GET` | `/api/v1/apps/{app}/ata-verifications` | [`list`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/ata.rs) |
+| `POST` | `/api/v1/apps/{app}/ata-verifications` | [`create`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/ata.rs) |
+| `POST` | `/api/v1/apps/{app}/ata-verifications/preview` | [`preview`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/ata.rs) |
+| `POST` | `/api/v1/apps/{app}/ata-verifications/{id}/revoke` | [`revoke`](https://github.com/teamofsilicons/silicon-honeycomb/blob/main/crates/server/src/ata.rs) |

@@ -705,6 +705,7 @@ mod tests {
         let identity =
             crate::auth::Iam::new("https://identity.example", "catalog", "fixture").unwrap();
         let storage = crate::storage::Briefcase {
+            grants: None,
             iam: identity.client.clone(),
             http: reqwest::Client::new(),
             base_url: "https://storage.example".into(),

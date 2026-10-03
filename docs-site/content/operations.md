@@ -11,7 +11,7 @@ Read current state before a mutation. The API sends revision preconditions with 
 
 ## Persist the idempotency key
 ```sh
-honeycomb --idempotency-key my-config-change-0001 apps update 'my-org>my-app' application.json --revision 2
+honeycomb --idempotency-key my-config-change-0001 apps update 'my-app' application.json --revision 2
 ```
 Generate a unique key per logical mutation and record it before sending. If the response is uncertain, retry the same key and exact input. Do not change the revision or body under that key. A fresh action needs a fresh key.
 
@@ -19,7 +19,7 @@ Generate a unique key per logical mutation and record it before sending. If the 
 ```sh
 honeycomb operations get OPERATION_ID
 honeycomb operations retry OPERATION_ID
-honeycomb apps reconcile 'my-org>my-app'
+honeycomb apps reconcile 'my-app'
 ```
 Honeycomb stores durable operations around cross-service work. A pending result can mean IAM acceptance or storage reconciliation is still outstanding. Inspect the status and repair the reported integration before retrying. A successful HTTP response that says pending is not completed activation.
 
@@ -48,9 +48,9 @@ rejection. Reconcile the application, read its current Honeycomb revision, and
 start a new rotation with a new idempotency key:
 
 ```sh
-honeycomb --test ENVIRONMENT_ID apps reconcile 'my-org>my-app'
-honeycomb --test ENVIRONMENT_ID apps get 'my-org>my-app'
-honeycomb --test ENVIRONMENT_ID --idempotency-key NEW_UNIQUE_KEY apps rotate-secret 'my-org>my-app' --revision CURRENT_REVISION
+honeycomb --test ENVIRONMENT_ID apps reconcile 'my-app'
+honeycomb --test ENVIRONMENT_ID apps get 'my-app'
+honeycomb --test ENVIRONMENT_ID --idempotency-key NEW_UNIQUE_KEY apps rotate-secret 'my-app' --revision CURRENT_REVISION
 ```
 
 Other revision conflicts, lifecycle changes, timeouts and lost responses remain

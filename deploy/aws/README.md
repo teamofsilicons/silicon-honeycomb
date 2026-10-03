@@ -22,7 +22,11 @@ Build Linux ARM64 images from `deploy/Dockerfile.backend` and `deploy/Dockerfile
 push them to the stack's ECR repositories under a new immutable tag, and populate
 `silicon-honeycomb/production/runtime` with protected `backend`, `library`, and
 `console` environment maps. Preserve existing encryption/session keys during
-updates. The operator handoff lives outside Git at
+updates. The backend map must contain a valid `POSTMARK_SERVER_TOKEN`; deployment
+fails before replacing containers when this setting is absent. Review pending
+notification events before first enabling delivery, and preserve identifier-migration
+holds. See [the mail diagnosis and rollout notes](../../docs/HONEYCOMB_EXPERIENCE_2026_10_02.md).
+The operator handoff lives outside Git at
 `/Users/codanium/.config/silicon/honeycomb/production-runtime.json` (0600).
 
 ```sh

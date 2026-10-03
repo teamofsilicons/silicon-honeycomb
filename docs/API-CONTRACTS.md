@@ -127,12 +127,92 @@ with stable app-ID ordering. Each item contains exactly `app_id`, `org_id`, `nam
 remain visible to that organization's members; app execution/download eligibility
 is checked separately. Configuration and secrets are excluded.
 
-The OBO handler consumes `X-IAM-OBO-Access-Proof` by verifying it with IAM against
-`POST`, the registered path, and the SHA-256 of the exact incoming body. It checks
+The OBO handler accepts `X-IAM-OBO-Access-Token` containing the dedicated OBO
+access token from a separately approved grant. Honeycomb authenticates its own
+recipient application to IAM's `POST /api/v1/obo-access/token-verifications`
+with `{access_token, endpoint_id, request:{method,path}}`. It checks the active
 recipient, endpoint, selected organization, delegated scope, actor consistency,
-and environment. Every request rechecks current IAM authority. A fresh proof is
-needed for each page or retry after consumption. `X-Testing-Environment-Key`
-selects an isolated data/authentication plane; invalid/mismatched context fails
-closed. `/api/contracts` advertises the provider definition as `obo_endpoints`.
-Deployment must synchronize `deploy/honeycomb-obo.json` through the normal
-application configuration workflow before callers can obtain valid proofs.
+and environment, then applies the inventory's resource checks. Verification is
+repeatable: the same unexpired token can serve multiple pages and retries, with
+current authority checked on every request. The token is not bound to a body
+digest and is not consumed. Ordinary application-login tokens cannot replace it.
+
+The consent review covers the full declared dependency graph, with an approved
+account and organization for each provider. A provider can forward the same token
+to a declared downstream endpoint, whose receiving app verifies it using its own
+credentials. Consent remains until revoked; access-token expiry, security epochs,
+current membership, current graph and testing generation still apply.
+`X-Testing-Environment-Key` selects an isolated data/authentication plane;
+invalid/mismatched context fails closed. `/api/contracts` advertises the provider
+definition as `obo_endpoints`. Deployment must synchronize
+`deploy/honeycomb-obo.json` through the normal application configuration workflow
+before callers can request and approve the endpoint.
+
+## Application-to-application verification
+
+The October 2026 IAM redesign adds `ata_endpoints` to application configuration.
+Each definition has a local `endpoint_id`, `name`, `path`, `critical`, `description`,
+object `metadata`, optional `note_to_user`, `additional_warnings`, `downstream`
+ATA dependencies, and `enabled`. IAM discovery returns its globally unique
+`[app_id:ata:local_id]`. Importing an OBO definition copies its presentation and
+path; review and add ATA dependencies explicitly. OBO credentials and user
+contexts are never copied into ATA.
+
+Honeycomb exposes these authenticated manager routes:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/v1/ata-verifications` | Current signer's records across manageable apps, app choices, and explicit per-app load failures; no token plaintext |
+| GET | `/api/v1/apps/{app}/ata-verifications` | Metadata, current status, immutable signer; no token plaintext |
+| POST | `/api/v1/apps/{app}/ata-verifications/preview` | Complete application/endpoint graph and its `graph_version` |
+| POST | `/api/v1/apps/{app}/ata-verifications` | Verification metadata and one-time refresh token |
+| POST | `/api/v1/apps/{app}/ata-verifications/{id}/revoke` | Revocation invalidates this verification's refresh/access credentials |
+
+Create/revoke require a UUID `Idempotency-Key`. Reuse that same key and exact body
+when retrying an uncertain response. Honeycomb supplies the IAM operation identity;
+callers must not put `operation_id` in the public Honeycomb body. IAM is the token
+authority, while Honeycomb forwards the current manager's IAM proof. Credentials
+are not saved in configuration archives.
+
+Preview accepts `endpoints: [{audience, endpoint_id}]`, optional `app_ids`,
+`expires_after` (seconds, at least 3600; omitted/null means never), and
+`access_token_validity` (60–86400 seconds, default1800). Review every dependency,
+then create with the returned complete `app_ids`, complete `endpoints`, and
+`graph_version`, plus the chosen lifetimes. A changed graph requires a fresh review.
+Management currently uses the production application console; a testing-key
+context cannot mint a production credential.
+
+The CLI has the same flow:
+
+```sh
+honeycomb apps ata list
+honeycomb apps ata list ting
+honeycomb apps ata preview ting request.json
+honeycomb --idempotency-key <uuid> apps ata create ting reviewed-request.json
+honeycomb --idempotency-key <another-uuid> apps ata revoke ting <verification-id>
+```
+
+The console's **App to App verifications** page uses the personal list. Its
+`items` contain only records signed by the current principal; `applications`
+lists current owner/admin app choices, and `failures` identifies apps whose
+records could not be loaded. Partial results must not be presented as complete.
+Omitting the app ID in the CLI lists this same workspace. Supplying an app ID
+retains the manager view of all its verifications. Creation still selects an
+originating application and uses its existing manager authority; endpoint
+definitions remain in each application's configuration.
+
+Save the returned refresh credential in the application's secret store. The
+originating app exchanges it at IAM `POST /api/v1/ata-access/tokens` using its own
+application credentials. Refresh rotates the credential; reuse invalidates the
+verification. A receiving app uses its own credentials at
+`POST /api/v1/ata-access/verify` with the originating `app_id`, `app_proof_token`,
+and exact `endpoint`. One access token covers the reviewed ATA chain, and it
+never conveys Carbon, Silicon, membership, or OBO authority.
+
+These are local implementation contracts. Production activation and coordinated
+consumer migration remain release gates.
+
+
+## Request activity and read state
+
+See [the experience contract](HONEYCOMB_EXPERIENCE_2026_10_02.md) for sent-request pagination, read-only activity counts and account-isolated exact-version read markers. New routes use the existing v1 authentication, testing-plane and mutation-header contracts.

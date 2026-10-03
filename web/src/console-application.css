@@ -1,0 +1,58 @@
+.console-application { max-width: 1220px; margin: 0 auto; }
+.app-back { margin-bottom: 25px; font-size: 13px; color: var(--muted); }
+.console-app-header { padding: 29px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+.console-app-identity { display: flex; gap: 20px; align-items: center; flex: 1; min-width: 200px; }
+.console-app-logo { display: grid; place-items: center; width: 74px; height: 74px; border: 1px solid var(--line); background: var(--surface); border-radius: 15px; color: var(--blue); flex: none; }
+.console-app-logo img { width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
+.console-app-kicker { color: var(--muted); font-size: 12px; }
+.console-app-identity h1 { font-size: clamp(26px,3vw,34px); line-height: 1.2; margin: 8px 0; letter-spacing: -1px; overflow-wrap: anywhere; }
+.console-app-identity code { color: var(--muted); font-size: 12px; }
+.console-app-actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.console-app-actions .button { font-size: 12px; padding: 10px 13px; }
+.console-app-summary { width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 20px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.console-app-summary strong { font-weight: 500; color: var(--ink); }
+.console-app-tabs { display: flex; gap: 24px; overflow-x: auto; margin: 25px 0; border-bottom: 1px solid var(--line); }
+.console-app-tabs button { flex: none; border: 0; border-bottom: 2px solid transparent; padding: 14px 2px; background: transparent; color: var(--muted); font-size: 13px; }
+.console-app-tabs button[aria-selected="true"] { border-bottom-color: var(--blue); color: var(--blue); font-weight: 500; }
+.console-app-tabs button:hover { color: var(--blue); }
+.console-app-panel { min-width: 0; }
+.console-app-panel:not(.tab-overview) { padding: 28px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; }
+.console-overview-grid { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 24px; align-items: start; }
+.console-about-panel,.console-install-panel { padding: 26px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); min-width: 0; }
+.console-section-heading { display: flex; gap: 11px; align-items: center; margin-bottom: 22px; }
+.console-section-heading h2,.console-about-panel h2 { font-size: 16px; letter-spacing: -.3px; margin: 0; }
+.section-icon { display: grid; place-items: center; width: 35px; height: 35px; background: var(--blue-pale); color: var(--blue); border: 1px solid var(--line); border-radius: 9px; }
+.console-about-panel .description { white-space: pre-line; margin: 18px 0 24px; line-height: 1.8; font-size: 14px; color: var(--muted); }
+.console-about-panel .detail-stats { margin: 0 0 23px; padding-bottom: 22px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.console-about-panel .detail-links { display: flex; flex-wrap: wrap; gap: 18px; margin: 22px 0; }
+.console-about-panel .detail-links a { font-size: 13px; }
+.install-channel { font-size: 12px; font-weight: 500; margin-bottom: 11px; }
+.install-command { display: flex; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); background: var(--surface); border-radius: 9px; }
+.install-command code { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 11px; flex: 1; min-width: 0; }
+.install-command button { flex: none; padding: 6px; border-radius: 6px; }
+.console-install-panel .install-help { font-size: 12px; color: var(--muted); line-height: 1.7; margin: 12px 0 0; }
+.development-install { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 19px; }
+.development-install summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; list-style: none; cursor: pointer; color: var(--ink); }
+.development-install summary::-webkit-details-marker { display: none; }
+.development-install summary strong { display: block; font-size: 13px; font-weight: 500; }
+.development-install summary small { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.development-install summary svg { color: var(--muted); transition: transform .16s ease; }
+.development-install[open] summary svg { transform: rotate(180deg); }
+.development-install > div { margin-top: 16px; }
+.install-version-note { font-size: 11px; color: var(--muted); line-height: 1.8; border-top: 1px solid var(--line); margin: 21px 0 0; padding-top: 17px; }
+.install-version-note strong { font-weight: 500; }
+.publication-conversations { display: grid; gap: 15px; }
+.publication-summary { padding: 20px; border: 1px solid var(--line); border-radius: 11px; }
+.publication-summary-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 13px; }
+.publication-summary-header h4 { font-size: 14px; margin: 0; }
+.publication-summary > p { font-size: 13px; line-height: 1.65; }
+.publication-provider-list { display: grid; gap: 8px; margin-top: 15px; }
+.publication-provider-list button { display: flex; text-align: left; gap: 12px; align-items: center; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.publication-provider-list button strong { flex: 1; font-size: 13px; font-weight: 500; }
+.publication-provider-list button:hover { border-color: #b9cdeb; background: var(--blue-pale); }
+.publication-provider-list .provider-status { color: var(--muted); font-size: 12px; }
+.console-app-panel.tab-access > form { max-width: 650px; }
+@media(max-width:1100px) { .console-overview-grid { grid-template-columns: minmax(0,1fr) 300px; gap: 18px; } .console-app-header { padding: 24px; } }
+@media(max-width:920px) { .console-overview-grid { grid-template-columns: 1fr; } .console-install-panel { max-width: none; } }
+@media(max-width:600px) { .console-app-header { padding: 19px; gap: 20px; } .console-app-identity { gap: 14px; } .console-app-logo { width: 55px; height: 55px; border-radius: 12px; } .console-app-identity h1 { font-size: 26px; } .console-app-actions { width: 100%; } .console-app-actions .button { flex: 1; justify-content: center; } .console-app-summary { gap: 12px; } .console-about-panel,.console-install-panel,.console-app-panel:not(.tab-overview) { padding: 20px; } .console-app-tabs { gap: 22px; } .publication-summary { padding: 15px; } .publication-provider-list button { flex-wrap: wrap; } }
+@media(prefers-reduced-motion:reduce) { .development-install summary svg { transition: none; } }

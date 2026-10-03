@@ -26,6 +26,27 @@ route table are generated; do not hand-edit them. Keep availability statements d
 and distinguish local fixture coverage from actual production acceptance.
 The six payloads in the documentation checker validate structure, not native execution.
 
+Editorial walkthroughs live in `content/guides/` and use the same static build as
+reference documentation. Register each one in `pages.json` with a stable nested
+slug, `group: "Guides"`, and `layout: "article"`, for example:
+
+```json
+{
+  "slug": "guides/team-of-silicons-ready-applications",
+  "title": "Building a Team of Silicons-ready application",
+  "group": "Guides",
+  "layout": "article",
+  "description": "A practical guide to integrating an application with the Silicon ecosystem."
+}
+```
+
+Write the body without an H1 or frontmatter; the template renders the title and
+description. H2 headings become chapter links, and reading time is estimated at
+build time. Link new guides from the documentation homepage when they introduce a
+primary workflow. Guides have their own reading layout, remain searchable, and do
+not interrupt the previous/next sequence of reference pages. Their HTML and
+Markdown downloads work without JavaScript.
+
 Build emits page HTML, per-page Markdown, local search JSON, a sitemap, `robots.txt`,
 and `llms.txt`. Assets and downloadable templates are in `public/`. A normal Vercel
 project uses `npm run build` and `dist` as configured in `vercel.json`.

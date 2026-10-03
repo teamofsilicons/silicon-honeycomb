@@ -34,11 +34,17 @@ impl Identity {
 }
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
+    /// Application-authenticated delegated storage authorization; credentials stay server-side.
+    async fn obo_operation(&self, _: &str, _: Value, _: &str, _: Option<&str>) -> Result<Value> {
+        Err(Error::unavailable(
+            "Delegated storage authorization is not configured",
+        ))
+    }
     async fn login(&self, slt: &str, key: &str, environment: Option<&str>) -> Result<Value>;
     async fn refresh(&self, token: &str, key: &str, environment: Option<&str>) -> Result<Value>;
     async fn authenticate(&self, token: &str, environment: Option<&str>) -> Result<Identity>;
     async fn revoke(&self, token: &str, key: &str, environment: Option<&str>) -> Result<()>;
-    /// Verify a single-use proof for the organization catalog and its exact body.
+    /// Verify a reusable token for the organization catalog endpoint.
     /// Providers must revalidate current membership, consent and endpoint access.
     async fn verify_obo(&self, _: &str, _: &[u8], _: Option<&str>) -> Result<Identity> {
         Err(Error::unauthorized())
@@ -162,6 +168,57 @@ fn iam_error(e: silicon_iam_client::Error) -> Error {
 }
 #[async_trait]
 impl IdentityProvider for Iam {
+    async fn obo_operation(
+        &self,
+        operation: &str,
+        body: Value,
+        key: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        let client = self.scoped(environment).await?;
+        let mutation = mutation(key)?;
+        let value = match operation {
+            "authorize" => serde_json::to_value(
+                client
+                    .obo()
+                    .authorize(
+                        &serde_json::from_value(body)
+                            .map_err(|_| Error::bad("Invalid OBO authorization"))?,
+                        &mutation,
+                    )
+                    .await
+                    .map_err(crate::storage::iam_storage_error)?,
+            ),
+            "exchange" => serde_json::to_value(
+                client
+                    .obo()
+                    .exchange_code(
+                        serde_json::from_value(body["authorization_id"].clone())
+                            .map_err(|_| Error::bad("Invalid authorization ID"))?,
+                        body["code"]
+                            .as_str()
+                            .ok_or_else(|| Error::bad("Missing code"))?,
+                        &mutation,
+                    )
+                    .await
+                    .map_err(crate::storage::iam_storage_error)?,
+            ),
+            "refresh" => serde_json::to_value(
+                client
+                    .obo()
+                    .refresh(
+                        body["refresh_token"]
+                            .as_str()
+                            .ok_or_else(|| Error::bad("Missing refresh token"))?,
+                        &mutation,
+                    )
+                    .await
+                    .map_err(crate::storage::iam_storage_error)?,
+            ),
+            _ => return Err(Error::bad("Unsupported OBO operation")),
+        };
+        value.map_err(|e| anyhow::anyhow!(e).into())
+    }
     async fn login(&self, slt: &str, key: &str, environment: Option<&str>) -> Result<Value> {
         let response = self
             .scoped(environment)
@@ -272,19 +329,19 @@ impl IdentityProvider for Iam {
     async fn verify_obo(
         &self,
         proof: &str,
-        body: &[u8],
+        _body: &[u8],
         environment: Option<&str>,
     ) -> Result<Identity> {
         let verified = self
             .scoped(environment)
             .await?
             .obo()
-            .verify(&models::OboVerifyRequest {
-                access_proof: proof.into(),
-                request: models::OboVerifyRequestBinding {
+            .verify(&models::OboTokenVerificationRequest {
+                access_token: proof.into(),
+                endpoint_id: crate::obo::ENDPOINT_ID.into(),
+                request: models::OboTokenRequestBinding {
                     method: "POST".into(),
                     path: crate::obo::ENDPOINT_PATH.into(),
-                    body_sha256: silicon_iam_client::api::obo::body_sha256(body),
                 },
             })
             .await
@@ -307,8 +364,8 @@ impl IdentityProvider for Iam {
             .map(serde_json::to_value)
             .transpose()
             .map_err(|e| anyhow::anyhow!(e))?;
-        if verified.valid != true
-            || verified.audience != self.app_id
+        if !verified.active
+            || verified.endpoint.app_id != self.app_id
             || a.audience != self.app_id
             || verified.endpoint.endpoint_id != crate::obo::ENDPOINT_ID
             || verified.endpoint.path != crate::obo::ENDPOINT_PATH
@@ -326,9 +383,7 @@ impl IdentityProvider for Iam {
                 .scopes
                 .contains(&format!("obo:{}:{}", self.app_id, crate::obo::ENDPOINT_ID))
             || environment.is_some() != a.testing_environment_id.is_some()
-            || !verified.metadata.as_object().is_some_and(|m| m.is_empty())
             || verified.expires_at.unix_timestamp() <= crate::now()
-            || verified.consumed_at > verified.expires_at
         {
             return Err(Error::unauthorized());
         }
