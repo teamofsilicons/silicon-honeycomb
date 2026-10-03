@@ -17,6 +17,8 @@ import {
   type SentPage,
 } from "./sent-requests";
 import { StatusBadge } from "./ui/Arc";
+import MarkAllRead from "./MarkAllRead";
+import { loadAllSentReadTargets } from "./request-read";
 import "./request-pages.css";
 export { publicationStatus } from "./sent-requests";
 
@@ -30,6 +32,8 @@ function statusTone(state: string) {
 
 export default function SentRequests(props: {
   revision: number;
+  unreadCount?: number;
+  onRead: () => Promise<void>;
   open: (item: SentRequest) => void;
   discuss: (
     item: { id: string; provider: string },
@@ -70,6 +74,11 @@ export default function SentRequests(props: {
             A clear view of your application reviews, replies, and releases.
           </p>
         </div>
+        <div class="requests-heading-actions">
+        <MarkAllRead view="sent"
+          disabled={!latest() || (!props.unreadCount && !latest()?.items.some(item => item.unread))}
+          load={loadAllSentReadTargets}
+          refresh={async () => { await Promise.all([refetch(), props.onRead()]); }} />
         <button
           class="button outline"
           disabled={result.loading}
@@ -78,6 +87,7 @@ export default function SentRequests(props: {
           <RefreshCw size={16} class={result.loading ? "spinning" : ""} />
           Refresh
         </button>
+        </div>
       </div>
       <Show when={latest()}>
         <div class="requests-overview">

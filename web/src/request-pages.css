@@ -6,6 +6,11 @@
 }
 .requests-page .page-heading h1 { margin-bottom: 10px; }
 .requests-page .page-heading p { max-width: 680px; }
+.requests-page .requests-heading-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 10px; }
+.requests-page .requests-heading-actions .button { white-space: nowrap; }
+.requests-page .requests-read-action { display: grid; justify-items: end; gap: 8px; }
+.requests-page .requests-read-feedback { max-width: 300px; font-size: 12px; line-height: 1.5; color: var(--muted); text-align: right; margin: 0; }
+.requests-page .requests-read-feedback.field-error { color: var(--danger, #b42318); }
 .requests-page .requests-overview{
   display: flex;
   align-items: center;
@@ -82,7 +87,10 @@
   .requests-page .received-request-action{ width: 100%; display: flex; justify-content: space-between; align-items: center; padding-top: 13px; border-top: 1px solid var(--line); }
 }
 @media (max-width: 520px) {
-  .requests-page .page-heading { align-items: flex-start; }
+  .requests-page .page-heading { align-items: flex-start; flex-wrap: wrap; gap: 18px; }
+  .requests-page .requests-heading-actions { justify-content: flex-start; width: 100%; }
+  .requests-page .requests-read-action { justify-items: start; }
+  .requests-page .requests-read-feedback { text-align: left; }
   .requests-page .request-card { padding: 18px 16px; }
   .requests-page .sent-request-heading { align-items: flex-start; gap: 14px; }
   .requests-page .sent-request-gate { align-items: flex-start; }
