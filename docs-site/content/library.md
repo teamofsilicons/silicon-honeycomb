@@ -9,6 +9,13 @@ Public applications can be discovered anonymously. Sign in for private applicati
 
 The top-right **Create an app** link takes you to the authenticated [console](https://console.honeycomb.teamofsilicons.com). Library browsing does not require an administrative role; creating applications does.
 
+## Explore developer endpoints
+Open an application's **For developers** tab to browse its OBO (on behalf of a user) and ATA (app to app) endpoint definitions. Each section lists the endpoint IDs, paths, descriptions, availability, sensitivity, warnings, dependencies, token lifetime where declared, and metadata. Expand a definition to inspect its details or copy its JSON.
+
+The tab displays the application's current accepted configuration, including on historical release pages. It does not represent the configuration of an older package version. Applications without endpoints show an empty state for each type. Public applications expose this reference without requiring sign-in; viewing an endpoint does not grant permission to call it.
+
+Link directly to the tab with `/apps/<app-id>#developers`, for example [Briefcase's developer endpoints](https://honeycomb.teamofsilicons.com/apps/briefcase#developers).
+
 ## Install a chosen version
 ```sh
 honeycomb install 'my-app@1.0.0'

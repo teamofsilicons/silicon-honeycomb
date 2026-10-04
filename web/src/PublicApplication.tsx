@@ -1,4 +1,5 @@
 import LoginButtons from "./LoginButtons";
+import DeveloperEndpoints from "./DeveloperEndpoints";
 import {
   createResource,
   createSignal,
@@ -78,7 +79,31 @@ export default function PublicApplication(props: {
   const [channel, setChannel] = createSignal<"prod" | "dev">(
     props.route.channel || "prod",
   );
-  const [tab, setTab] = createSignal("overview");
+  const sections = ["overview", "reviews", "developers"] as const;
+  type Section = (typeof sections)[number];
+  const sectionFromLocation = (): Section => {
+    const section = window.location.hash.slice(1);
+    return sections.includes(section as Section) ? section as Section : "overview";
+  };
+  const [tab, setTab] = createSignal<Section>(sectionFromLocation());
+  const restoreSection = () => {
+    // In-page landmarks such as the skip link must not switch the active tab.
+    if (window.location.hash && !sections.includes(window.location.hash.slice(1) as Section)) return;
+    setTab(sectionFromLocation());
+  };
+  window.addEventListener("hashchange", restoreSection);
+  window.addEventListener("popstate", restoreSection);
+  onCleanup(() => {
+    window.removeEventListener("hashchange", restoreSection);
+    window.removeEventListener("popstate", restoreSection);
+  });
+  function selectSection(section: Section) {
+    if (tab() === section) return;
+    const url = new URL(window.location.href);
+    url.hash = section === "overview" ? "" : section;
+    window.history.pushState({}, "", url);
+    setTab(section);
+  }
   const sectionId = createUniqueId();
   const [notice, setNotice] = createSignal("");
   const [saving, setSaving] = createSignal(false);
@@ -281,15 +306,15 @@ export default function PublicApplication(props: {
                     )
                       return;
                     event.preventDefault();
-                    const next =
+                    const currentIndex = sections.indexOf(tab());
+                    const next = sections[
                       event.key === "Home"
-                        ? "overview"
+                        ? 0
                         : event.key === "End"
-                          ? "reviews"
-                          : tab() === "overview"
-                            ? "reviews"
-                            : "overview";
-                    setTab(next);
+                          ? sections.length - 1
+                          : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + sections.length) % sections.length
+                    ];
+                    selectSection(next);
                     event.currentTarget
                       .querySelector<HTMLButtonElement>(
                         `[data-section="${next}"]`,
@@ -305,7 +330,7 @@ export default function PublicApplication(props: {
                     aria-selected={tab() === "overview"}
                     tabIndex={tab() === "overview" ? 0 : -1}
                     data-section="overview"
-                    onClick={() => setTab("overview")}
+                    onClick={() => selectSection("overview")}
                   >
                     Overview
                   </button>
@@ -317,9 +342,21 @@ export default function PublicApplication(props: {
                     aria-selected={tab() === "reviews"}
                     tabIndex={tab() === "reviews" ? 0 : -1}
                     data-section="reviews"
-                    onClick={() => setTab("reviews")}
+                    onClick={() => selectSection("reviews")}
                   >
                     Reviews <span>{value().reviews}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    id={`${sectionId}-developers-tab`}
+                    aria-controls={`${sectionId}-developers-panel`}
+                    aria-selected={tab() === "developers"}
+                    tabIndex={tab() === "developers" ? 0 : -1}
+                    data-section="developers"
+                    onClick={() => selectSection("developers")}
+                  >
+                    For developers
                   </button>
                 </div>
                 <Show when={tab() === "overview"}>
@@ -481,6 +518,17 @@ export default function PublicApplication(props: {
                         )}
                       </For>
                     </section>
+                  </div>
+                </Show>
+                <Show when={tab() === "developers"}>
+                  <div
+                    class="application-tab-panel"
+                    role="tabpanel"
+                    id={`${sectionId}-developers-panel`}
+                    aria-labelledby={`${sectionId}-developers-tab`}
+                    tabIndex={0}
+                  >
+                    <DeveloperEndpoints app={value()} />
                   </div>
                 </Show>
                 <Show when={tab() === "reviews"}>
