@@ -113,6 +113,7 @@
 .application-page .application-section-tabs {
   display: inline-flex;
   max-width: 100%;
+  overflow-x: auto;
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -530,7 +531,7 @@
   }
   .application-page .application-section-tabs button {
     min-width: 0;
-    flex: 1;
+    flex: 1 0 auto;
     padding: 0 10px;
   }
 }
